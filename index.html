@@ -539,6 +539,29 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 /* 外层多余方括号去掉视觉噪音：分式外的 [ ] 淡化 */
 .tx > .tx-frac:first-child { margin-left: 0; }
 
+/* ============================================================
+ * 我的信息状态总览
+ * ============================================================ */
+.mystat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+@media (min-width: 560px) { .mystat-grid { grid-template-columns: repeat(4, 1fr); } }
+.mystat {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn);
+  padding: 10px 8px; display: flex; flex-direction: column; gap: 3px; align-items: center;
+  cursor: pointer; font-family: inherit; transition: all 120ms;
+}
+.mystat:not([disabled]):active { transform: scale(.96); }
+.mystat[disabled] { cursor: default; opacity: .8; }
+.mystat-label { font-size: 11px; color: var(--text-muted); }
+.mystat-val { font-size: 16px; font-weight: 500; }
+.mis-actions { margin-top: 6px; display: flex; gap: 6px; }
+
+/* ============================================================
+ * 图片上传预览 / 流式判卷
+ * ============================================================ */
+.img-prev { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 10px; margin-bottom: 8px; }
+.img-prev img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+#judge-stream { min-height: 120px; }
+
 </style>
 </head>
 <body>
@@ -687,13 +710,15 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
-  // 读取一个 {...} 组，返回 [内容, 消耗长度]
+  // 读取一个分组：支持 {...} 或 (...)，返回 [内容, 消耗长度]
   function readGroup(s, i) {
-    if (s[i] !== '{') return [s[i] || '', 1];
+    const open = s[i];
+    if (open !== '{' && open !== '(') return [s[i] || '', 1];
+    const close = open === '{' ? '}' : ')';
     let d = 0, j = i;
     for (; j < s.length; j++) {
-      if (s[j] === '{') d++;
-      else if (s[j] === '}') { d--; if (d === 0) break; }
+      if (s[j] === open) d++;
+      else if (s[j] === close) { d--; if (d === 0) break; }
     }
     return [s.slice(i + 1, j), j - i + 1];
   }
@@ -823,11 +848,20 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   function normalizeShorthand(s) {
     let r = String(s);
-    // lim(x->0) / lim(x→0) / lim_{x->0} → \lim_{x \to 0}
-    r = r.replace(/lim\s*\(\s*([a-zA-Z])\s*(?:->|→)\s*([^\)]+)\)/g, '\\lim_{$1 \\to $2}');
-    r = r.replace(/lim_?\{?\s*([a-zA-Z])\s*(?:->|→)\s*([^\}\s]+)\}?/g, '\\lim_{$1 \\to $2}');
-    // 函数名正体化
+    // 裸写希腊字母 → \命令（仅数学语境）：alpha beta gamma ... → \alpha \beta ...
+    // 前面不能是字母或反斜杠（避免误伤已带\的或单词如 "alphabet"）
+    Object.keys(GREEK).forEach(name => {
+      r = r.replace(new RegExp('(^|[^\\\\a-zA-Z])' + name + '(?![a-zA-Z])', 'g'), '$1\\' + name);
+    });
+    // 裸写 sqrt(...) → \sqrt{...}
+    r = r.replace(/(^|[^\\a-zA-Z])sqrt\s*\(/g, '$1\\sqrt(');
+    // 裸写 ln/sin/cos/tan 等函数 → 命令
     r = r.replace(/(^|[^\\a-zA-Z])(ln|sin|cos|tan|cot|sec|csc|lim|log|lg|exp|max|min)\s*\(/g, '$1\\$2(');
+    // lim(x->0) / lim(x→0) / lim_{x->0} → \lim_{x \to 0}
+    r = r.replace(/\\?lim\s*\(\s*([a-zA-Z])\s*(?:->|→)\s*([^\)]+)\)/g, '\\lim_{$1 \\to $2}');
+    r = r.replace(/\\?lim_?\{?\s*([a-zA-Z])\s*(?:->|→)\s*([^\}\s]+)\}?/g, '\\lim_{$1 \\to $2}');
+    // 积分区间：∫(从A到B) 或 ∫[A,B] 或 ∫_A^B → ∫_{A}^{B}
+    r = r.replace(/∫\s*[\(\[]?\s*(?:从)?([^\),\]，\s]+)\s*(?:到|,)\s*([^\),\]，\s]+)\s*[\)\]]?/g, '∫_{$1}^{$2}');
     // 分式：配平扫描（支持嵌套与外层[...]包裹），做两轮处理嵌套
     for (let k = 0; k < 3; k++) {
       const before = r;
@@ -853,7 +887,9 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       const D = String.fromCharCode(36); // 美元符号：用charCode避免源码字面量被shell展开
       const s = String(str);
       // 无 $ 包裹但含公式特征 → 整段按公式渲染（AI常返回裸公式题干）
-      const looksMath = /(\\[a-zA-Z]+|->|→|\^|_|\[[^\]]+\]\s*\/|\)\s*\/\s*[\(a-zA-Z]|lim\s*[\(]|ln\s*\(|sin\s*\(|cos\s*\(|tan\s*\()/.test(s);
+      const greekNames = 'alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega|phi|rho|tau|xi|zeta|eta|kappa|nu|chi|psi';
+      const looksMath = /(\\[a-zA-Z]+|->|→|\^|_|∫|\[[^\]]+\]\s*\/|\)\s*\/\s*[\(a-zA-Z]|lim\s*[\(]|ln\s*\(|sin\s*\(|cos\s*\(|tan\s*\(|sqrt\s*\()/i.test(s)
+        || new RegExp('\\b(' + greekNames + ')\\b').test(s);
       if (s.indexOf(D) < 0 && looksMath) {
         return '<span class="tx">' + seg(normalizeShorthand(s)) + '</span>';
       }
@@ -918,7 +954,8 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       reading: { results: [], cards: {}, customVocab: [] }, // results:{id,date,source,answer,choice,correct,secs}; cards: wordKey -> {box:1-5, due:'YYYY-MM-DD'}; customVocab: 用户自定义词
       decision: { inputs: { mathSims: [], profScore: '', engAccuracy: '', polProgress: 0, xiankongScore: 5 }, result: null, updatedAt: '' },
       inspector: { runs: [] },    // {id,date,type,risk,flags:[]}
-      ai: { endpoint: '', key: '', model: '', preset: '' },
+      quizBank: [],               // 收藏的题目 {id, topicId, topicName, stem, type, options, answer, solution, trap, diff, savedAt, note}
+      ai: { endpoint: '', key: '', model: '', preset: '', stream: false },
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false },
       alerts: { lastXiankongWarn: '', lastNovPush: '' }
     };
@@ -1609,10 +1646,13 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   }
 
   // JSON 调用：容错提取首个 JSON 对象
-  function chatJSON(systemPrompt, userText) {
+  function chatJSON(systemPrompt, userText, imageDataUrl) {
+    const userMsg = imageDataUrl
+      ? { role: 'user', content: [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: imageDataUrl } }] }
+      : { role: 'user', content: userText };
     return rawChat([
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userText }
+      userMsg
     ]).then(txt => {
       const m = txt.match(/\{[\s\S]*\}/);
       if (!m) throw new Error('AI未返回JSON');
@@ -1620,8 +1660,46 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     });
   }
 
+  // 流式调用（SSE）：onChunk(累积文本) 逐字回调，最后 resolve 完整文本
+  function chatStream(systemPrompt, userText, onChunk) {
+    const a = Store.get().ai;
+    return fetch(a.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + a.key },
+      body: JSON.stringify({
+        model: a.model, stream: true,
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userText }]
+      })
+    }).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let full = '', buf = '';
+      function pump() {
+        return reader.read().then(({ done, value }) => {
+          if (done) { if (onChunk) onChunk(full); return full; }
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          lines.forEach(line => {
+            const t = line.trim();
+            if (!t || t === 'data: [DONE]' || t.indexOf('data:') !== 0) return;
+            try {
+              const j = JSON.parse(t.slice(5));
+              const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+              if (delta) { full += delta; if (onChunk) onChunk(full); }
+            } catch (e) { /* 忽略半行 */ }
+          });
+          return pump();
+        });
+      }
+      return pump();
+    });
+  }
+
   const AI = {
-    configured, applyPreset, weeklySummary, chat, chatJSON,
+    configured, applyPreset, weeklySummary, chat, chatJSON, chatStream,
+    useStream() { return !!Store.get().ai.stream; },
     QUIZ_PROMPT, JUDGE_PROMPT,
     reviewWeekly(reportText) {
       const summary = weeklySummary();
@@ -2581,7 +2659,8 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     }
 
     el.innerHTML =
-      '<div class="card"><div class="card-title">错题类型分布（全部 ' + s.mistakes.length + ' 条）</div>'
+      '<div class="card"><div class="card-title-row"><span class="card-title">错题类型分布（全部 ' + s.mistakes.length + ' 条）</span>'
+      + '<button class="link-btn" id="ms-export">导出错题JSON</button></div>'
       + Charts.donut(pie, { height: 200 })
       + '</div>'
 
@@ -2609,6 +2688,18 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   }
 
   function bind(el) {
+    // 导出错题
+    el.querySelector('#ms-export').onclick = () => {
+      const s = Store.get();
+      const data = {
+        exportedAt: new Date().toISOString(),
+        total: s.mistakes.length,
+        typeCount: U.countBy(s.mistakes, m => m.type),
+        mistakes: s.mistakes
+      };
+      U.download('mistakes_' + U.dkey() + '.json', JSON.stringify(data, null, 2));
+      Toast.success('已导出 ' + s.mistakes.length + ' 条错题');
+    };
     el.querySelector('#ms-add').onclick = () => {
       const desc = el.querySelector('#ms-desc').value.trim();
       if (!desc) { Toast.warn('请填写题目描述'); return; }
@@ -2993,37 +3084,48 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     phase = 'quizzing'; judge = null; quiz = null;
     render(document.getElementById('view'));
 
-    // 确定实际难度
     const diff = difficulty === 'auto' ? autoDifficulty(topicId) : difficulty;
     const diffMeta = DIFFS[diff];
     const userWeak = Store.weekTopMistakes().map(t => (DB.MISTAKE_TYPES[t.key] || {}).name).join('、') || '符号错误';
-    const useAI = AI.configured();
 
-    if (useAI) {
-      let ask;
-      if (variantOf) {
-        // 错题变式复现：同知识点、同陷阱、换数字换情境
-        ask = '这是一道需要变式复现的错题。原题/考点：' + variantOf.originDesc +
-          '；学生错误类型：' + (DB.MISTAKE_TYPES[variantOf.errorType] || {}).name +
-          '。请出一道【同源变式题】：同一知识点、保留同样的陷阱（' + userWeak + '），但更换数字、情境或问法，' +
-          '难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）。用于验证学生是否真正掌握。';
-      } else {
-        ask = '考点：' + topic.group + '·' + topic.name + '；层级：' + DB.TIERS[topic.tier].name +
-          '（' + DB.TIERS[topic.tier].range + '）；难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）；' +
-          '该生本周高频错误：' + userWeak + '。请出1道题。';
-      }
-      AI.chatJSON(AI.QUIZ_PROMPT, ask).then(q => {
-        quiz = Object.assign({ source: 'ai', diff }, q);
-        render(document.getElementById('view'));
-      }).catch(() => {
-        Toast.warn('云端出题失败，已切换本地题库');
-        quiz = localQuiz(topic, diff);
-        render(document.getElementById('view'));
-      });
-    } else {
+    if (!AI.configured()) {
+      // 未配置AI：提示去配置（本地题库仅作兜底演示）
       quiz = localQuiz(topic, diff);
       render(document.getElementById('view'));
+      return;
     }
+
+    let ask;
+    if (variantOf) {
+      ask = '这是一道需要变式复现的错题。原题/考点：' + variantOf.originDesc +
+        '；学生错误类型：' + (DB.MISTAKE_TYPES[variantOf.errorType] || {}).name +
+        '。请出一道【同源变式题】：同一知识点、保留同样的陷阱（' + userWeak + '），但更换数字、情境或问法，' +
+        '难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）。用于验证学生是否真正掌握。';
+    } else {
+      ask = '考点：' + topic.group + '·' + topic.name + '；层级：' + DB.TIERS[topic.tier].name +
+        '（' + DB.TIERS[topic.tier].range + '）；难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）；' +
+        '该生本周高频错误：' + userWeak + '。请出1道题。';
+    }
+
+    const doFetch = () => AI.chatJSON(AI.QUIZ_PROMPT, ask);
+    doFetch().then(q => {
+      quiz = Object.assign({ source: 'ai', diff }, q);
+      render(document.getElementById('view'));
+    }).catch(e => {
+      // 失败：提供重试/中止，不再自动转本地题库
+      const view = document.getElementById('view');
+      view.innerHTML =
+        '<div class="card"><div class="card-title">⚠️ AI 出题失败</div>'
+        + '<div class="muted-sm">原因：' + U.esc(e.message || '网络或接口异常') + '。本地题库题量有限，建议重试或检查API配置。</div>'
+        + '<div class="btn-row" style="margin-top:14px">'
+        + '<button class="btn btn-primary" id="quiz-retry">🔄 重试出题</button>'
+        + '<button class="btn btn-ghost" id="quiz-local">用本地题库兜底</button>'
+        + '<button class="btn btn-ghost" id="quiz-cancel">返回选题</button>'
+        + '</div></div>';
+      document.getElementById('quiz-retry').onclick = () => makeQuiz();
+      document.getElementById('quiz-local').onclick = () => { quiz = localQuiz(topic, diff); render(view); };
+      document.getElementById('quiz-cancel').onclick = () => { phase = 'pick'; variantOf = null; render(view); };
+    });
   }
 
   function localQuiz(topic, diff) {
@@ -3047,19 +3149,40 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     phase = 'result'; judge = null;
     render(document.getElementById('view'));
 
-    const answerText = quiz.type === 'choice' ? payload.choice : (payload.steps.filter(Boolean).join(' → ') + ' 结论：' + payload.final);
+    const answerText = quiz.type === 'choice'
+      ? '学生选择：' + payload.choice
+      : (payload.image
+        ? '学生上传了手写步骤照片（见图），' + (payload.final ? '文字结论：' + payload.final : '未给文字结论')
+        : ('学生文字作答：' + payload.steps.filter(Boolean).join(' → ') + ' 结论：' + payload.final));
     const useAI = AI.configured();
 
     if (useAI) {
       const ask = '题目：' + quiz.stem + '\n标准答案：' + quiz.answer + '\n参考解析：' + quiz.solution +
-        '\n学生作答：' + answerText + '\n该生易错点：' + Store.weekTopMistakes().map(t => (DB.MISTAKE_TYPES[t.key] || {}).name).join('、');
-      AI.chatJSON(AI.JUDGE_PROMPT, ask).then(j => {
-        judge = normalizeJudge(j, 'ai');
-        commitResult(answerText);
-      }).catch(() => {
-        judge = localJudge(payload);
-        commitResult(answerText);
-      });
+        '\n' + answerText + '\n该生易错点：' + Store.weekTopMistakes().map(t => (DB.MISTAKE_TYPES[t.key] || {}).name).join('、');
+      // 流式或普通判卷
+      if (AI.useStream() && !payload.image) {
+        // 流式：显示判卷过程
+        const view = document.getElementById('view');
+        view.innerHTML = '<div class="card"><div class="card-title">🤖 AI 判卷中…</div><pre class="report" id="judge-stream"></pre></div>';
+        AI.chatStream(AI.JUDGE_PROMPT, ask, txt => {
+          const el = document.getElementById('judge-stream');
+          if (el) el.textContent = txt;
+        }).then(txt => {
+          try {
+            const m = txt.match(/\{[\s\S]*\}/);
+            judge = normalizeJudge(JSON.parse(m[0]), 'ai');
+          } catch (e) { judge = localJudge(payload); }
+          commitResult(answerText);
+        }).catch(() => { judge = localJudge(payload); commitResult(answerText); });
+      } else {
+        AI.chatJSON(AI.JUDGE_PROMPT, ask, payload.image).then(j => {
+          judge = normalizeJudge(j, 'ai');
+          commitResult(answerText);
+        }).catch(() => {
+          judge = localJudge(payload);
+          commitResult(answerText);
+        });
+      }
     } else {
       judge = localJudge(payload);
       commitResult(answerText);
@@ -3197,6 +3320,33 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
     el.querySelectorAll('.quiz-pick').forEach(b => b.onclick = () => { topicId = b.getAttribute('data-id'); variantOf = null; makeQuiz(); });
     el.querySelector('#quiz-go').onclick = () => { topicId = el.querySelector('#quiz-sel').value; variantOf = null; makeQuiz(); };
+
+    // 题库交互
+    const bankExp = el.querySelector('#bank-export');
+    if (bankExp) bankExp.onclick = () => {
+      const bank = Store.get().quizBank || [];
+      U.download('quiz_bank_' + U.dkey() + '.json', JSON.stringify(bank, null, 2));
+      Toast.success('题库已导出 ' + bank.length + ' 题');
+    };
+    el.querySelectorAll('.bank-view').forEach(b => b.onclick = () => {
+      const q = (Store.get().quizBank || []).find(x => x.id === b.getAttribute('data-id'));
+      if (!q) return;
+      Modal.open({
+        title: '⭐ ' + q.topicName + '（收藏题）', wide: true,
+        html: '<div class="quiz-stem">' + formatStem(q.stem) + '</div>'
+          + '<div class="card-title-sm" style="margin-top:12px">答案</div><div class="report">' + U.esc(q.answer) + '</div>'
+          + '<div class="card-title-sm">解析</div><div class="report">' + formatStem(q.solution || '') + '</div>'
+          + (q.trap ? '<div class="alert alert-warn" style="margin-top:8px">💣 陷阱：' + U.esc(q.trap) + '</div>' : ''),
+        actions: [{ label: '关闭', kind: 'btn-primary' }]
+      });
+    });
+    el.querySelectorAll('.bank-del').forEach(b => b.onclick = () => {
+      const id = b.getAttribute('data-id');
+      Modal.confirm('删除题目', '<p>从本地题库删除此题？</p>', '删除', () => {
+        Store.update(s => { s.quizBank = s.quizBank.filter(x => x.id !== id); });
+        App.refresh();
+      }, true);
+    });
   }
 
   function diffHint() {
@@ -3207,16 +3357,34 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   function historyHtml() {
     const his = U.clone(Store.get().quizHistory || []).reverse().slice(0, 8);
-    if (!his.length) return '';
-    return '<div class="card"><div class="card-title">最近测验</div>'
-      + his.map(h => '<div class="his-row"><span>' + h.topicName + ' · ' + h.date + (h.source === 'ai' ? ' <span class="tag tag-ok">AI</span>' : '') + '</span>'
-        + '<span class="risk-' + (h.score >= 80 ? 'low' : h.score >= 50 ? 'mid' : 'high') + '">' + h.score + '分</span></div>').join('')
+    const bank = Store.get().quizBank || [];
+    let html = '';
+    if (his.length) {
+      html += '<div class="card"><div class="card-title">最近测验</div>'
+        + his.map(h => '<div class="his-row"><span>' + h.topicName + ' · ' + h.date + (h.source === 'ai' ? ' <span class="tag tag-ok">AI</span>' : '') + '</span>'
+          + '<span class="risk-' + (h.score >= 80 ? 'low' : h.score >= 50 ? 'mid' : 'high') + '">' + h.score + '分</span></div>').join('')
+        + '</div>';
+    }
+    // 我的题库
+    html += '<div class="card"><div class="card-title-row"><span class="card-title">⭐ 我的题库（' + bank.length + ' 题）</span>'
+      + (bank.length ? '<button class="link-btn" id="bank-export">导出JSON</button>' : '') + '</div>'
+      + (bank.length
+        ? U.clone(bank).reverse().slice(0, 10).map(q =>
+          '<div class="mis-row" style="border-left-color:#d48806"><div class="mis-head">'
+          + '<span class="tag" style="background:#d48806">' + U.esc(q.topicName) + '</span>'
+          + '<span class="mis-date">' + U.esc((q.savedAt || '').slice(5, 10)) + '</span></div>'
+          + '<div class="mis-desc">' + formatStem(q.stem).slice(0, 120) + '</div>'
+          + '<div class="mis-actions"><button class="btn btn-sm btn-ghost bank-view" data-id="' + q.id + '">查看解析</button>'
+          + '<button class="btn btn-sm btn-ghost bank-del" data-id="' + q.id + '">删除</button></div></div>'
+        ).join('')
+        : '<div class="empty">答完题点"加入本地题库"即可收藏。好题值得反复做。</div>')
       + '</div>';
+    return html;
   }
 
   function renderQuiz(el) {
     if (!quiz) {
-      el.innerHTML = '<div class="card"><div class="empty">🤖 出题中…（' + (AI.configured() ? '云端AI生成' : '本地题库抽取') + '）</div></div>';
+      el.innerHTML = '<div class="card"><div class="empty">🤖 出题中…（云端AI生成）</div></div>';
       return;
     }
     let answerUI = '';
@@ -3227,9 +3395,13 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
           return '<button class="seq-row quiz-opt" data-v="' + letter + '"><span class="seq-text">' + U.esc(o) + '</span></button>';
         }).join('') + '</div>';
     } else {
-      answerUI = '<div class="muted-sm" style="margin:6px 0">分步输入（每步一行，至少2步——这是防跳步强制项）：</div>'
-        + [1, 2, 3, 4].map(i => '<textarea class="input step-in quiz-step" data-i="' + (i - 1) + '" rows="2" placeholder="第' + i + '步中间结果' + (i === 4 ? '（可留空）' : '') + '"></textarea>').join('')
-        + '<input class="input" id="quiz-final" placeholder="最终结论（必填）" style="margin-top:8px">';
+      answerUI = '<div class="muted-sm" style="margin:6px 0">作答方式（二选一，也可结合）：</div>'
+        + '<div class="btn-row" style="margin-bottom:8px"><button class="btn btn-sm btn-ghost" id="quiz-img-btn">📷 上传手写步骤照片（AI识别）</button>'
+        + '<input type="file" id="quiz-img" accept="image/*" style="display:none"></div>'
+        + '<div id="quiz-img-preview"></div>'
+        + '<div class="muted-sm" style="margin:6px 0">或文字分步输入（可只写关键步骤，不强制每步）：</div>'
+        + [1, 2, 3, 4].map(i => '<textarea class="input step-in quiz-step" data-i="' + (i - 1) + '" rows="2" placeholder="第' + i + '步（可留空）"></textarea>').join('')
+        + '<input class="input" id="quiz-final" placeholder="最终结论（可留空，直接看解析）" style="margin-top:8px">';
     }
 
     el.innerHTML =
@@ -3244,7 +3416,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + answerUI
       + '<div class="btn-row" style="margin-top:14px">'
       + '<button class="btn btn-primary" id="quiz-submit">提交判卷</button>'
-      + '<button class="btn btn-ghost" id="quiz-abandon">放弃本题</button>'
+      + '<button class="btn btn-ghost" id="quiz-giveup">🤷 不会，看解析</button>'
       + '</div></div>';
 
     bindQuiz(el);
@@ -3257,12 +3429,42 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   function bindQuiz(el) {
     let choice = null;
+    let imageDataUrl = null;
     el.querySelectorAll('.quiz-opt').forEach(b => b.onclick = () => {
       el.querySelectorAll('.quiz-opt').forEach(x => x.classList.remove('opt-on'));
       b.classList.add('opt-on');
       choice = b.getAttribute('data-v');
     });
-    el.querySelector('#quiz-abandon').onclick = () => { phase = 'pick'; render(el); };
+
+    // 图片上传（手写步骤）
+    const imgBtn = el.querySelector('#quiz-img-btn');
+    if (imgBtn) {
+      imgBtn.onclick = () => el.querySelector('#quiz-img').click();
+      el.querySelector('#quiz-img').onchange = e => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const rd = new FileReader();
+        rd.onload = () => {
+          imageDataUrl = rd.result;
+          el.querySelector('#quiz-img-preview').innerHTML =
+            '<div class="img-prev"><img src="' + imageDataUrl + '" alt="手写步骤"><span class="muted-sm">已上传，AI将分析你的手写步骤</span></div>';
+        };
+        rd.readAsDataURL(f);
+      };
+    }
+
+    // 不会，看解析（不判卷，直接给0分+解析）
+    el.querySelector('#quiz-giveup').onclick = () => {
+      judge = { score: 0, verdict: '未作答', steps: [], errorType: 'none', comment: '直接看解析。看懂后点"再来一题"巩固。', source: 'giveup' };
+      phase = 'result';
+      // 仍然回写：未掌握
+      const topic = allTopics().find(t => t.id === topicId);
+      Store.update(s => {
+        s.heat[topicId] = { level: 0, score: 0, updatedAt: new Date().toISOString() };
+      });
+      render(el);
+    };
+
     el.querySelector('#quiz-submit').onclick = () => {
       if (quiz.type === 'choice') {
         if (!choice) { Toast.warn('请先选择一个选项'); return; }
@@ -3271,9 +3473,9 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         const steps = [];
         el.querySelectorAll('.quiz-step').forEach(t => steps.push(t.value));
         const final = el.querySelector('#quiz-final').value.trim();
-        if (steps.filter(s => s.trim()).length < 2) { Toast.warn('至少写2步。步骤化就是防跳步，别跳。'); return; }
-        if (!final) { Toast.warn('请写最终结论'); return; }
-        submitAnswer({ steps, final });
+        const hasSteps = steps.some(s => s.trim());
+        if (!hasSteps && !final && !imageDataUrl) { Toast.warn('写点东西或传张照片再提交，或点"不会，看解析"。'); return; }
+        submitAnswer({ steps, final, image: imageDataUrl });
       }
     };
   }
@@ -3305,11 +3507,25 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
       + '<div class="btn-row" style="margin-top:14px">'
       + '<button class="btn btn-primary" id="quiz-next">再来一题（同考点）</button>'
+      + '<button class="btn btn-ghost" id="quiz-save">⭐ 加入本地题库</button>'
       + '<button class="btn btn-ghost" id="quiz-back">返回选题</button>'
       + '</div></div>';
 
     el.querySelector('#quiz-next').onclick = () => { makeQuiz(); };
     el.querySelector('#quiz-back').onclick = () => { phase = 'pick'; variantOf = null; render(el); };
+    el.querySelector('#quiz-save').onclick = () => {
+      const topic = allTopics().find(t => t.id === topicId);
+      Store.update(s => {
+        s.quizBank.push({
+          id: U.uid(), topicId, topicName: topic ? topic.name : '综合',
+          stem: quiz.stem, type: quiz.type, options: quiz.options || null,
+          answer: quiz.answer, solution: quiz.solution, trap: quiz.trap,
+          diff: quiz.diff || 'medium', savedAt: new Date().toISOString(),
+          note: '得分 ' + judge.score + ' · ' + judge.verdict
+        });
+      });
+      Toast.success('已存入本地题库（共 ' + Store.get().quizBank.length + ' 题）');
+    };
   }
 
   // 错题变式复现入口：从错题本跳入，生成同源变式题
@@ -4227,6 +4443,31 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 (function () {
   'use strict';
 
+  // 计算各维度当前状态（供"我的信息"面板）
+  function myStats() {
+    const s = Store.get();
+    const acc = Store.currentMathAccuracy();
+    const signW = Store.mistakeCountWeek('sign');
+    const xk = s.decision.inputs.xiankongScore || 0;
+    const totalMins = U.sum(s.focus.sessions.map(x => x.mins));
+    const totalHours = U.round1(totalMins / 60 + U.sum(Object.keys(s.studyHours).map(k => s.studyHours[k])));
+    const mental = s.mental.length ? s.mental[s.mental.length - 1].mood : null;
+    return [
+      { key: 'math', label: '数学一进度', val: s.progress.math.percent + '%', edit: 'pct:math' },
+      { key: 'ctrl', label: '自控进度', val: s.progress.ctrl.percent + '%', edit: 'pct:ctrl' },
+      { key: 'eng', label: '英语一进度', val: s.progress.eng.percent + '%', edit: 'pct:eng' },
+      { key: 'pol', label: '政治进度', val: s.progress.pol.percent + '%', edit: 'pct:pol' },
+      { key: 'acc', label: '本周数学正确率', val: acc != null ? acc + '%' : '未录入', edit: 'acc' },
+      { key: 'sign', label: '本周符号错误', val: signW + ' 次', edit: null },
+      { key: 'xk', label: '现控掌握度', val: xk + '/10', edit: 'xk' },
+      { key: 'school', label: '目标院校', val: ({ hebut: '河工大', shu: '上大', undecided: '未定' })[s.settings.targetSchool] || '未定', edit: 'school' },
+      { key: 'target', label: '周目标时长', val: (s.settings.weeklyTargetHours || 50) + 'h', edit: 'target' },
+      { key: 'hours', label: '累计学习', val: totalHours + 'h', edit: null },
+      { key: 'mistakes', label: '错题总数', val: s.mistakes.length + ' 条', edit: null },
+      { key: 'mood', label: '最近心情', val: mental != null ? mental + '/10' : '未记录', edit: null }
+    ];
+  }
+
   function render(el) {
     const s = Store.get();
     const usage = Store.usageBytes();
@@ -4234,8 +4475,18 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     const usagePct = Math.min(100, Math.round(usage / (5 * 1024 * 1024) * 100));
 
     el.innerHTML =
+      // 我的信息（状态总览 + 可编辑修正）
+      '<div class="card"><div class="card-title">👤 我的信息（状态总览 · 点值可改）</div>'
+      + '<div class="muted-sm">这是系统当前认知的你的全部状态。若有与实际不符的，点对应值直接修正——确保系统用真实数据为你决策。</div>'
+      + '<div class="mystat-grid">'
+      + myStats().map(m =>
+        '<button class="mystat" data-edit="' + (m.edit || '') + '"' + (m.edit ? '' : ' disabled') + '>'
+        + '<span class="mystat-label">' + m.label + '</span><span class="mystat-val">' + m.val + '</span></button>'
+      ).join('')
+      + '</div></div>'
+
       // 目标院校
-      '<div class="card"><div class="card-title">目标院校</div>'
+      + '<div class="card"><div class="card-title">目标院校</div>'
       + '<div class="seg-row">'
       + [['hebut', '河北工业大学'], ['shu', '上海大学'], ['undecided', '未确定']].map(o =>
         '<button class="seg' + (s.settings.targetSchool === o[0] ? ' seg-on' : '') + '" data-school="' + o[0] + '">' + o[1] + '</button>').join('')
@@ -4270,6 +4521,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<label class="fld fld-full"><span>接口地址（Endpoint）</span><input id="ai-endpoint" class="input" value="' + U.esc(s.ai.endpoint) + '"></label>'
       + '<label class="fld"><span>模型</span><input id="ai-model" class="input" value="' + U.esc(s.ai.model) + '"></label>'
       + '</div>'
+      + '<label class="check-row" style="margin-top:8px"><input type="checkbox" id="ai-stream"' + (s.ai.stream ? ' checked' : '') + '><span class="box"></span><span>流式输出（AI回复逐字显示，体验更流畅）</span></label>'
       + '<div class="muted-sm" id="ai-hint">' + U.esc((DB.AI_PRESETS[s.ai.preset] || DB.AI_PRESETS.deepseek).hint) + '</div>'
       + '<div class="btn-row" style="margin-top:10px">'
       + '<button class="btn btn-primary" id="ai-save">保存配置</button>'
@@ -4284,7 +4536,61 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     bind(el);
   }
 
+  // 编辑我的信息某一项
+  function editMyStat(mode, el) {
+    const s = Store.get();
+    const doModal = (title, cur, onSave, type) => {
+      Modal.open({
+        title, html: '<input id="ms-in" class="input" type="' + (type || 'number') + '" value="' + cur + '">',
+        actions: [{ label: '取消' }, {
+          label: '保存', kind: 'btn-primary', onClick: close => {
+            const v = document.getElementById('ms-in').value;
+            onSave(v); close(); App.refresh(); Toast.success('已修正');
+          }
+        }]
+      });
+      setTimeout(() => { const i = document.getElementById('ms-in'); if (i) { i.focus(); i.select(); } }, 50);
+    };
+    if (mode.indexOf('pct:') === 0) {
+      const key = mode.slice(4);
+      doModal('修正' + DB.SUBJECTS[key].name + '进度(%)', s.progress[key].percent, v => {
+        Store.update(x => { x.progress[key].percent = U.clamp(parseInt(v, 10) || 0, 0, 100); });
+      });
+    } else if (mode === 'acc') {
+      const wk = Store.weekKey();
+      const cur = (s.weeklyStats[wk] || {}).mathAccuracy;
+      doModal('修正本周数学正确率(%)', cur != null ? cur : 70, v => {
+        Store.update(x => { x.weeklyStats[wk] = x.weeklyStats[wk] || {}; x.weeklyStats[wk].mathAccuracy = U.clamp(parseInt(v, 10) || 0, 0, 100); });
+      });
+    } else if (mode === 'xk') {
+      doModal('修正现控掌握度(1-10)', s.decision.inputs.xiankongScore || 5, v => {
+        Store.update(x => { x.decision.inputs.xiankongScore = U.clamp(parseInt(v, 10) || 5, 1, 10); });
+      });
+    } else if (mode === 'target') {
+      doModal('修正周目标时长(h)', s.settings.weeklyTargetHours || 50, v => {
+        Store.update(x => { x.settings.weeklyTargetHours = U.clamp(parseInt(v, 10) || 50, 10, 100); });
+      });
+    } else if (mode === 'school') {
+      Modal.open({
+        title: '修正目标院校',
+        html: '<div class="seg-row">' + [['hebut', '河工大'], ['shu', '上大'], ['undecided', '未定']].map(o =>
+          '<button class="seg ms-sch" data-v="' + o[0] + '">' + o[1] + '</button>').join('') + '</div>',
+        actions: [{ label: '取消' }]
+      });
+      document.querySelectorAll('.ms-sch').forEach(b => b.onclick = () => {
+        Store.update(x => { x.settings.targetSchool = b.getAttribute('data-v'); });
+        Modal.close(); App.refresh(); Toast.success('已修正');
+      });
+    }
+  }
+
   function bind(el) {
+    // 我的信息：点值编辑
+    el.querySelectorAll('.mystat[data-edit]:not([disabled])').forEach(b => b.onclick = () => {
+      const mode = b.getAttribute('data-edit');
+      editMyStat(mode, el);
+    });
+
     el.querySelectorAll('[data-school]').forEach(b => b.onclick = () => {
       Store.update(s => { s.settings.targetSchool = b.getAttribute('data-school'); });
       Toast.success('目标已更新'); render(el);
@@ -4342,6 +4648,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         s.ai.key = el.querySelector('#ai-key').value.trim();
         s.ai.endpoint = el.querySelector('#ai-endpoint').value.trim();
         s.ai.model = el.querySelector('#ai-model').value.trim();
+        s.ai.stream = el.querySelector('#ai-stream').checked;
       });
       Toast.success('AI 配置已保存' + (AI.configured() ? '，可直接使用AI复盘' : ''));
     };
