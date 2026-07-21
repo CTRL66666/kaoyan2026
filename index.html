@@ -997,7 +997,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       }
       return merge(base, data);
     },
-    save() { try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) { console.error('[Store] 保存失败', e); if (window.Toast) Toast.show('存储失败：空间不足，请导出备份后清理', 'danger'); } },
+    save() { try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) { console.error('[Store] 保存失败', e); if (window.Toast) Toast.show('存储失败：空间不足，请导出备份后清理', 'danger'); } if (window.Cloud) Cloud.schedulePush(); },
     // 函数式更新：Store.update(s => { s.xxx = ... })
     update(fn) { const s = Store.get(); fn(s); Store.save(); U.emit('store:change'); return s; },
     replace(data) { cache = Store.migrate(data); Store.save(); U.emit('store:change'); },
@@ -1086,6 +1086,316 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   };
 
   window.Store = Store;
+})();
+
+
+/* ===== js/core/cloud.js ===== */
+/* ============================================================
+ * cloud.js — GitHub Gist 云端同步层（个人令牌模式）
+ * 设计原则：
+ *   1. localStorage 仍作离线缓存，断网也能用，零侵入现有逻辑。
+ *   2. 每个用户在前端填入【自己的 GitHub 个人令牌(gist 权限)】，
+ *      数据存到该用户【自己 GitHub 账号下的 Gist】，天然按人隔离、完全去中心化。
+ *   3. 近实时：保存时防抖上传 + 每 20s 轮询拉取远端变更。
+ *   4. 多设备：同一令牌登录不同设备 → 操作的是同一个 Gist → 自动同步。
+ *
+ * ⚠️ 安全：令牌仅存于本机浏览器 localStorage；请只授予 gist 权限，不要给 repo 权限。
+ *    Gist 内容经其 URL 可被匿名访问（"secret" 非"private"），勿在其中存放高敏感密码。
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  const API = 'https://api.github.com';
+  const GIST_FILENAME = 'kaoyan2026.json';   // Gist 内的文件名
+  const GIST_DESC = 'kaoyan2026-sync';       // Gist 描述
+  const TOKEN_KEY = 'kaoyan2026_ghtoken';    // 本机保存的用户令牌
+  const META_KEY = 'kaoyan2026_cloud';       // 保存 gistId / 时间戳，用于冲突判断
+  const SAVE_DEBOUNCE = 800;                 // 保存防抖（毫秒）
+  const POLL_INTERVAL = 20000;               // 近实时轮询间隔（毫秒）
+  const TOKEN_HELP = 'https://github.com/settings/tokens/new?scopes=gist&description=kaoyan2026同步';
+
+  const state = {
+    enabled: false, token: null, gistId: null,
+    lastPushedAt: 0, lastSyncAt: 0, pollTimer: null, badge: null
+  };
+  let suppressPush = false; // 拉取写回本地时抑制再次上传（防回环）
+  let pushTimer = null;
+  let meta = loadMeta();
+
+  function loadMeta() { try { return JSON.parse(localStorage.getItem(META_KEY)) || {}; } catch (e) { return {}; } }
+  function saveMeta() {
+    meta.gistId = state.gistId; meta.lastPushedAt = state.lastPushedAt; meta.lastSyncAt = state.lastSyncAt;
+    try { localStorage.setItem(META_KEY, JSON.stringify(meta)); } catch (e) {}
+  }
+  function loadToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
+  function saveToken() { try { localStorage.setItem(TOKEN_KEY, state.token); } catch (e) {} }
+  function clearToken() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
+  // ---------- GitHub API 封装 ----------
+  async function api(path, opts) {
+    opts = opts || {};
+    const res = await fetch(API + path, {
+      method: opts.method || 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + state.token,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    if (!res.ok) {
+      const e = new Error('HTTP ' + res.status);
+      e.status = res.status;
+      if (res.status === 403) e.message = '已达 GitHub API 限额，稍后重试';
+      throw e;
+    }
+    const txt = await res.text();
+    return txt ? JSON.parse(txt) : null;
+  }
+
+  async function createGist(json) {
+    const data = await api('/gists', {
+      method: 'POST',
+      body: { description: GIST_DESC, public: false, files: { [GIST_FILENAME]: { content: json } } }
+    });
+    return data.id;
+  }
+  async function updateGist(id, json) {
+    await api('/gists/' + id, { method: 'PATCH', body: { files: { [GIST_FILENAME]: { content: json } } } });
+  }
+  async function getGist(id) {
+    const data = await api('/gists/' + id);
+    const f = data.files && data.files[GIST_FILENAME];
+    return { content: f ? f.content : null, updatedAt: data.updated_at ? new Date(data.updated_at).getTime() : 0 };
+  }
+  // 同一令牌下，靠文件名找出已存在的 Gist（解决换浏览器/设备无 gistId 的问题）
+  // 若同名 Gist 有多个（如曾误建空 Gist），优先选「内容最大 / 同内容取最新」的那个
+  async function discoverGist() {
+    let page = 1, best = null, bestSize = -1;
+    while (page <= 5) {                 // 最多翻 5 页(500 个)，防极端情况打爆额度
+      const list = await api('/gists?per_page=100&page=' + page);
+      if (!list || !list.length) break;
+      for (const g of list) {
+        const f = g.files && g.files[GIST_FILENAME];
+        if (!f) continue;
+        const size = (f.size != null) ? f.size : 0;
+        const updated = g.updated_at ? new Date(g.updated_at).getTime() : 0;
+        if (size > bestSize || (size === bestSize && updated > (best ? best.updated : 0))) {
+          best = { id: g.id, size, updated }; bestSize = size;
+        }
+      }
+      page++;
+    }
+    return best ? best.id : null;
+  }
+
+  // ---------- 拉取：远端更新时间更新则覆盖本地（last-write-wins）----------
+  async function pull() {
+    if (!state.gistId) { state.lastSyncAt = Date.now(); saveMeta(); return; }
+    const { content, updatedAt } = await getGist(state.gistId);
+    if (content && updatedAt > (state.lastPushedAt || 0)) {
+      try {
+        const d = JSON.parse(content);
+        suppressPush = true;
+        try { window.Store.replace(d); } finally { suppressPush = false; }
+        if (window.App) App.refresh();
+      } catch (e) { console.error('[Cloud] 远端数据解析失败', e); }
+    }
+    state.lastPushedAt = updatedAt;
+    state.lastSyncAt = Date.now();
+    saveMeta();
+  }
+
+  // ---------- 推送：防抖上传本地全量 JSON ----------
+  function schedulePush() {
+    if (!state.enabled || !state.token || suppressPush) return;
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      push().catch(e => { console.error('[Cloud] 推送失败', e); renderBadge('☁ 同步失败', 'err'); });
+    }, SAVE_DEBOUNCE);
+  }
+
+  // 构建上传负载：默认剥离 ai.key（Gist 链接可被匿名访问，敏感 Key 不默认上云）
+  function buildPayload() {
+    const full = JSON.parse(window.Store.exportJSON());
+    if (!meta.syncAiKey && full.ai && typeof full.ai.key === 'string') full.ai.key = '';
+    return JSON.stringify(full);
+  }
+
+  async function push() {
+    if (!state.enabled || !state.token) return;
+    renderBadge('☁ 同步中…', 'busy');
+    const json = buildPayload();
+    if (!state.gistId) state.gistId = await createGist(json);
+    else await updateGist(state.gistId, json);
+    try { const g = await getGist(state.gistId); state.lastPushedAt = g.updatedAt; } catch (e) {}
+    state.lastSyncAt = Date.now();
+    saveMeta();
+    renderBadge('☁ 已同步', 'on');
+  }
+
+  // ---------- 令牌验证 + 启动同步 ----------
+  async function startSync() {
+    renderBadge('☁ 同步中…', 'busy');
+    try {
+      if (!state.gistId) {                       // 本地没有 id（换浏览器/设备）→ 靠令牌发现已有 Gist
+        try { const id = await discoverGist(); if (id) state.gistId = id; } catch (e) { console.warn('[Cloud] 发现 Gist 失败', e); }
+        state.lastPushedAt = 0;                  // 本次才发现的 Gist，本地没有有效的"上次已知远端时间" → 强制首次拉取，避免旧时间戳导致不拉取
+      }
+      await pull();
+      if (!state.gistId) await push();           // 仍没找到 → 首次建 Gist
+      renderBadge('☁ 已同步', 'on');
+      startPolling();
+    } catch (e) {
+      console.error('[Cloud] 同步失败', e);
+      renderBadge('☁ 同步失败', 'err');
+    }
+  }
+  function startPolling() {
+    stopPolling();
+    state.pollTimer = setInterval(async () => {
+      try { await pull(); renderBadge('☁ 已同步', 'on'); } catch (e) { /* 静默 */ }
+    }, POLL_INTERVAL);
+  }
+  function stopPolling() { if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; } }
+
+  async function init() {
+    const t = loadToken();
+    if (!t) { renderBadge('☁ 未同步', 'off'); return; }
+    state.token = t; state.enabled = true;
+    state.gistId = null;               // 不信任本地缓存的 id，统一靠令牌发现已有 Gist（换浏览器开箱即用）
+    state.lastPushedAt = meta.lastPushedAt || 0;
+    await startSync();
+  }
+
+  async function saveTokenAndStart(tok, mask) {
+    state.token = tok.trim();
+    try {
+      await api('/rate_limit');           // 轻量鉴权校验
+      state.enabled = true;
+      saveToken();
+      state.gistId = null;             // 重新发现，避免用上缓存的错误 id
+      state.lastPushedAt = meta.lastPushedAt || 0;
+      closePanel();
+      await startSync();
+    } catch (e) {
+      state.token = null; state.enabled = false;
+      setErr(mask, e.status === 401 ? '令牌无效或无 gist 权限，请检查' : (e.message || '验证失败'));
+    }
+  }
+
+  async function logout() {
+    stopPolling();
+    clearToken();
+    state.token = null; state.enabled = false; state.gistId = null;
+    meta = {}; saveMeta();
+    renderBadge('☁ 未同步', 'off');
+  }
+
+  // ---------- UI：状态徽标 + 令牌面板 ----------
+  function ensureStyle() {
+    if (document.getElementById('cloud-style')) return;
+    const s = document.createElement('style');
+    s.id = 'cloud-style';
+    s.textContent = `
+#cloud-badge{position:fixed;right:10px;bottom:72px;z-index:99999;font:13px/1.4 system-ui;padding:6px 10px;border-radius:20px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.18);user-select:none;white-space:nowrap}
+#cloud-badge.on{background:#e6f7ec;color:#1a7f37}
+#cloud-badge.off{background:#f0f0f0;color:#666}
+#cloud-badge.busy{background:#e8f0fe;color:#1a56c4}
+#cloud-badge.err{background:#fdeaea;color:#c0392b}
+#cloud-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px}
+#cloud-card{background:#fff;color:#222;border-radius:14px;width:100%;max-width:360px;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+#cloud-card h3{margin:0 0 12px;font-size:17px}
+#cloud-card input{width:100%;box-sizing:border-box;padding:10px;margin:6px 0;border:1px solid #ddd;border-radius:8px;font-size:14px}
+#cloud-card .row{display:flex;gap:8px;margin-top:12px}
+#cloud-card button{flex:1;padding:10px;border:0;border-radius:8px;font-size:14px;cursor:pointer}
+#cloud-card .primary{background:#2f54eb;color:#fff}
+#cloud-card .ghost{background:#eee;color:#333}
+#cloud-card .err{color:#c0392b;font-size:13px;min-height:18px;margin-top:6px}
+#cloud-card .hint{color:#888;font-size:12px;margin-top:10px;line-height:1.6}
+#cloud-card a{color:#2f54eb}`;
+    document.head.appendChild(s);
+  }
+  function renderBadge(text, type) {
+    ensureStyle();
+    if (!state.badge) {
+      state.badge = document.createElement('div');
+      state.badge.id = 'cloud-badge';
+      state.badge.onclick = openPanel;
+      document.body.appendChild(state.badge);
+    }
+    state.badge.className = type;
+    state.badge.textContent = text;
+  }
+  function openPanel() {
+    ensureStyle();
+    if (document.getElementById('cloud-mask')) return;
+    const mask = document.createElement('div');
+    mask.id = 'cloud-mask';
+    if (state.token) renderLoggedIn(mask); else renderAuth(mask);
+    document.body.appendChild(mask);
+    mask.onclick = (e) => { if (e.target === mask) closePanel(); };
+  }
+  function closePanel() { const m = document.getElementById('cloud-mask'); if (m) m.remove(); }
+
+  function renderAuth(mask) {
+    mask.innerHTML = '<div id="cloud-card">'
+      + '<h3>☁ 同步到你的 GitHub</h3>'
+      + '<input id="cv-t" placeholder="粘贴 GitHub 个人令牌" type="password">'
+      + '<div class="err" id="cv-err"></div>'
+      + '<div class="row"><button class="primary" id="cv-ok">保存并同步</button><button class="ghost" id="cv-cancel">取消</button></div>'
+      + '<div class="hint">① 去 <a href="' + TOKEN_HELP + '" target="_blank" rel="noreferrer">生成令牌</a>，只勾 <b>gist</b> 权限；<br>'
+      + '② 令牌仅存于本机浏览器，数据存在你自己的 Gist 里，别人看不到；<br>'
+      + '③ 不同设备用同一令牌即自动同步同一份数据。</div>'
+      + '</div>';
+    mask.querySelector('#cv-cancel').onclick = closePanel;
+    mask.querySelector('#cv-ok').onclick = () => {
+      const t = mask.querySelector('#cv-t').value.trim();
+      if (!t) { setErr(mask, '请粘贴令牌'); return; }
+      saveTokenAndStart(t, mask);
+    };
+  }
+
+  function renderLoggedIn(mask) {
+    const t = state.lastSyncAt ? new Date(state.lastSyncAt).toLocaleString() : '—';
+    const gistUrl = state.gistId ? ('https://gist.github.com/' + state.gistId) : '#';
+    mask.innerHTML = '<div id="cloud-card">'
+      + '<h3>☁ 已同步到你的 GitHub</h3>'
+      + '<div class="hint" style="margin-top:0">最近同步：' + t + '<br>'
+      + '数据存储在你自己的 Gist：<a href="' + gistUrl + '" target="_blank" rel="noreferrer">查看</a></div>'
+      + '<label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:10px;color:#444">'
+      + '<input type="checkbox" id="cv-ai"' + (meta.syncAiKey ? ' checked' : '') + '>'
+      + ' 同步 AI Key 到云端（默认关，Gist 链接可被匿名访问）</label>'
+      + '<div class="row"><button class="primary" id="cv-sync">立即同步</button><button class="ghost" id="cv-out">退出</button></div>'
+      + '<div class="hint">退出仅清除本机令牌，云端数据不删；换设备用同一令牌仍可取回。</div>'
+      + '</div>';
+    mask.querySelector('#cv-ai').onchange = (e) => {
+      meta.syncAiKey = e.target.checked; saveMeta();
+      push().then(() => renderBadge('☁ 已同步', 'on')).catch(() => {});
+    };
+    mask.querySelector('#cv-sync').onclick = () => {
+      pull().then(push).then(() => { renderLoggedIn(mask); renderBadge('☁ 已同步', 'on'); })
+        .catch(() => setErr(mask, '同步失败，请重试'));
+    };
+    mask.querySelector('#cv-out').onclick = () => { logout(); closePanel(); };
+  }
+
+  function setErr(mask, msg) { const el = mask.querySelector('#cv-err'); if (el) el.textContent = msg; }
+  function friendlyErr(e) {
+    const m = (e && e.message) || '';
+    if (/401|token/i.test(m)) return '令牌无效或无 gist 权限';
+    if (/Network|fetch/i.test(m)) return '无法连接 GitHub，请检查网络';
+    if (/403/i.test(m)) return 'GitHub API 限额，稍后重试';
+    return m || '操作失败';
+  }
+
+  // ---------- 对外接口 ----------
+  window.Cloud = {
+    init, pull, push, schedulePush, openPanel,
+    logout,
+    get isEnabled() { return state.enabled; },
+    get isLoggedIn() { return !!state.token; }
+  };
 })();
 
 
@@ -4921,6 +5231,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     refresh() { render(); renderStatusBar(); },
     get current() { return current; },
     init() {
+      if (window.Cloud) Cloud.init();   // 恢复云端会话并启动同步（未配置则自动降级本地模式）
       rolloverIfNeeded();
       Notify.ensurePermission();
       render();
