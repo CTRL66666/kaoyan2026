@@ -245,6 +245,34 @@ textarea.input { resize: vertical; }
 .ms-done .ms-title { color: var(--text-muted); text-decoration: line-through; }
 .ms-check { cursor: pointer; margin-top: 4px; }
 
+/* ---------- 里程碑：动态当前位置指示器 ---------- */
+.ms-now { position: relative; padding: 6px 0 2px; margin-left: -18px; }
+.ms-now-arrow {
+  display: inline-block;
+  color: #cf1322;
+  font-size: 16px;
+  line-height: 1;
+  animation: msPulse 2s ease-in-out infinite;
+  filter: drop-shadow(0 1px 3px rgba(207,19,34,0.4));
+}
+.ms-now-label {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cf1322;
+  background: #fff1f0;
+  border: 1px solid #ffa39e;
+  border-radius: 10px;
+  padding: 1px 8px;
+  margin-left: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+@keyframes msPulse {
+  0%, 100% { opacity: 1; transform: translateY(0); }
+  50% { opacity: 0.6; transform: translateY(-3px); }
+}
+
 /* ---------- 错题 ---------- */
 .mis-row { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid; border-radius: var(--r-btn); padding: 10px 12px; margin-bottom: 8px; }
 .mis-head { display: flex; align-items: center; gap: 8px; }
@@ -527,6 +555,17 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 .tx-idx { font-size: .6em; }
 .tx-over { text-decoration: overline; }
 
+/* 分段函数 cases 环境 */
+.tx-cases { display: inline-flex; align-items: flex-start; vertical-align: middle; margin: .15em 0; }
+.tx-cases::before { content: '{'; font-size: 1.4em; line-height: 1.05; margin-right: .2em; font-family: "Cambria Math", Georgia, serif; }
+.tx-case-row { display: block; text-align: left; line-height: 1.6; }
+.tx-case-cond { margin-right: .5em; color: #555; min-width: 2em; display: inline-block; }
+.tx-case-val { }
+
+/* \left / \right 定界符 */
+.tx-delim { display: inline-block; vertical-align: middle; }
+.tx-big-delim { display: inline-block; vertical-align: middle; font-size: 1.25em; }
+
 /* ============================================================
  * 公式排版优化 v2：分式更清爽、lim下标对齐
  * ============================================================ */
@@ -582,6 +621,19 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 .pm-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 .pm-actions .pm-ai-btn { font-size: 12px !important; padding: 5px 10px !important; }
 .pm-actions .pm-del-btn { font-size: 12px !important; padding: 5px 10px !important; color: #dc2626 !important; border-color: #fecaca !important; }
+
+/* 疑难点标记输入 */
+.pm-pain { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; flex-wrap: wrap; }
+.pm-pain-label { font-size: 12px; color: #cf1322; font-weight: 600; }
+.pm-pain-input { flex: 1; min-width: 140px; max-width: 260px; padding: 4px 8px; font-size: 12px; border: 1px solid #e5e7eb; border-radius: 5px; outline: none; }
+.pm-pain-input:focus { border-color: #cf1322; }
+.pm-pain-count { font-size: 11px; color: #999; }
+
+/* 弱点画像卡 */
+.pm-weak-tags { margin: 6px 0; }
+.pm-weak-tags .tag { display: inline-block; font-size: 12px; }
+.pm-weak-summary { font-size: 13.5px; line-height: 1.75; color: #333; background: #fff5f5; border-left: 3px solid #cf1322; padding: 8px 10px; border-radius: 4px; margin: 6px 0; word-break: break-word; }
+.pm-weak-advice { font-size: 13px; line-height: 1.7; color: #444; background: #f0f9ff; border-left: 3px solid #1890ff; padding: 8px 10px; border-radius: 4px; margin-top: 6px; word-break: break-word; }
 .pm-list { min-height: 40px; }
 
 </style>
@@ -723,7 +775,16 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     sum: '∑', prod: '∏', int: '∫', iint: '∬', iiint: '∭', oint: '∮',
     sqrt: '√', in: '∈', notin: '∉', subset: '⊂', supset: '⊃',
     cup: '∪', cap: '∩', forall: '∀', exists: '∃', emptyset: '∅',
-    ldots: '…', cdots: '⋯', degree: '°', angle: '∠', perp: '⊥', parallel: '∥'
+    ldots: '…', cdots: '⋯', vdots: '⋮', ddots: '⋱', degree: '°',
+    angle: '∠', perp: '⊥', parallel: '∥',
+    sim: '∼', simeq: '≃', cong: '≅',
+    Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔',
+    mapsto: '↦', hookrightarrow: '↪', nearrow: '↗',
+    mid: '|', colon: ':', quad: '\u2002', qquad: '\u2003',
+    neg: '¬', prime: '′', ast: '∗', star: '⋆',
+    top: '⊤', bot: '⊥', flat: '♭', sharp: '♯',
+    wp: '℘', Re: 'ℜ', Im: 'ℑ',
+    ell: 'ℓ', aleph: 'ℵ'
   };
   // 函数名单词（保持正体）
   const FUNC = ['sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'arcsin', 'arccos', 'arctan',
@@ -759,7 +820,10 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         if (cmd === 'frac' || cmd === 'dfrac' || cmd === 'tfrac') {
           const g1 = readGroup(s, i + m[0].length);
           const g2 = readGroup(s, i + m[0].length + g1[1]);
-          out += '<span class="tx-frac"><span class="tx-num">' + seg(g1[0]) + '</span><span class="tx-den">' + seg(g2[0]) + '</span></span>';
+          // 对分子分母内容再做一轮简写规范化（处理内部 / → \frac 等模式）
+          const n1 = normalizeShorthand(g1[0]);
+          const n2 = normalizeShorthand(g2[0]);
+          out += '<span class="tx-frac"><span class="tx-num">' + seg(n1) + '</span><span class="tx-den">' + seg(n2) + '</span></span>';
           i += m[0].length + g1[1] + g2[1]; continue;
         }
         // \sqrt{a} / \sqrt[n]{a}
@@ -767,7 +831,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
           let k = i + m[0].length, idx = '';
           if (s[k] === '[') { const e = s.indexOf(']', k); idx = s.slice(k + 1, e); k = e + 1; }
           const g = readGroup(s, k);
-          out += '<span class="tx-sqrt">' + (idx ? '<sup class="tx-idx">' + seg(idx) + '</sup>' : '') + '√<span class="tx-radic">' + seg(g[0]) + '</span></span>';
+          out += '<span class="tx-sqrt">' + (idx ? '<sup class="tx-idx">' + seg(idx) + '</sup>' : '') + '√<span class="tx-radic">' + seg(normalizeShorthand(g[0])) + '</span></span>';
           i = k + g[1]; continue;
         }
         // 希腊字母 / 符号
@@ -775,28 +839,75 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         if (SYMBOL[cmd]) { out += SYMBOL[cmd]; i += m[0].length; continue; }
         if (FUNC.indexOf(cmd) >= 0) { out += '<span class="tx-fn">' + cmd + '</span>'; i += m[0].length; continue; }
         if (cmd === ' ' || cmd === ',' || cmd === ';' || cmd === '!') { out += ' '; i += m[0].length; continue; }
-        if (cmd === 'left' || cmd === 'right' || cmd === 'big' || cmd === 'Big') { i += m[0].length; continue; } // 丢弃尺寸命令
+        // \left / \right / \big 系列定界符命令：吃掉命令+后一个字符作为定界符
+        if (cmd === 'left' || cmd === 'right') {
+          const delimIdx = i + m[0].length;
+          const delim = s[delimIdx] || '';
+          if (delim === '.' || delim === '') { i += m[0].length + (delim ? 1 : 0); continue; } // 空定界符
+          out += '<span class="tx-delim' + (cmd === 'left' ? ' tx-left' : ' tx-right') + '">' + esc(delim) + '</span>';
+          i += m[0].length + 1; continue;
+        }
+        if (cmd === 'big' || cmd === 'Big' || cmd === 'bigg' || cmd === 'Bigg'
+          || cmd === 'bigl' || cmd === 'Bigl' || cmd === 'biggl' || cmd === 'Biggl'
+          || cmd === 'bigr' || cmd === 'Bigr' || cmd === 'biggr' || cmd === 'Biggr') {
+          const delimIdx = i + m[0].length;
+          const delim = s[delimIdx] || '';
+          if (delim === '.' || delim === '') { i += m[0].length + (delim ? 1 : 0); continue; }
+          out += '<span class="tx-big-delim">' + esc(delim) + '</span>';
+          i += m[0].length + 1; continue;
+        }
+        // \begin{cases} ... \end{cases} —— 分段函数（花括号左对齐多行）
+        if (cmd === 'begin') {
+          const g = readGroup(s, i + m[0].length);
+          if (g[0] === 'cases') {
+            // 向前扫描匹配的 \end{cases}
+            let depth = 1, j = i + m[0].length + g[1];
+            let bodyStart = j;
+            while (j < s.length && depth > 0) {
+              const rest = s.slice(j);
+              if (rest.match(/^\\begin\s*\{/)) { depth++; const rg = readGroup(s, j + 6); j += 6 + rg[1]; continue; }
+              if (rest.match(/^\\end\s*\{/)) { depth--; if (depth === 0) break; const rg2 = readGroup(s, j + 4); j += 4 + rg2[1]; continue; }
+              j++;
+            }
+            const body = s.slice(bodyStart, j);
+            // 按 \\ 分割行，每行按 & 分割为 条件=值
+            const rows = body.split('\\\\').map(function (row) { return row.trim(); }).filter(Boolean);
+            let casesHtml = '<span class="tx-cases">';
+            rows.forEach(function (row) {
+              const parts = row.split('&');
+              const cond = (parts[0] || '').trim();
+              const val = (parts[1] || '').trim();
+              casesHtml += '<span class="tx-case-row"><span class="tx-case-cond">' + seg(normalizeShorthand(cond)) + '</span><span class="tx-case-val">' + seg(normalizeShorthand(val)) + '</span></span>';
+            });
+            casesHtml += '</span>';
+            out += casesHtml;
+            i = j + ('\\end{cases}'.length); continue;
+          }
+          // 其他 begin 环境：跳过
+          out += esc(cmd); i += m[0].length; continue;
+        }
+        if (cmd === 'end') { const eg = readGroup(s, i + m[0].length); i += m[0].length + eg[1]; continue; } // 跳过 \end{...}
         if (cmd === 'text' || cmd === 'mathrm' || cmd === 'mathbf') { const g = readGroup(s, i + m[0].length); out += '<span>' + esc(g[0]) + '</span>'; i += m[0].length + g[1]; continue; }
-        if (cmd === 'overline' || cmd === 'bar' || cmd === 'vec' || cmd === 'hat' || cmd === 'dot') { const g = readGroup(s, i + m[0].length); out += '<span class="tx-over">' + seg(g[0]) + '</span>'; i += m[0].length + g[1]; continue; }
+        if (cmd === 'overline' || cmd === 'bar' || cmd === 'vec' || cmd === 'hat' || cmd === 'dot') { const g = readGroup(s, i + m[0].length); out += '<span class="tx-over">' + seg(normalizeShorthand(g[0])) + '</span>'; i += m[0].length + g[1]; continue; }
         // 未知命令：原样输出名字
         out += esc(cmd); i += m[0].length; continue;
       }
       // 上标 ^ 或 ^{..}
       if (c === '^') {
         const g = readGroup(s, i + 1);
-        out += '<sup>' + seg(g[0]) + '</sup>';
+        out += '<sup>' + seg(normalizeShorthand(g[0])) + '</sup>';
         i += 1 + g[1]; continue;
       }
       // 下标 _ 或 _{..}
       if (c === '_') {
         const g = readGroup(s, i + 1);
-        out += '<sub>' + seg(g[0]) + '</sub>';
+        out += '<sub>' + seg(normalizeShorthand(g[0])) + '</sub>';
         i += 1 + g[1]; continue;
       }
       // 分组 {...}（去掉花括号，保留内容）
       if (c === '{') {
         const g = readGroup(s, i);
-        out += seg(g[0]); i += g[1]; continue;
+        out += seg(normalizeShorthand(g[0])); i += g[1]; continue;
       }
       // 普通字符
       out += esc(c); i++;
@@ -1139,7 +1250,10 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       decision: { inputs: { mathSims: [], profScore: '', engAccuracy: '', polProgress: 0, xiankongScore: 5 }, result: null, updatedAt: '' },
       inspector: { runs: [] },    // {id,date,type,risk,flags:[]}
       quizBank: [],               // 收藏的题目 {id, topicId, topicName, stem, type, options, answer, solution, trap, diff, savedAt, note}
-      mistakePhotos: [],          // 拍题错题本 {id, subject, imageBase64(压缩), note, aiAnalysis:{keySteps,errorCause,similarProblems}, createdAt, analyzedAt}
+      mistakePhotos: [],          // 拍题错题本 {id, subject, imageBase64(压缩), note, painPoint, extractedQuestion, aiAnalysis:{keySteps,errorCause}, similarProblem, createdAt, analyzedAt}
+      weaknessProfile: null,      // 弱点画像 {generatedAt, basedOn:[painPoint...], summary, weakAreas:[...], advice} —— 由拍题疑难点汇聚分析得出
+      dailyQuiz: null,            // 每日一题 {date:'YYYY-MM-DD', question, solution, trap, subject, generatedAt}
+      dailyQuizHistory: [],       // 历史每日一题 [{date,question,solution,trap,subject,generatedAt}]（"再来一题"时归档）
       ai: { endpoint: '', key: '', model: '', preset: '', stream: false, thinkingMode: true },
       majorData: {},               // AI生成的专业数据缓存 { profName: { modules, topics, conceptGraph, ... } }
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false,
@@ -2522,14 +2636,18 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     }
   };
 
-  // ---------- 里程碑（动态：根据 activeMajor.milestoneLabel 生成） ----------
+  // ---------- 里程碑（动态：根据 activeMajor.milestoneLabel + 目标院校 生成） ----------
   function getMilestones() {
     var rule = activeMajor.alertRule || {};
     var hard = rule.hardMilestone || '\u6838\u5fc3\u80fd\u529b';
     var label = activeMajor.milestoneLabel || '\u4e13\u4e1a\u8bfe\u6838\u5fc3\u80fd\u529b\u9a8c\u8bc1';
+    // 动态读取目标院校（不再硬编码校名）
+    var school = '';
+    try { var _st = (typeof Store !== 'undefined') && Store.get(); if (_st && _st.settings && _st.settings.targetSchool && _st.settings.targetSchool !== 'undecided') { school = _st.settings.targetSchool; } } catch(e) {}
+    var octTail = school ? '\uff08\u51b3\u5b9a\u51b2' + school + '\uff09' : '';
     return [
       { id: 'augProf', date: '8\u6708\u5e95', title: label.replace('{hard}', hard), deadline: '08-31' },
-      { id: 'octMath', date: '10\u6708\u5e95', title: '\u6570\u5b66\u771f\u9898\u6a21\u62df \u2112120\u5206\uff08\u51b3\u5b9a\u51b2\u4e0a\u5927/\u5b88\u6cb3\u5de5\u5927\uff09', deadline: '10-31' },
+      { id: 'octMath', date: '10\u6708\u5e95', title: '\u6570\u5b66\u771f\u9898\u6a21\u62df \u2112120\u5206' + octTail, deadline: '10-31' },
       { id: 'novProf', date: '11\u6708\u5e95', title: '\u4e13\u4e1a\u8bfe\u771f\u9898\u4e8c\u5232\u5b8c\u6210', deadline: '11-30' },
       { id: 'decPol', date: '12\u6708', title: '\u653b\u6cbb\u5927\u9898\u80cc\u8bf8\u542f\u52a8', deadline: '12-01' }
     ];
@@ -2676,9 +2794,38 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     function tryParseJSON(raw) {
       var extracted = extractJSON(raw);
       if (!extracted) return null;
-      try { return JSON.parse(extracted); } catch (e1) {}
-      try { return JSON.parse(repairJSON(extracted)); } catch (e2) {}
-      return null;
+      var r1, r2;
+      try { r1 = JSON.parse(extracted); } catch (e1) {}
+      try { if (!r1) r2 = JSON.parse(repairJSON(extracted)); } catch (e2) {}
+      var obj = r1 || r2;
+      if (!obj) return null;
+      // 修复 JSON 转义吞掉的 LaTeX 命令（\f→换页 \r→回车 \b→退格 等）
+      return repairMangledLatex(obj);
+    }
+
+    // 递归修复对象中所有字符串值里被 JSON 转义吞掉的 LaTeX 命令
+    function repairMangledLatex(obj) {
+      if (!obj) return obj;
+      if (typeof obj === 'string') return _repairMangledStr(obj);
+      if (typeof obj !== 'object') return obj;
+      if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) obj[i] = repairMangledLatex(obj[i]); return obj; }
+      var keys = Object.keys(obj);
+      for (var k = 0; k < keys.length; k++) obj[keys[k]] = repairMangledLatex(obj[keys[k]]);
+      return obj;
+    }
+    function _repairMangledStr(s) {
+      if (typeof s !== 'string') return s;
+      return s
+        .replace(/\x0Cfrac/g, '\\frac').replace(/\x0Cfrom/g, '\\from')
+        .replace(/\x0DRightarrow/g, '\\Rightarrow').replace(/\x0Drightarrow/g, '\\rightarrow')
+        .replace(/\x0Dright/g, '\\right').replace(/\x0Dleft/g, '\\left')
+        .replace(/\x08begin/g, '\\begin').replace(/\x08bigg/g, '\\bigg').replace(/\x08Bigg/g, '\\Bigg')
+        .replace(/\x08bigl/g, '\\bigl').replace(/\x08Bigl/g, '\\Bigl')
+        .replace(/\x08bigr/g, '\\bigr').replace(/\x08Bigr/g, '\\Bigr')
+        .replace(/\x08big/g, '\\big').replace(/\x08Big/g, '\\Big')
+        .replace(/\x09ext/g, '\\text').replace(/\x09an/g, '\\tan')
+        .replace(/\x09imes/g, '\\times').replace(/\x09o/g, '\\to')
+        .replace(/\x0Aeq/g, '\\neq').replace(/\x0Aeg/g, '\\neg');
     }
 
     var MAX_RETRIES = 1;
@@ -3519,9 +3666,294 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<button class="link-btn" id="log-hours">+ 记录时长</button></div>'
       + '<div id="wk-chart">' + Charts.bar(barData, { height: 130, unit: 'h', hiColor: '#000' }) + '</div>'
       + '<div class="muted-sm">今日 ' + Store.todayHours() + 'h · 本周累计 ' + U.round1(U.sum(hours)) + 'h / 目标 ' + (s.settings.weeklyTargetHours || 50) + 'h</div>'
-      + '</div>';
+      + '</div>'
+
+      + dailyQuizHtml(s);
 
     bind(el, next);
+    ensureDailyQuiz(el);
+  }
+
+  // ---------- 每日一题 ----------
+  var dailyGenerating = false;
+
+  function dailyQuizHtml(s) {
+    var dq = s.dailyQuiz;
+    var today = U.dkey();
+    var title = '<div class="card-title-row"><span class="card-title">📅 每日一题</span>'
+      + '<span style="display:flex;gap:4px">'
+      + (dq && dq.date === today && dq.question
+          ? '<button class="btn btn-ghost" id="dq-again" style="font-size:11px;padding:3px 8px">🔁 再来一题</button>'
+          : '')
+      + '</span></div>';
+
+    if (dq && dq.date === today && dq.question) {
+      // 今日已生成
+      var subj = DB.SUBJECTS[dq.subject] || { short: '题', color: '#666' };
+      return '<div class="card" id="dq-card">' + title
+        + '<div class="pm-question"><b>📝 ' + subj.short + '题：</b>' + renderMathSafe(dq.question) + '</div>'
+        + (dq.solution ? '<div class="pm-ai-section"><b>🔑 解答：</b><div class="pm-ai-body">' + renderMathSafe(dq.solution) + '</div></div>' : '')
+        + (dq.trap ? '<div class="pm-ai-section"><b>⚠️ 易错点：</b><div class="pm-ai-body">' + renderMathSafe(dq.trap) + '</div></div>' : '')
+        + '<div class="muted-sm" style="margin-top:6px">基于你的薄弱点生成 · ' + (dq.generatedAt || '').slice(0, 16).replace('T', ' ') + '</div>'
+        + '</div>';
+    }
+    if (dq && dq.date === today && dq.failed) {
+      // 今日生成失败：提供手动重试（不再自动重试，避免刷新循环）
+      return '<div class="card" id="dq-card">' + title
+        + '<div class="alert alert-warn">⚠️ 今日一题生成失败：' + U.esc(dq.error || '未知错误') + '</div>'
+        + '<button class="btn btn-ghost" id="dq-retry" style="font-size:11px;padding:3px 8px;margin-top:6px">🔁 重试生成</button>'
+        + '</div>';
+    }
+    if (typeof AI !== 'undefined' && AI.configured()) {
+      return '<div class="card" id="dq-card">' + title
+        + '<div class="muted-sm">⏳ 正在依据你的薄弱点生成今日一题…</div></div>';
+    }
+    // 未配置 AI
+    return '<div class="card" id="dq-card">' + title
+      + '<div class="alert alert-warn">未配置 AI，无法生成每日一题。请先在「设置」中填写 API，或前往「拍题」标记疑难点后由 AI 出针对性练习。</div></div>';
+  }
+
+  // 渲染数学/文本（无 Tex 时降级）
+  function renderMathSafe(text) {
+    if (!text) return '';
+    if (typeof Tex !== 'undefined') { try { return Tex.renderInline(text).replace(/\\n/g, '<br>'); } catch (e) {} }
+    return U.esc(text).replace(/\\n/g, '<br>');
+  }
+
+  // 进入作战台时：今日未生成则自动生成一道（不重复生成；失败当日不再自动重试）
+  function ensureDailyQuiz(el) {
+    var s = Store.get();
+    var today = U.dkey();
+    if (typeof AI === 'undefined' || !AI.configured()) return;
+    if (s.dailyQuiz && s.dailyQuiz.date === today) return; // 今日已有（成功或失败占位）→ 不再自动重试
+    if (dailyGenerating) return; // 防重入
+    dailyGenerating = true;
+    generateDailyQuiz(false, function () {
+      dailyGenerating = false;
+      App.refresh(); // 重新渲染展示结果
+    });
+  }
+
+  // 生成每日一题。force=true 为「再来一题」（覆盖今日）
+  function generateDailyQuiz(force, done) {
+    if (typeof AI === 'undefined' || !AI.configured()) { if (done) done(); return; }
+    var s = Store.get();
+    var today = U.dkey();
+
+    var majorName = '';
+    try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
+    var examCfg = (s.settings && s.settings.examConfig) || {};
+    var profName = examCfg.profName || '自控原理';
+
+    // 取弱点画像 + 近期疑难点/题干，作为出题依据
+    var wp = s.weaknessProfile;
+    var photos = s.mistakePhotos || [];
+    var painPoints = photos.filter(function (p) { return p.painPoint && p.painPoint.trim(); })
+      .map(function (p) { return p.painPoint.trim(); }).slice(-15);
+    var qSamples = photos.filter(function (p) { return (p.extractedQuestion || p.note || '').trim(); })
+      .slice(-6).map(function (p) { return (p.extractedQuestion || p.note).trim().slice(0, 50); });
+
+    var ctxParts = [];
+    if (wp && wp.weakAreas && wp.weakAreas.length) ctxParts.push('考生薄弱点画像关键词：' + wp.weakAreas.join('、'));
+    if (painPoints.length) ctxParts.push('近期疑难点标签：' + painPoints.join('、'));
+    if (qSamples.length) ctxParts.push('部分错题题干样例：\n- ' + qSamples.join('\n- '));
+    var ctx = ctxParts.length ? ctxParts.join('\n') : '（暂无错题记录，请基于该考生专业课「' + profName + '」常见易错点出题）';
+
+    var systemPrompt = '你是考研出题官，熟悉「' + profName + '」及数学公共课的命题。'
+      + '根据考生的薄弱点画像与近期错题，出一道**针对性练习题**（聚焦其真正薄弱的考点，难度贴合真题）。'
+      + '输出严格 JSON（不要 markdown、不要多余文字）：'
+      + '{"subject":"math|ctrl|eng|pol（该题目所属科目）",'
+      + '"question":"完整题干（数学表达式用 LaTeX 如 \\frac{a}{b}、\\sqrt{x}、x^{2}、\\int、\\sum）",'
+      + '"solution":"详细解答步骤（分步，含关键公式推导，LaTeX 格式）",'
+      + '"trap":"本题最易踩的坑（与考生薄弱点对应）"}'
+      + '要求：question 必须可独立作答；solution 自洽；trap 要点中考生该补的短板。';
+
+    var userPrompt = ctx + '\n\n请出今日针对性练习一题。';
+
+    AI.chatStream(systemPrompt, userPrompt, null).then(function (fullText) {
+      var res = extractDailyJSON(fullText);
+      if (!res || !res.question) {
+        // 提取彻底失败：尝试从原始文本中剥离 JSON 外壳，只保留可读内容
+        var cleaned = fullText
+          .replace(/```\w*\s*/g, '').replace(/```/g, '')  // 去代码块标记
+          .replace(/^\s*[\{\[]/, '').replace(/[\}\]]\s*$/, '') // 去首尾括号
+          .replace(/^\s*"subject"\s*:\s*"[^"]*",?\s*/i, '')   // 去字段名
+          .replace(/^\s*"question"\s*:\s*"/i, '')
+          .replace(/",\s*solution"\s*:.*/s, '');               // 截断到 question 尾
+        cleaned = cleaned.trim().replace(/\n+$/, '');
+        res = { subject: 'math', question: cleaned || fullText, solution: '', trap: '' };
+      }
+      Store.update(function (st) {
+        var prev = st.dailyQuiz;
+        if (prev && prev.date && !force) {
+          // 正常情况下不会走到这里（ensureDailyQuiz 已拦截），保险起见保留
+        }
+        // 归档旧题到历史（"再来一题"时保留可回看）
+        if (prev && prev.question) {
+          st.dailyQuizHistory = st.dailyQuizHistory || [];
+          st.dailyQuizHistory.push(prev);
+          if (st.dailyQuizHistory.length > 30) st.dailyQuizHistory = st.dailyQuizHistory.slice(-30);
+        }
+        st.dailyQuiz = {
+          date: today,
+          subject: res.subject || 'math',
+          question: res.question || '',
+          solution: res.solution || '',
+          trap: res.trap || '',
+          generatedAt: new Date().toISOString()
+        };
+      });
+      if (done) done();
+    }).catch(function (err) {
+      // 生成失败：写入「失败占位」（当日不再自动重试，避免刷新循环；用户可手动点重试）
+      console.warn('[Dashboard] 每日一题生成失败:', err && err.message);
+      Store.update(function (st) {
+        st.dailyQuiz = { date: today, failed: true, error: (err && err.message) || String(err || '未知错误'), generatedAt: new Date().toISOString() };
+      });
+      if (done) done();
+    });
+  }
+
+  // 从 AI 返回中稳健提取每日一题 JSON（含修复常见格式问题）
+  function extractDailyJSON(raw) {
+    var str = (raw || '').trim();
+
+    // 先试 markdown 代码块
+    var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (m) { try { return repairFields(JSON.parse(m[1].trim())); } catch (e) {} }
+
+    // 找最外层 { ... }
+    var start = str.indexOf('{');
+    if (start === -1) return null;
+    var depth = 0, inStr = false, esc = false, end = -1;
+    for (var i = start; i < str.length; i++) {
+      var c = str.charAt(i);
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    if (end <= start) return null;
+    var jsonStr = str.slice(start, end);
+
+    // 直接解析
+    try { return repairFields(JSON.parse(jsonStr)); } catch (e) {}
+
+    // 修复常见问题后重试
+    var repaired = jsonStr
+      .replace(/\/\/[^\n]*/g, '')       // 去单行注释
+      .replace(/\/\*[\s\S]*?\*\//g, '') // 去块注释
+      .replace(/,\s*([}\]])/g, '$1')     // 去尾逗号
+      .replace(/'/g, '"');               // 单引号→双引号
+    try { return repairFields(JSON.parse(repaired)); } catch (e) {}
+
+    // 最后兜底：用正则从原始文本中捞各字段值
+    var fields = {};
+    var patterns = [
+      ['subject', /"subject"\s*:\s*"([^"]*)"/],
+      ['question', /"question"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+      ['solution', /"solution"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+      ['trap', /"trap"\s*:\s*"((?:[^"\\]|\\.)*)"/]
+    ];
+    // 也试无引号的值（数字/布尔）
+    patterns.push(['subject', /"subject"\s*:\s*(\w+)/]);
+    patterns.forEach(function (p) {
+      var mm = raw.match(p[1]);
+      if (mm) fields[p[0]] = mm[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    });
+    // 兜底提取的字段也需要修复 LaTeX 转义
+    return fields.question ? repairFields(fields) : null;
+  }
+
+  // ★ 关键修复：JSON 解析会把 LaTeX 命令中的 \f \r \b \t 吞掉（变成控制字符）
+  // 例如 "\frac" → JSON.parse 后变成 <formfeed>rac
+  // 此函数遍历对象所有字符串值，恢复被吞的 LaTeX 反斜杠
+  function repairFields(obj) {
+    if (!obj) return obj;
+    if (typeof obj === 'string') return repairMangled(obj);
+    if (typeof obj !== 'object') return obj;
+    // 数组
+    if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) obj[i] = repairFields(obj[i]); return obj; }
+    // 对象
+    var keys = Object.keys(obj);
+    for (var k = 0; k < keys.length; k++) obj[keys[k]] = repairFields(obj[keys[k]]);
+    return obj;
+  }
+  // 修复单个字符串中被 JSON 转义吞掉的 LaTeX 命令
+  function repairMangled(s) {
+    if (typeof s !== 'string') return s;
+    // 按长度降序排列（先匹配长的前缀，避免 \bigg 被 \big 先匹配掉）
+    return s
+      // ===== \f (form feed U+000C) 冲突 =====
+      .replace(/\x0Cfrac/g, '\\frac')
+      .replace(/\x0Cfrom/g, '\\from')
+      // ===== \r (CR U+000D) 冲突 —— 大量命令以 r 开头 =====
+      .replace(/\x0DRightarrow/g, '\\Rightarrow')
+      .replace(/\x0Drightarrow/g, '\\rightarrow')
+      .replace(/\x0Dlefteqn/g, '\\lefteqn')
+      .replace(/\x0Dright/g, '\\right')
+      .replace(/\x0Dleft/g, '\\left')
+      .replace(/\x0Drceil/g, '\\rceil')
+      .replace(/\x0Drfloor/g, '\\rfloor')
+      .replace(/\x0Drangle/g, '\\rangle')
+      .replace(/\x0Drbrace/g, '\\rbrace')
+      .replace(/\x0Dmathrm/g, '\\mathrm')
+      .replace(/\x0Drm/g, '\\rm')
+      .replace(/\x0Draise/g, '\\raise')
+      .replace(/\x0Droot/g, '\\root')
+      .replace(/\x0Drule/g, '\\rule')
+      .replace(/\x0Dlimits/g, '\\limits')
+      .replace(/\x0Dnolimits/g, '\\nolimits')
+      .replace(/\x0Dot/g, '\\rot')   // 少见但可能
+      // ===== \b (BS U+0008) 冲突 =====
+      .replace(/\x08begin/g, '\\begin')
+      .replace(/\x08bigg/g, '\\bigg')
+      .replace(/\x08Bigg/g, '\\Bigg')
+      .replace(/\x08bigl/g, '\\bigl')
+      .replace(/\x08Bigl/g, '\\Bigl')
+      .replace(/\x08bigr/g, '\\bigr')
+      .replace(/\x08Bigr/g, '\\Bigr')
+      .replace(/\x08biggl/g, '\\biggl')
+      .replace(/\x08Biggl/g, '\\Biggl')
+      .replace(/\x08biggr/g, '\\biggr')
+      .replace(/\x08Biggr/g, '\\Biggr')
+      .replace(/\x08big/g, '\\big')
+      .replace(/\x08Big/g, '\\Big')
+      .replace(/\x08eta/g, '\\eta')
+      .replace(/\x08in/g, '\\bin')   // \binom 可能
+      .replace(/\x08eta/g, '\\beta')
+      .replace(/\x08ar/g, '\\bar')
+      .replace(/\x08f/g, '\\bf')
+      .replace(/\x08old/g, '\\bold')
+      .replace(/\x08ot/g, '\\bot')
+      .replace(/\x08race/g, '\\brace')
+      .replace(/\x08rack/g, '\\brack')
+      .replace(/\x08ullet/g, '\\bullet')
+      .replace(/\x08ackslash/g, '\\backslash')
+      .replace(/\x08reve/g, '\\breve')
+      // ===== \t (TAB U+0009) 冲突 =====
+      .replace(/\x09ext/g, '\\text')
+      .replace(/\x09extrm/g, '\\textrm')
+      .replace(/\x09extbf/g, '\\textbf')
+      .replace(/\x09extit/g, '\\textit')
+      .replace(/\x09exttt/g, '\\texttt')
+      .replace(/\x09an/g, '\\tan')
+      .replace(/\x09imes/g, '\\times')
+      .replace(/\x09o/g, '\\to')
+      .replace(/\x09op/g, '\\top')
+      .replace(/\x09au/g, '\\tau')
+      .replace(/\x09heta/g, '\\theta')
+      .replace(/\x09ilde/g, '\\tilde')
+      .replace(/\x09iny/g, '\\tiny')
+      // ===== \n (LF U+000A) 冲突（较少但可能） =====
+      .replace(/\x0Aeq/g, '\\neq')
+      .replace(/\x0Aearrow/g, '\\nearrow')
+      .replace(/\x0Awarrow/g, '\\nwarrow')
+      .replace(/\x0Aatural/g, '\\natural')
+      .replace(/\x0Aeg/g, '\\neg')
+      ; // 末尾分号空语句
   }
 
   function bind(el, next) {
@@ -3544,6 +3976,20 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     // 快捷入口
     el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => App.go(b.getAttribute('data-go')));
     el.querySelector('#go-sched').onclick = () => App.go('scheduler');
+
+    // 每日一题「再来一题」/「重试生成」
+    var dqAgain = el.querySelector('#dq-again');
+    if (dqAgain) dqAgain.onclick = () => {
+      dqAgain.disabled = true;
+      dqAgain.textContent = '生成中…';
+      generateDailyQuiz(true, function () { App.refresh(); });
+    };
+    var dqRetry = el.querySelector('#dq-retry');
+    if (dqRetry) dqRetry.onclick = () => {
+      dqRetry.disabled = true;
+      dqRetry.textContent = '生成中…';
+      generateDailyQuiz(true, function () { App.refresh(); });
+    };
 
     // 记时长
     el.querySelector('#log-hours').onclick = () => {
@@ -4390,23 +4836,88 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '</div>';
   }
 
-  function milestoneNode(m) {
+  // 计算当前日期在里程碑时间线中的位置（0~1），以及应插入的索引
+  function calcCurrentPosition() {
+    var now = new Date();
+    var ms = DB.MILESTONES;
+    if (!ms || !ms.length) return { index: 0, ratio: 0, label: '' };
+
+    // 将每个里程碑 deadline 转为 Date 对象（用当年）
+    var year = now.getFullYear();
+    var dates = ms.map(function (m) {
+      var parts = m.deadline.split('-');
+      return new Date(year, parseInt(parts[0], 10) - 1, parseInt(parts[1], 10), 23, 59, 59);
+    });
+
+    // 找到当前日期应该插入的位置
+    var idx = 0;
+    for (var i = 0; i < dates.length; i++) {
+      if (now <= dates[i]) { idx = i; break; }
+      else { idx = i + 1; }
+    }
+
+    // 计算在区间内的比例位置
+    var ratio = 0;
+    var prevDate = idx > 0 ? dates[idx - 1] : new Date(year, 5, 30); // 默认从7月初开始
+    var nextDate = idx < dates.length ? dates[idx] : dates[dates.length - 1];
+    var range = nextDate.getTime() - prevDate.getTime();
+    if (range > 0) {
+      ratio = Math.min(1, Math.max(0, (now.getTime() - prevDate.getTime()) / range));
+    } else if (now <= dates[0]) {
+      ratio = 0; // 在第一个里程碑之前
+    } else {
+      ratio = 1; // 在最后一个里程碑之后
+    }
+
+    // 生成标签文字
+    var monthNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+    var label = '📍 当前：' + monthNames[now.getMonth()] + now.getDate() + '日';
+
+    return { index: idx, ratio: ratio, label: label };
+  }
+
+  function milestoneNode(m, currentInfo, nodeIndex) {
     const done = Store.get().milestones[m.id];
-    return '<div class="ms-node' + (done ? ' ms-done' : '') + '" data-id="' + m.id + '">'
+    var html = '<div class="ms-node' + (done ? ' ms-done' : '') + '" data-id="' + m.id + '">'
       + '<div class="ms-dot"></div>'
       + '<div class="ms-body"><div class="ms-date">' + m.date + (done ? ' <span class="ms-badge">已完成</span>' : ' <span class="ms-badge ms-badge-doing">' + (new Date() <= new Date('2026-' + m.deadline + 'T23:59:59') ? '进行中' : '逾期') + '</span>') + '</div>'
       + '<div class="ms-title">' + U.esc(m.title) + '</div></div>'
       + '<label class="ms-check"><input type="checkbox"' + (done ? ' checked' : '') + '><span class="box"></span></label>'
       + '</div>';
+
+    // 在正确的节点前插入「当前位置」指示器
+    if (currentInfo && nodeIndex === currentInfo.index) {
+      html = renderCurrentIndicator(currentInfo) + html;
+    }
+    return html;
+  }
+
+  // 渲染动态当前位置指示器
+  function renderCurrentIndicator(info) {
+    // 如果 ratio 接近 0，显示在上方；否则根据比例微调
+    var style = '';
+    if (info.ratio > 0 && info.ratio < 1) {
+      style = ' style="margin-top:' + Math.round(info.ratio * 40) + 'px"';
+    }
+    return '<div class="ms-now"' + style + '>'
+      + '<div class="ms-now-arrow">▼</div>'
+      + '<div class="ms-now-label">' + U.esc(info.label) + '</div>'
+      + '</div>';
   }
 
   function render(el) {
+    // 每次渲染时刷新里程碑（目标院校可能已变更，确保校名动态）
+    if (typeof DB !== 'undefined' && DB.getMilestones) {
+      var fresh = DB.getMilestones();
+      if (fresh) { DB.MILESTONES.length = 0; fresh.forEach(function(m) { DB.MILESTONES.push(m); }); }
+    }
+    var currentInfo = calcCurrentPosition();
     el.innerHTML =
       '<div class="grid-2">'
       + subjCard('math') + subjCard('ctrl') + subjCard('eng') + subjCard('pol')
       + '</div>'
       + '<div class="card"><div class="card-title">里程碑时间线</div>'
-      + '<div class="ms-line">' + DB.MILESTONES.map(milestoneNode).join('') + '</div>'
+      + '<div class="ms-line">' + DB.MILESTONES.map(function (m, i) { return milestoneNode(m, currentInfo, i); }).join('') + '</div>'
       + '<div class="muted-sm" style="margin-top:8px">勾选里程碑将触发系统通知；10月底节点未达成时，系统将在11月1日推送院校决策建议。</div>'
       + '</div>';
 
@@ -6958,12 +7469,19 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         // 始终保留"未确定"选项
         segBtns += '<button class="seg' + (curTarget === 'undecided' ? ' seg-on' : '') + '" data-school="undecided">未确定</button>';
 
+        // 判断当前目标是否为自定义（不在推荐列表中）
+        var isCustom = curTarget && curTarget !== 'undecided' && !rec.some(function(sc){ return sc.id === curTarget; });
+
         return '<div class="card"><div class="card-title">目标院校（按「' + U.esc(curProf) + '」智能推荐）</div>'
           + (hasRec
             ? '<div class="seg-row" id="st-sch-seg">' + segBtns + '</div>'
               + '<div class="muted-sm">以上为本地数据库中与「' + U.esc(curProf) + '」匹配度最高的院校。点击选择或到下方「决策参谋」做深度分析。</div>'
             : '<div class="alert alert-warn">本地数据库暂无「' + U.esc(curProf) + '」相关院校数据。'
               + (aiReady ? '可点下方按钮用 AI 为你推荐。' : '请先配置 AI Key 后再使用 AI 推荐。') + '</div>')
+          + '<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+          + '<input id="st-school-custom" class="input" style="flex:1;min-width:140px" placeholder="或输入其他院校名称…"' + (isCustom ? ' value="' + U.esc(curTarget) + '"' : '') + '>'
+          + '<button class="btn btn-primary" id="st-school-custom-save" style="font-size:12px;padding:4px 10px">设为目标</button>'
+          + '</div>'
           + '<div class="btn-row" style="margin-top:8px">'
           + '<button class="btn btn-ghost" id="st-ai-school"' + (aiReady ? '' : ' disabled') + '>🤖 AI 择校推荐（基于当前专业+进度）</button>'
           + '</div></div>';
@@ -7049,6 +7567,8 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     } else if (mode === 'school') {
       var _curProf2 = (Store.get().settings.examConfig && Store.get().settings.examConfig.profName) || '自控原理';
       var _recSch = DB.recommendSchools(_curProf2, 8);
+      var _curTarget = Store.get().settings.targetSchool || '';
+      var _isCustomSch = _curTarget && _curTarget !== 'undecided' && !_recSch.some(function(sc){ return sc.id === _curTarget; });
       var _schHtml = _recSch.map(function (sc) {
         return '<button class="seg ms-sch' + ((Store.get().settings.targetSchool === sc.id) ? ' seg-on' : '') + '" data-v="' + sc.id + '">' + U.esc(sc.name) + '</button>';
       }).join('');
@@ -7059,13 +7579,27 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         html: (_recSch.length > 0
           ? '<div class="muted-sm">本地匹配到 ' + _recSch.length + ' 所相关院校：</div>'
           : '<div class="alert alert-warn">本地暂无「' + U.esc(_curProf2) + '」数据，显示全部院校供选择。</div>')
-          + '<div class="seg-row" style="max-height:200px;overflow-y:auto;flex-wrap:wrap">' + _schHtml + '</div>',
+          + '<div class="seg-row" style="max-height:200px;overflow-y:auto;flex-wrap:wrap">' + _schHtml + '</div>'
+          + '<div style="margin-top:8px;display:flex;align-items:center;gap:6px">'
+          + '<input id="ms-school-custom" class="input" style="flex:1;min-width:140px" placeholder="或输入其他院校名称…"' + (_isCustomSch ? ' value="' + U.esc(_curTarget) + '"' : '') + '>'
+          + '<button class="btn btn-primary" id="ms-school-save" style="font-size:12px;padding:4px 10px">设为目标</button>'
+          + '</div>',
         actions: [{ label: '取消' }]
       });
       document.querySelectorAll('.ms-sch').forEach(b => b.onclick = () => {
         Store.update(x => { x.settings.targetSchool = b.getAttribute('data-v'); });
         Modal.close(); App.refresh(); Toast.success('已修正');
       });
+      // 自定义院校输入（弹窗内）
+      var _msCustomIn = document.getElementById('ms-school-custom');
+      var _msCustomBtn = document.getElementById('ms-school-save');
+      if (_msCustomBtn) _msCustomBtn.onclick = () => {
+        var _v = (_msCustomIn.value || '').trim();
+        if (!_v) { Toast.warn('请输入院校名称'); return; }
+        Store.update(x => { x.settings.targetSchool = _v; });
+        Modal.close(); App.refresh(); Toast.success('目标已设为「' + _v + '」');
+      };
+      if (_msCustomIn) _msCustomIn.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); if (_msCustomBtn) _msCustomBtn.click(); } };
     }
   }
 
@@ -7190,10 +7724,10 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
           + '<div id="aisch-content-wrap" style="display:none;margin-top:10px">'
           + '<div class="card-title-sm">📋 推荐结果</div>'
           + '<div id="aisch-result" style="max-height:300px;overflow:auto;font-size:13px"></div></div>',
-        actions: []
+        actions: [{ label: '关闭', kind: 'btn-ghost', id: 'aisc-close-btn' }]
       });
 
-      AI.chatStream(prompt, '', function (text, reasoning) {
+      AI.chatStream(prompt, '请按上述要求生成院校推荐 JSON', function (text, reasoning) {
         var tw = document.getElementById('aisch-think');
         var cw = document.getElementById('aisch-content-wrap');
         var cr = document.getElementById('aisch-result');
@@ -7229,15 +7763,9 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
           var resultEl = document.getElementById('aisch-result');
           if (resultEl) resultEl.innerHTML = '<pre style="white-space:pre-wrap">' + U.esc(fullText) + '</pre>';
         }
-        // 更新 actions 为关闭按钮
-        setTimeout(function () {
-          var modalActions = document.querySelector('.modal-actions');
-          if (modalActions) modalActions.innerHTML = '<button class="btn btn-primary" id="aisc-close">关闭</button>';
-          var closeBtn = document.getElementById('aisc-close');
-          if (closeBtn) closeBtn.onclick = function () { Modal.close(); };
-        }, 100);
-      }).catch(function () {
-        Modal.open({ title: 'AI 推荐失败', html: '<p>请求失败，请检查网络或 API 配置。</p>', actions: [{ label: '知道了' }] });
+      }).catch(function (err) {
+        var msg = err && err.message ? err.message : String(err || '未知错误');
+        Modal.open({ title: 'AI 推荐失败', html: '<p>请求失败：' + U.esc(msg) + '</p><p class="muted-sm">请检查 API 配置（地址/密钥/模型名）后重试。</p>', actions: [{ label: '知道了' }] });
       });
     };
 
@@ -7251,6 +7779,19 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       Store.update(s => { s.settings.targetSchool = b.getAttribute('data-school'); });
       Toast.success('目标已更新'); render(el);
     });
+
+    // 自定义院校输入
+    var customSchInput = el.querySelector('#st-school-custom');
+    var customSchSave = el.querySelector('#st-school-custom-save');
+    if (customSchSave) customSchSave.onclick = () => {
+      var v = (customSchInput.value || '').trim();
+      if (!v) { Toast.warn('请输入院校名称'); return; }
+      Store.update(s => { s.settings.targetSchool = v; });
+      Toast.success('目标已设为「' + v + '」'); render(el);
+    };
+    if (customSchInput) customSchInput.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); if (customSchSave) customSchSave.click(); }
+    };
 
     el.querySelector('#st-target-save').onclick = () => {
       const v = U.clamp(+el.querySelector('#st-target').value || 50, 10, 100);
@@ -7744,7 +8285,45 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   // 对文本做 TeX 行内公式渲染（利用 Tex 模块）
   function renderMath(text) {
     if (!text || typeof Tex === 'undefined') return U.esc(text);
-    try { return Tex.renderInline(text); } catch (e) { return U.esc(text); }
+    try { return Tex.renderInline(text).replace(/\\n/g, '<br>'); } catch (e) { return U.esc(text); }
+  }
+
+  // 统计已标记疑难点的错题数
+  function countPainPoints(s) {
+    return (s.mistakePhotos || []).filter(function (p) { return p.painPoint && p.painPoint.trim(); }).length;
+  }
+
+  // 弱点画像卡 HTML
+  function weaknessCardHtml(s) {
+    var wp = s.weaknessProfile;
+    var painCnt = countPainPoints(s);
+    var header = '<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">'
+      + '<span>📊 我的薄弱点画像</span>'
+      + '<span style="display:flex;gap:4px">'
+      + (typeof AI !== 'undefined' && AI.configured()
+          ? '<button class="btn btn-ghost pm-weak-btn" data-act="weak" style="font-size:11px;padding:3px 8px">' + (wp ? '🔄 重新分析' : '🧠 分析薄弱点') + '</button>'
+          : '')
+      + '</span></div>';
+
+    if (!wp) {
+      var hint = painCnt > 0
+        ? '已标记 <b>' + painCnt + '</b> 道错题的疑难点。点击「分析薄弱点」，AI 将主要依据这些疑难点标签（省 token、更精准）生成你的薄弱点画像与复习建议。'
+        : '还没有标记疑难点。建议给每道错题标一个 ≤10 字的疑难点（如「分部积分」「洛必达」），AI 即可据此分析你的薄弱模块并给出针对性建议。';
+      return header
+        + '<div class="muted-sm">' + hint + '</div>'
+        + (typeof AI !== 'undefined' && !AI.configured() ? '<div class="alert alert-warn" style="margin-top:6px">未配置 AI，无法生成画像。请先在设置中填写 API。</div>' : '')
+        + '</div>';
+    }
+
+    // 已生成画像
+    var tags = (wp.weakAreas && wp.weakAreas.length)
+      ? '<div class="pm-weak-tags">' + wp.weakAreas.map(function (t) { return '<span class="tag" style="background:#cf1322;color:#fff;margin:2px">' + U.esc(t) + '</span>'; }).join('') + '</div>'
+      : '';
+    var summary = wp.summary ? '<div class="pm-weak-summary">' + U.esc(wp.summary).replace(/\\n/g, '<br>') + '</div>' : '';
+    var advice = wp.advice ? '<div class="pm-weak-advice"><b>💡 复习建议：</b>' + U.esc(wp.advice).replace(/\\n/g, '<br>') + '</div>' : '';
+    var meta = '<div class="muted-sm" style="margin-top:6px">基于 ' + (wp.basedOn ? wp.basedOn.length : 0) + ' 条疑难点 · 生成于 ' + (wp.generatedAt || '').slice(0, 16).replace('T', ' ') + '</div>';
+
+    return header + tags + summary + advice + meta + '</div>';
   }
 
   // ---------- 渲染 ----------
@@ -7793,6 +8372,14 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
           cardsHtml += '<div class="pm-note"><b>📝 备注：</b>' + U.esc(p.note) + '</div>';
         }
 
+        // 疑难点标记（10字以内，用于汇聚弱点画像 / 省 token 分析）
+        var painVal = p.painPoint || '';
+        cardsHtml += '<div class="pm-pain">'
+          + '<span class="pm-pain-label">🎯 疑难点</span>'
+          + '<input class="pm-pain-input" data-id="' + p.id + '" maxlength="10" value="' + U.esc(painVal) + '" placeholder="如：分部积分/洛必达...">'
+          + '<span class="pm-pain-count">' + painVal.length + '/10</span>'
+          + '</div>';
+
         // 图片：缩略图 + 查看原图按钮
         if (p.imageBase64) {
           cardsHtml += '<div class="pm-img-row">'
@@ -7839,9 +8426,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     }
 
     el.innerHTML =
-      '<div class="card"><div class="card-title">📸 拍题错题本</div>'
-      + '<div class="muted-sm">拍下不会写的题，本地保存并自动同步云端。配好 API 后可让 AI 提取题目、拆解解题关键、分析易错原因、生成同类练习题。</div>'
-      + '</div>'
+      weaknessCardHtml(s)
 
       + '<div class="card"><div class="card-title">拍照 / 选图上传</div>'
       + '<div class="pm-upload-row">'
@@ -7858,7 +8443,11 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<div id="pm-preview" style="display:none;margin-top:10px;text-align:center"></div>'
       + '</div>'
 
-      + '<div class="card"><div class="card-title">错题记录 (' + list.length + ')</div>'
+      + '<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><span>错题记录 (' + list.length + ')</span>'
+      + '<span style="display:flex;gap:4px">'
+      + '<button class="btn btn-ghost pm-export-btn" data-act="export-json" style="font-size:11px;padding:3px 8px" title="导出为 JSON（含图片 base64）">📥 JSON</button>'
+      + '<button class="btn btn-ghost pm-export-btn" data-act="export-md" style="font-size:11px;padding:3px 8px" title="导出为 Markdown（文字+题目+解析）">📄 Markdown</button>'
+      + '</span></div>'
       + '<div class="tab-row">' + tabsHtml + '</div>'
       + '<div class="pm-list">' + cardsHtml + '</div>'
       + '</div>';
@@ -7872,6 +8461,28 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     el.querySelectorAll('.tab').forEach(function (b) {
       b.onclick = function () { filter = b.getAttribute('data-f'); render(el); };
     });
+
+    // 疑难点输入：失焦/回车保存（10字限）
+    el.querySelectorAll('.pm-pain-input').forEach(function (inp) {
+      var id = inp.getAttribute('data-id');
+      var cnt = inp.parentNode.querySelector('.pm-pain-count');
+      var save = function () {
+        var v = inp.value.trim().slice(0, 10);
+        inp.value = v;
+        if (cnt) cnt.textContent = v.length + '/10';
+        Store.update(function (st) {
+          var p = (st.mistakePhotos || []).find(function (x) { return x.id === id; });
+          if (p) p.painPoint = v;
+        });
+      };
+      inp.onblur = save;
+      inp.oninput = function () { if (cnt) cnt.textContent = inp.value.length + '/10'; };
+      inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+    });
+
+    // 弱点画像分析按钮
+    var weakBtn = el.querySelector('[data-act="weak"]');
+    if (weakBtn) weakBtn.onclick = function () { analyzeWeakness(el); };
 
     // 文件选择 → 预览
     var fileInput = el.querySelector('#pm-file');
@@ -7918,6 +8529,12 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         }, true);
       };
     });
+
+    // 导出按钮
+    var expJson = el.querySelector('[data-act="export-json"]');
+    if (expJson) expJson.onclick = function () { exportData('json'); };
+    var expMd = el.querySelector('[data-act="export-md"]');
+    if (expMd) expMd.onclick = function () { exportData('md'); };
   }
 
   // ---------- 查看原图（弹窗大图） ----------
@@ -7944,6 +8561,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         subject: subj,
         imageBase64: dataUrl,
         note: note,
+        painPoint: '',
         extractedQuestion: '',
         aiAnalysis: null,
         similarProblem: null,
@@ -7964,7 +8582,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     var s = (raw || '').trim();
     // 先试 markdown 代码块
     var m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (m) { s = m[1].trim(); try { return JSON.parse(s); } catch (e) {} }
+    if (m) { s = m[1].trim(); var r1 = tryParseRepair(s); if (r1) return r1; }
     // 再找最外层 { ... }
     var start = s.indexOf('{');
     if (start === -1) return null;
@@ -7979,8 +8597,55 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       else if (c === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
     }
     if (end <= start) return null;
-    try { return JSON.parse(s.slice(start, end)); } catch (e) {}
+    var r2 = tryParseRepair(s.slice(start, end));
+    return r2 || null;
+  }
+
+  // 尝试 JSON.parse 并修复 LaTeX 转义吞字符问题
+  function tryParseRepair(jsonStr) {
+    // 直接解析
+    try { return repairMangledLatexObj(JSON.parse(jsonStr)); } catch (e) {}
+    // 去注释/尾逗号/单引号后重试
+    var fixed = jsonStr
+      .replace(/\/\/[^\n]*/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/,\s*([}\]])/g, '$1')
+      .replace(/'/g, '"');
+    try { return repairMangledLatexObj(JSON.parse(fixed)); } catch (e) {}
     return null;
+  }
+
+  // 递归修复对象中所有字符串值里被 JSON 转义吞掉的 LaTeX 命令
+  function repairMangledLatexObj(obj) {
+    if (!obj) return obj;
+    if (typeof obj === 'string') return repairMangled(obj);
+    if (typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) obj[i] = repairMangledLatexObj(obj[i]); return obj; }
+    var keys = Object.keys(obj);
+    for (var k = 0; k < keys.length; k++) obj[keys[k]] = repairMangledLatexObj(obj[keys[k]]);
+    return obj;
+  }
+
+  // 修复单个字符串：JSON 把 \f→换页 \r→回车 \b→退格 \t→TAB \n→换行 吞掉了 LaTeX 命令首字母
+  function repairMangled(s) {
+    if (typeof s !== 'string') return s;
+    return s
+      .replace(/\x0Cfrac/g, '\\frac').replace(/\x0Cfrom/g, '\\from')
+      .replace(/\x0DRightarrow/g, '\\Rightarrow').replace(/\x0Drightarrow/g, '\\rightarrow')
+      .replace(/\x0Dright/g, '\\right').replace(/\x0Dleft/g, '\\left')
+      .replace(/\x0Drceil/g, '\\rceil').replace(/\x0Drfloor/g, '\\rfloor')
+      .replace(/\x0Drangle/g, '\\rangle').replace(/\x0Drbrace/g, '\\rbrace')
+      .replace(/\x0Dmathrm/g, '\\mathrm').replace(/\x0Drm/g, '\\rm')
+      .replace(/\x08begin/g, '\\begin').replace(/\x08bigg/g, '\\bigg').replace(/\x08Bigg/g, '\\Bigg')
+      .replace(/\x08bigl/g, '\\bigl').replace(/\x08Bigl/g, '\\Bigl')
+      .replace(/\x08bigr/g, '\\bigr').replace(/\x08Bigr/g, '\\Bigr')
+      .replace(/\x08biggl/g, '\\biggl').replace(/\x08Biggl/g, '\\Biggl')
+      .replace(/\x08biggr/g, '\\biggr').replace(/\x08Biggr/g, '\\Biggr')
+      .replace(/\x08big/g, '\\big').replace(/\x08Big/g, '\\Big')
+      .replace(/\x09ext/g, '\\text').replace(/\x09extrm/g, '\\textrm')
+      .replace(/\x09extbf/g, '\\textbf').replace(/\x09an/g, '\\tan')
+      .replace(/\x09imes/g, '\\times').replace(/\x09o/g, '\\to')
+      .replace(/\x0Aeq/g, '\\neq').replace(/\x0Aeg/g, '\\neg');
   }
 
   // ---------- AI 解析（提取题目 + 解题关键 + 易错原因） ----------
@@ -7996,8 +8661,9 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '根据用户拍下的题目图片，完成两项任务，输出严格 JSON（不要多余文字、不要 markdown 代码块）：'
       + '{"extractedQuestion":"从图片中识别出的完整题目文字（保留所有数学符号和公式，用 LaTeX 表示如 \\frac{a}{b}、\\sqrt{x}、x^{2}、\\int 等）",'
       + '"keySteps":"解题关键步骤（分步，落到具体公式/方法，数学表达式用 LaTeX）",'
-      + '"errorCause":"本题最易踩的坑/典型错误原因（符号/概念/计算等）"}'
-      + '要求：extractedQuestion 必须准确还原题目原貌；keySteps 要具体到每步推导；errorCause 指出真正易错点。';
+      + '"errorCause":"本题最易踩的坑/典型错误原因（符号/概念/计算等）",'
+      + '"painPoint":"用不超过10个汉字概括本题最易卡住的核心知识点/方法（如\\"分部积分\\"、\\"洛必达\\"、\\"中值定理\\"），不要标点、不要空格、不要解释"}'
+      + '要求：extractedQuestion 必须准确还原题目原貌；keySteps 要具体到每步推导；errorCause 指出真正易错点；painPoint 必须精炼、≤10字、能直接作为疑难点标签。';
 
     var userPrompt = '请分析这张题目图片。'
       + (photo.note ? '\n考生备注：' + photo.note : '')
@@ -8022,19 +8688,25 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       var analysis = extractJSON(fullText);
       if (!analysis) {
         if (out) out.innerHTML += '<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText);
-        analysis = { keySteps: fullText, errorCause: '', extractedQuestion: '' };
+        analysis = { keySteps: fullText, errorCause: '', extractedQuestion: '', painPoint: '' };
       }
       // 写回数据（含提取的题目）
+      var wasEmpty = !photo.painPoint; // 解析前是否已标记过疑难点
+      var autoPain = (analysis.painPoint || '').trim().slice(0, 10);
       Store.update(function (st) {
         var photos = st.mistakePhotos || [];
         var target = photos.find(function (p) { return p.id === id; });
         if (target) {
           target.aiAnalysis = { keySteps: analysis.keySteps || '', errorCause: analysis.errorCause || '' };
           target.extractedQuestion = analysis.extractedQuestion || target.extractedQuestion || '';
+          // 仅当此前未标记疑难点时，由 AI 一次性自动建议（不覆盖用户后续手动修改）
+          if (wasEmpty && autoPain) target.painPoint = autoPain;
           target.analyzedAt = new Date().toISOString();
         }
       });
-      Toast.success('✓ AI 解析完成');
+      // 提示文案：首次解析且 AI 给出了疑难点时，告知已自动填充
+      var painMsg = (wasEmpty && autoPain) ? '（已自动建议疑难点：' + autoPain + '）' : '';
+      Toast.success('✓ AI 解析完成' + painMsg);
       setTimeout(function () { Modal.close(); App.refresh(); }, 600);
     }).catch(function (err) {
       if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
@@ -8126,6 +8798,144 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
           close(); Toast.success('已更新'); App.refresh();
         }}
       ]
+    });
+  }
+
+  // ---------- 导出功能 ----------
+  function exportData(format) {
+    var s = Store.get();
+    var photos = (s.mistakePhotos || []).filter(function (p) { return filter === 'all' || p.subject === filter; })
+      .sort(function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+
+    if (!photos.length) { Toast.warn('当前筛选下无数据可导出'); return; }
+
+    if (format === 'json') {
+      // 导出完整 JSON（含 base64 图片），可直接导入恢复
+      var data = JSON.stringify(photos, null, 2);
+      downloadFile(data, '拍题错题本_' + formatDate(new Date()) + '.json', 'application/json');
+    } else {
+      // 导出 Markdown（文字友好，图片用占位符）
+      var md = '# 拍题错题本导出\n';
+      md += '> 导出时间：' + new Date().toLocaleString() + '\n';
+      md += '> 共 ' + photos.length + ' 条记录\n\n';
+
+      photos.forEach(function (p, idx) {
+        var subj = DB.SUBJECTS[p.subject] || { short: '?', name: '?' };
+        md += '---\n\n';
+        md += '## 第 ' + (idx + 1) + ' 题 [' + subj.name + ']\n\n';
+        md += '- **日期**：' + (p.createdAt || '').slice(0, 10) + '\n';
+        md += '- **科目**：' + subj.name + '\n';
+        if (p.note) md += '- **备注**：' + p.note + '\n';
+        if (p.extractedQuestion) {
+          md += '- **题目**：' + p.extractedQuestion + '\n';
+        }
+        if (p.imageBase64) {
+          md += '- **图片**：[查看原图](data:' + p.imageBase64.slice(0, 30) + '...)\n';
+        }
+        if (p.aiAnalysis) {
+          md += '\n### 解析\n\n';
+          if (p.aiAnalysis.keySteps) md += '**解题关键**：\n' + p.aiAnalysis.keySteps + '\n\n';
+          if (p.aiAnalysis.errorCause) md += '**易错原因**：\n' + p.aiAnalysis.errorCause + '\n\n';
+        }
+        if (p.similarProblem && p.similarProblem.question) {
+          md += '### 举一反三\n\n';
+          md += '**题目**：' + p.similarProblem.question + '\n\n';
+          if (p.similarProblem.solution) md += '**解答**：\n' + p.similarProblem.solution + '\n\n';
+          if (p.similarProblem.trap) md += '**易错点**：' + p.similarProblem.trap + '\n\n';
+        }
+      });
+
+      downloadFile(md, '拍题错题本_' + formatDate(new Date()) + '.md', 'text/markdown;charset=utf-8');
+    }
+    Toast.success('✓ 已导出 ' + photos.length + ' 条记录（' + (format === 'json' ? 'JSON' : 'Markdown') + '）');
+  }
+
+  function downloadFile(content, filename, mimeType) {
+    var blob = new Blob([content], { type: mimeType });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  }
+
+  function formatDate(d) {
+    return d.getFullYear()
+      + String(d.getMonth() + 1).padStart(2, '0')
+      + String(d.getDate()).padStart(2, '0')
+      + '_' + String(d.getHours()).padStart(2, '0')
+      + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  // ---------- 弱点画像分析：汇聚疑难点，省 token ----------
+  function analyzeWeakness(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+    var s = Store.get();
+    var photos = s.mistakePhotos || [];
+    // 优先取疑难点标签（10字内），最多 40 条
+    var painPoints = photos.filter(function (p) { return p.painPoint && p.painPoint.trim(); })
+      .map(function (p) { return p.painPoint.trim(); });
+    // 备份：疑难点不足时，取最近题目的题干文字（限 12 条、每条截断 60 字）
+    var fallbackQs = photos.filter(function (p) { return (p.extractedQuestion || p.note || '').trim(); })
+      .slice(-12).map(function (p) { return (p.extractedQuestion || p.note).trim().slice(0, 60); });
+
+    if (!painPoints.length && !fallbackQs.length) {
+      Toast.warn('暂无错题数据，请先拍题并记录'); return;
+    }
+
+    Modal.open({
+      title: '🧠 分析薄弱点中…',
+      wide: true, dismissable: false,
+      html: '<div class="muted-sm">正在依据你的疑难点标签生成薄弱点画像（主要用疑难点，省 token、更精准）…</div>'
+        + '<pre class="report" id="pm-weak-out" style="white-space:pre-wrap;max-height:320px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">加载中…</pre>',
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+    var out = document.getElementById('pm-weak-out');
+
+    var majorName = '';
+    try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
+
+    // 组装最省 token 的输入：以疑难点标签为主
+    var ctx;
+    if (painPoints.length >= 3) {
+      // 仅发疑难点标签（高频聚类展示）
+      var freq = {};
+      painPoints.forEach(function (t) { freq[t] = (freq[t] || 0) + 1; });
+      var freqList = Object.keys(freq).map(function (k) { return freq[k] > 1 ? (k + '（×' + freq[k] + '）') : k; });
+      ctx = '该考生近期拍题时标记的疑难点标签（共 ' + painPoints.length + ' 条）：\n- ' + freqList.join('\n- ');
+    } else {
+      // 疑难点太少，退化为「标签 + 部分题干」
+      ctx = '疑难点标签：' + (painPoints.length ? painPoints.join('、') : '（未标记）') + '\n';
+      if (fallbackQs.length) ctx += '部分错题题干：\n- ' + fallbackQs.join('\n- ');
+    }
+
+    var systemPrompt = '你是考研学情分析师。根据考生近期错题的「疑难点标签」（必要时结合题干），'
+      + '推断其知识薄弱模块与典型错误模式，输出严格 JSON（不要 markdown、不要多余文字）：'
+      + '{"weakAreas":["最突出的3-5个薄弱点关键词，如\'分部积分\'、\'含参变限积分\'"],'
+      + '"summary":"对薄弱点的整体描述（2-4句，点出用户核心痛点）",'
+      + '"advice":"针对性复习建议（2-4句，具体到该补什么、怎么练）"}'
+      + '要求：weakAreas 必须是可操作的考点名；summary 要直击痛点；advice 具体可执行。专业课背景：「' + majorName + '」。';
+
+    var userPrompt = ctx + '\n\n请基于以上信息生成该考生的薄弱点画像。';
+
+    AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
+      if (out) { out.textContent = text || (reasoning ? '🤔 ' + reasoning : '加载中…'); out.scrollTop = out.scrollHeight; }
+    }).then(function (fullText) {
+      var res = extractJSON(fullText);
+      if (!res) { if (out) out.textContent = fullText; res = { weakAreas: [], summary: fullText, advice: '' }; }
+      Store.update(function (st) {
+        st.weaknessProfile = {
+          generatedAt: new Date().toISOString(),
+          basedOn: painPoints,
+          weakAreas: res.weakAreas || [],
+          summary: res.summary || '',
+          advice: res.advice || ''
+        };
+      });
+      Toast.success('✓ 薄弱点画像已生成');
+      setTimeout(function () { Modal.close(); render(el); }, 500);
+    }).catch(function (err) {
+      if (out) out.textContent = '❌ 分析失败：' + (err && err.message ? err.message : err);
     });
   }
 
