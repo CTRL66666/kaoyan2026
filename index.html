@@ -562,6 +562,28 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 .img-prev img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
 #judge-stream { min-height: 120px; }
 
+/* ============================================================
+ * 拍题错题本 (photomistake)
+ * ============================================================ */
+.pm-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 14px; margin-bottom: 10px; }
+.pm-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.pm-question { font-size: 15px; line-height: 1.6; margin-bottom: 8px; padding: 8px 10px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid #3b82f6; word-break: break-word; }
+.pm-note { font-size: 13px; color: #666; margin-bottom: 8px; }
+.pm-img-row { display: flex; align-items: center; margin-bottom: 8px; }
+.pm-thumb:hover { opacity: 0.8; transform: scale(1.02); transition: all 0.15s; }
+.pm-viewimg-btn { font-size: 12px !important; padding: 4px 10px !important; }
+.pm-ai { margin: 8px 0; padding: 10px; background: #f0fdf4; border-radius: 6px; border: 1px solid #bbf7d0; }
+.pm-ai-section { margin-bottom: 6px; }
+.pm-ai-section:last-child { margin-bottom: 0; }
+.pm-ai-body { font-size: 13.5px; line-height: 1.7; color: #333; margin-top: 4px; word-break: break-word; }
+.pm-similar { margin: 8px 0; padding: 10px; background: #fefce8; border-radius: 6px; border: 1px solid #fde047; }
+.pm-similar-q { font-size: 14px; line-height: 1.7; margin-top: 4px; padding: 6px 8px; background: #fff; border-radius: 4px; word-break: break-word; }
+.pm-similar-a { font-size: 13px; line-height: 1.7; margin-top: 6px; padding: 6px 8px; background: #fff; border-radius: 4px; color: #555; word-break: break-word; }
+.pm-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.pm-actions .pm-ai-btn { font-size: 12px !important; padding: 5px 10px !important; }
+.pm-actions .pm-del-btn { font-size: 12px !important; padding: 5px 10px !important; color: #dc2626 !important; border-color: #fecaca !important; }
+.pm-list { min-height: 40px; }
+
 </style>
 </head>
 <body>
@@ -3223,11 +3245,15 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   // 流式调用（SSE）：onChunk(累积正式内容, 累积思考内容) 逐字回调，最后 resolve 完整正式内容。
   // 兼容推理模型：思考流可能位于 delta.reasoning_content（DeepSeek-R1等）或 delta.reasoning。
-  function chatStream(systemPrompt, userText, onChunk, _noKwArgs) {
+  // 支持 imageDataUrl（base64）传入图片，构建多模态 user message。
+  function chatStream(systemPrompt, userText, onChunk, imageDataUrl, _noKwArgs) {
     _noKwArgs = !!_noKwArgs;
     const a = Store.get().ai;
+    const userMsg = imageDataUrl
+      ? { role: 'user', content: [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: imageDataUrl } }] }
+      : { role: 'user', content: userText };
     const body = { model: a.model, stream: true,
-      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userText }]
+      messages: [{ role: 'system', content: systemPrompt }, userMsg]
     };
     // 思考模式关闭时，通知 API 不启用 Thinking 扩展（提速）
     if (a.thinkingMode === false && !_noKwArgs) {
@@ -3242,7 +3268,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         // 如果 400 且发送了 chat_template_kwargs，尝试不带该参数重试一次
         if (r.status === 400 && a.thinkingMode === false && !_noKwArgs && body.chat_template_kwargs) {
           console.warn('[AI] chatStream chat_template_kwargs 导致 400，自动去除重试');
-          return chatStream(systemPrompt, userText, onChunk, true);
+          return chatStream(systemPrompt, userText, onChunk, imageDataUrl, true);
         }
         return httpError(r, '请求被拒绝');
       }
@@ -7684,12 +7710,12 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 /* ===== js/modules/photomistake.js ===== */
 /* ============================================================
  * photomistake.js — 拍题错题本（独立于 AI 测验题库）
- * 功能：拍照/选图 → 本地保存(自动云同步) → AI 点评解析（关键步骤/错误原因/举一反三）
+ * 功能：拍照/选图 → 本地保存(自动云同步) → AI 提取题目 + 解析（TeX渲染）+ 举一反三出题
  * 数据：Store.mistakePhotos[]（随主数据云同步，不单独管理）
  * ============================================================ */
 (function () {
   'use strict';
-  let filter = 'all';
+  var filter = 'all';
 
   // 图片压缩：canvas 缩放到最大边 ≤ MAX_PX，JPEG 0.7 质量，控制 localStorage 占用
   var MAX_PX = 1200;
@@ -7707,13 +7733,18 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         c.width = w; c.height = h;
         var ctx = c.getContext('2d');
         ctx.drawImage(img, 0, 0, w, h);
-        // JPEG 压缩，质量 0.7
         var dataUrl = c.toDataURL('image/jpeg', 0.7);
         callback(dataUrl);
       };
       img.src = reader.result;
     };
     reader.readAsDataURL(file);
+  }
+
+  // 对文本做 TeX 行内公式渲染（利用 Tex 模块）
+  function renderMath(text) {
+    if (!text || typeof Tex === 'undefined') return U.esc(text);
+    try { return Tex.renderInline(text); } catch (e) { return U.esc(text); }
   }
 
   // ---------- 渲染 ----------
@@ -7741,34 +7772,75 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       cardsHtml = '<div class="empty">暂无拍题记录。拍下你不会的题，让 AI 帮你拆解。</div>';
     } else {
       list.forEach(function (p) {
-        var subj = DB.SUBJECTS[p.subject] || { short: '?', color: '#999' };
+        var subj = DB.SUBJECTS[p.subject] || { short: '?', color: '#999', name: '?' };
         var hasAI = p.aiAnalysis && (p.aiAnalysis.keySteps || p.aiAnalysis.errorCause);
-        cardsHtml += '<div class="pm-card" data-id="' + p.id + '">'
-          + '<div class="pm-img-wrap"><img class="pm-img" src="' + p.imageBase64 + '" alt="拍题" loading="lazy"></div>'
-          + '<div class="pm-body">'
-          + '<div class="pm-meta">'
+        var hasSimilar = !!(p.similarProblem && p.similarProblem.question);
+
+        // 卡片主体
+        cardsHtml += '<div class="pm-card" data-id="' + p.id + '">';
+
+        // 顶栏：科目 + 日期 + 状态
+        cardsHtml += '<div class="pm-meta">'
           + '<span class="task-tag" style="background:' + subj.color + '">' + subj.short + '</span>'
           + '<span class="muted-sm">' + (p.createdAt || '').slice(0, 10) + '</span>'
           + (hasAI ? '<span class="tag" style="background:#237804;color:#fff;margin-left:4px">✓ 已解析</span>' : '')
-          + '</div>'
-          + (p.note ? '<div class="pm-note">' + U.esc(p.note) + '</div>' : '')
-          + (hasAI ? '<div class="pm-ai">'
-            + (p.aiAnalysis.keySteps ? '<div class="pm-ai-section"><b>🔑 解题关键：</b><div>' + U.esc(p.aiAnalysis.keySteps) + '</div></div>' : '')
-            + (p.aiAnalysis.errorCause ? '<div class="pm-ai-section"><b>⚠️ 易错原因：</b><div>' + U.esc(p.aiAnalysis.errorCause) + '</div></div>' : '')
-            + (p.aiAnalysis.similarProblems ? '<div class="pm-ai-section"><b>🔄 举一反三：</b><div>' + U.esc(p.aiAnalysis.similarProblems) + '</div></div>' : '')
-            + '</div>' : '')
-          + '<div class="pm-actions">'
-          + (!hasAI && typeof AI !== 'undefined' && AI.configured() ? '<button class="btn btn-primary pm-ai-btn" data-act="analyze">🤖 AI 解析</button>' : '')
-          + (hasAI && typeof AI !== 'undefined' && AI.configured() ? '<button class="btn btn-ghost pm-ai-btn" data-act="reanalyze">🤖 重新解析</button>' : '')
-          + '<button class="btn btn-ghost pm-ai-btn" data-act="editnote">✏️ 编辑备注</button>'
+          + '</div>';
+
+        // 题目文字（AI 提取或用户备注）
+        if (p.extractedQuestion) {
+          cardsHtml += '<div class="pm-question"><b>📝 题目：</b>' + renderMath(p.extractedQuestion) + '</div>';
+        } else if (p.note) {
+          cardsHtml += '<div class="pm-note"><b>📝 备注：</b>' + U.esc(p.note) + '</div>';
+        }
+
+        // 图片：缩略图 + 查看原图按钮
+        if (p.imageBase64) {
+          cardsHtml += '<div class="pm-img-row">'
+            + '<img class="pm-thumb" src="' + p.imageBase64 + '" alt="题目图片" loading="lazy" style="max-width:120px;max-height:80px;border-radius:6px;cursor:pointer;border:1px solid #e5e7eb;object-fit:cover">'
+            + '<button class="btn btn-ghost pm-viewimg-btn" data-act="viewimg" style="margin-left:8px;font-size:12px">🔍 查看原图</button>'
+            + '</div>';
+        }
+
+        // AI 解析区域（TeX 渲染）
+        if (hasAI) {
+          cardsHtml += '<div class="pm-ai">';
+          if (p.aiAnalysis.keySteps) {
+            cardsHtml += '<div class="pm-ai-section"><b>🔑 解题关键：</b><div class="pm-ai-body">' + renderMath(p.aiAnalysis.keySteps) + '</div></div>';
+          }
+          if (p.aiAnalysis.errorCause) {
+            cardsHtml += '<div class="pm-ai-section"><b>⚠️ 易错原因：</b><div class="pm-ai-body">' + renderMath(p.aiAnalysis.errorCause) + '</div></div>';
+          }
+          cardsHtml += '</div>';
+        }
+
+        // 举一反三结果
+        if (hasSimilar) {
+          cardsHtml += '<div class="pm-similar">'
+            + '<div class="pm-ai-section"><b>🔄 举一反三：</b></div>'
+            + '<div class="pm-similar-q"><b>题目：</b>' + renderMath(p.similarProblem.question) + '</div>'
+            + (p.similarProblem.solution ? '<div class="pm-similar-a"><b>解答：</b>' + renderMath(p.similarProblem.solution) + '</div>' : '')
+            + '</div>';
+        }
+
+        // 操作按钮行
+        cardsHtml += '<div class="pm-actions">';
+        if (!hasAI && typeof AI !== 'undefined' && AI.configured()) {
+          cardsHtml += '<button class="btn btn-primary pm-ai-btn" data-act="analyze">🤖 AI 解析</button>';
+        } else if (typeof AI !== 'undefined' && AI.configured()) {
+          cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="reanalyze">🤖 重新解析</button>';
+        }
+        if (typeof AI !== 'undefined' && AI.configured()) {
+          cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="similar">🔄 举一反三</button>';
+        }
+        cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="editnote">✏️ 编辑备注</button>'
           + '<button class="btn btn-ghost pm-del-btn" data-act="del">删除</button>'
-          + '</div></div></div>';
+          + '</div></div>';
       });
     }
 
     el.innerHTML =
       '<div class="card"><div class="card-title">📸 拍题错题本</div>'
-      + '<div class="muted-sm">拍下不会写的题，本地保存并自动同步云端。配好 API 后可让 AI 拆解解题关键、分析易错原因、给出类似题举一反三。</div>'
+      + '<div class="muted-sm">拍下不会写的题，本地保存并自动同步云端。配好 API 后可让 AI 提取题目、拆解解题关键、分析易错原因、生成同类练习题。</div>'
       + '</div>'
 
       + '<div class="card"><div class="card-title">拍照 / 选图上传</div>'
@@ -7808,7 +7880,6 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       var f = fileInput.files[0];
       if (!f) return;
       if (!f.type.startsWith('image/')) { Toast.warn('请选择图片文件'); return; }
-      // 大小预警（>5MB 提示但允许）
       if (f.size > 5 * 1024 * 1024) Toast.warn('图片较大（' + Math.round(f.size / 1024) + 'KB），将自动压缩后保存');
       compressImage(f, function (dataUrl) {
         preview.style.display = '';
@@ -7822,9 +7893,17 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     el.querySelectorAll('.pm-card').forEach(function (card) {
       var id = card.getAttribute('data-id');
 
+      // 查看原图
+      var viewBtn = card.querySelector('[data-act="viewimg"]');
+      if (viewBtn) viewBtn.onclick = function () { viewImage(id); };
+
       // AI 解析
       var aiBtn = card.querySelector('[data-act="analyze"], [data-act="reanalyze"]');
       if (aiBtn) aiBtn.onclick = function () { analyzePhoto(id, el); };
+
+      // 举一反三
+      var simBtn = card.querySelector('[data-act="similar"]');
+      if (simBtn) simBtn.onclick = function () { generateSimilar(id, el); };
 
       // 编辑备注
       var editBtn = card.querySelector('[data-act="editnote"]');
@@ -7841,6 +7920,19 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     });
   }
 
+  // ---------- 查看原图（弹窗大图） ----------
+  function viewImage(id) {
+    var s = Store.get();
+    var photo = (s.mistakePhotos || []).find(function (p) { return p.id === id; });
+    if (!photo || !photo.imageBase64) return;
+    Modal.open({
+      title: '📷 原始题目图片',
+      wide: true,
+      html: '<div style="text-align:center;padding:10px 0"><img src="' + photo.imageBase64 + '" style="max-width:100%;max-height:70vh;border-radius:8px"></div>',
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+  }
+
   // ---------- 保存拍题 ----------
   function savePhoto(el, dataUrl) {
     var subj = el.querySelector('#pm-subj').value;
@@ -7852,12 +7944,13 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         subject: subj,
         imageBase64: dataUrl,
         note: note,
+        extractedQuestion: '',
         aiAnalysis: null,
+        similarProblem: null,
         createdAt: new Date().toISOString(),
         analyzedAt: null
       });
     });
-    // 清空输入
     el.querySelector('#pm-file').value = '';
     el.querySelector('#pm-note').value = '';
     el.querySelector('#pm-preview').style.display = '';
@@ -7866,7 +7959,31 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     App.refresh();
   }
 
-  // ---------- AI 解析 ----------
+  // ---------- 从 AI 返回文本中提取 JSON ----------
+  function extractJSON(raw) {
+    var s = (raw || '').trim();
+    // 先试 markdown 代码块
+    var m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (m) { s = m[1].trim(); try { return JSON.parse(s); } catch (e) {} }
+    // 再找最外层 { ... }
+    var start = s.indexOf('{');
+    if (start === -1) return null;
+    var depth = 0, inStr = false, escape = false, end = -1;
+    for (var i = start; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (escape) { escape = false; continue; }
+      if (c === '\\') { escape = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    if (end <= start) return null;
+    try { return JSON.parse(s.slice(start, end)); } catch (e) {}
+    return null;
+  }
+
+  // ---------- AI 解析（提取题目 + 解题关键 + 易错原因） ----------
   function analyzePhoto(id, el) {
     var s = Store.get();
     var photo = (s.mistakePhotos || []).find(function (p) { return p.id === id; });
@@ -7876,45 +7993,114 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
 
     var systemPrompt = '你是考研阅卷老师兼解题教练，极其严格又善于启发。考生专业课为「' + majorName + '」。'
-      + '根据用户拍下的题目图片，输出结构化 JSON 分析。必须只输出 JSON，不要多余文字、不要 markdown 代码块。格式：'
-      + '{"keySteps":"解题关键步骤（分步，落到具体公式/方法）","errorCause":"本题最易踩的坑/典型错误原因（符号/概念/计算等）","similarProblems":"举一反三：给出1-2道同类型/可迁移的练习方向（简述考点和思路）"}'
-      + '要求：keySteps 必须具体到步骤；errorCause 要指出真正容易出错的地方；similarProblems 要有可操作性。';
+      + '根据用户拍下的题目图片，完成两项任务，输出严格 JSON（不要多余文字、不要 markdown 代码块）：'
+      + '{"extractedQuestion":"从图片中识别出的完整题目文字（保留所有数学符号和公式，用 LaTeX 表示如 \\frac{a}{b}、\\sqrt{x}、x^{2}、\\int 等）",'
+      + '"keySteps":"解题关键步骤（分步，落到具体公式/方法，数学表达式用 LaTeX）",'
+      + '"errorCause":"本题最易踩的坑/典型错误原因（符号/概念/计算等）"}'
+      + '要求：extractedQuestion 必须准确还原题目原貌；keySteps 要具体到每步推导；errorCause 指出真正易错点。';
 
     var userPrompt = '请分析这张题目图片。'
       + (photo.note ? '\n考生备注：' + photo.note : '')
       + '\n科目：' + (DB.SUBJECTS[photo.subject] ? DB.SUBJECTS[photo.subject].name : photo.subject);
 
-    // 弹出流式进度框
     Modal.open({
       title: '🤖 AI 解析中…',
       wide: true, dismissable: false,
-      html: '<div class="muted-sm">正在调用 AI 分析这道题的解题关键、易错原因和举一反三…</div>'
-        + '<pre class="report" id="pm-ai-out" style="white-space:pre-wrap;max-height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa">加载中…</pre>',
+      html: '<div class="muted-sm">正在调用 AI 识别题目并分析解题关键…</div>'
+        + '<pre class="report" id="pm-ai-out" style="white-space:pre-wrap;max-height:350px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">加载中…</pre>',
       actions: [{ label: '关闭', kind: 'btn-ghost' }]
     });
 
     var out = document.getElementById('pm-ai-out');
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
       if (out) {
-        out.textContent = (reasoning ? '🤔 思考中…\n\n' : '') + (text || '');
+        out.innerHTML = (reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
+          + (text ? renderMath(text).replace(/\n/g, '<br>') : '');
         out.scrollTop = out.scrollHeight;
       }
-    }).then(function (fullText) {
-      // 提取 JSON
-      var m = fullText.match(/\{[\s\S]*\}/);
-      var analysis = null;
-      try { if (m) analysis = JSON.parse(m[0]); } catch (e) {}
+    }, photo.imageBase64).then(function (fullText) {
+      var analysis = extractJSON(fullText);
       if (!analysis) {
-        if (out) out.textContent += '\n\n⚠️ AI 返回格式异常，原始回复如下：\n' + fullText;
-        analysis = { keySteps: fullText, errorCause: '', similarProblems: '' };
+        if (out) out.innerHTML += '<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText);
+        analysis = { keySteps: fullText, errorCause: '', extractedQuestion: '' };
+      }
+      // 写回数据（含提取的题目）
+      Store.update(function (st) {
+        var photos = st.mistakePhotos || [];
+        var target = photos.find(function (p) { return p.id === id; });
+        if (target) {
+          target.aiAnalysis = { keySteps: analysis.keySteps || '', errorCause: analysis.errorCause || '' };
+          target.extractedQuestion = analysis.extractedQuestion || target.extractedQuestion || '';
+          target.analyzedAt = new Date().toISOString();
+        }
+      });
+      Toast.success('✓ AI 解析完成');
+      setTimeout(function () { Modal.close(); App.refresh(); }, 600);
+    }).catch(function (err) {
+      if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
+    });
+  }
+
+  // ---------- 举一反三：AI 出一道同类题 ----------
+  function generateSimilar(id, el) {
+    var s = Store.get();
+    var photo = (s.mistakePhotos || []).find(function (p) { return p.id === id; });
+    if (!photo) return;
+
+    var majorName = '';
+    try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
+
+    // 构建上下文：把原题 + 已有解析传给 AI
+    var context = '原题：' + (photo.extractedQuestion || photo.note || '(见图片)');
+    if (photo.aiAnalysis) {
+      context += '\n原题解析关键：' + (photo.aiAnalysis.keySteps || '');
+      context += '\n易错原因：' + (photo.aiAnalysis.errorCause || '');
+    }
+
+    var systemPrompt = '你是考研出题官，极其熟悉「' + majorName + '」的考点与命题规律。'
+      + '根据用户给出的原题及其解析，出一道**同类型、同考点、难度相当**的练习题。'
+      + '输出严格 JSON（不要多余文字、不要 markdown 代码块）：'
+      + '{"question":"新题目（完整题干，数学表达式用 LaTeX 如 \\frac{a}{b}、\\sqrt{x}、x^{2}、\\int、\\sum 等）",'
+      + '"solution":"详细解答步骤（分步，含关键公式推导，LaTeX 格式）",'
+      + '"trap":"本题最易踩的坑"}'
+      + '要求：question 必须是完整的可独立作答的题目；solution 要能自洽；不要与原题完全相同但考点一致。';
+
+    var userPrompt = context + '\n\n请根据以上原题，出一道同类练习题（举一反三）。';
+
+    Modal.open({
+      title: '🔄 AI 出题中…',
+      wide: true, dismissable: false,
+      html: '<div class="muted-sm">正在根据原题生成同类练习题…</div>'
+        + '<pre class="report" id="pm-sim-out" style="white-space:pre-wrap;max-height:400px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">加载中…</pre>',
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+
+    var out = document.getElementById('pm-sim-out');
+    AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
+      if (out) {
+        out.innerHTML = (reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
+          + (text ? renderMath(text).replace(/\n/g, '<br>') : '');
+        out.scrollTop = out.scrollHeight;
+      }
+    }, photo.imageBase64).then(function (fullText) {
+      var result = extractJSON(fullText);
+      if (!result) {
+        if (out) out.innerHTML += '<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText);
+        result = { question: fullText, solution: '', trap: '' };
       }
       // 写回数据
       Store.update(function (st) {
         var photos = st.mistakePhotos || [];
         var target = photos.find(function (p) { return p.id === id; });
-        if (target) { target.aiAnalysis = analysis; target.analyzedAt = new Date().toISOString(); }
+        if (target) {
+          target.similarProblem = {
+            question: result.question || '',
+            solution: result.solution || '',
+            trap: result.trap || ''
+          };
+        }
       });
-      Toast.success('✓ AI 解析完成');
+      Toast.success('✓ 举一反三题目已生成');
       setTimeout(function () { Modal.close(); App.refresh(); }, 600);
     }).catch(function (err) {
       if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
