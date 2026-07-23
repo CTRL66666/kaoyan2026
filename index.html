@@ -636,6 +636,110 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 .pm-weak-advice { font-size: 13px; line-height: 1.7; color: #444; background: #f0f9ff; border-left: 3px solid #1890ff; padding: 8px 10px; border-radius: 4px; margin-top: 6px; word-break: break-word; }
 .pm-list { min-height: 40px; }
 
+/* ============================================================
+ * 动效体系（灵活感升级）—— 保持黑白灰语言，只用运动赋予生命
+ * ============================================================ */
+/* 页面切换：淡入 + 上移 */
+@keyframes viewIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.view-enter { animation: viewIn 240ms cubic-bezier(.2,.7,.3,1) both; }
+/* 卡片错峰入场（每页前 8 个直接子元素） */
+@keyframes cardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.view-enter > * { animation: cardIn 280ms cubic-bezier(.2,.7,.3,1) both; }
+.view-enter > *:nth-child(2) { animation-delay: 40ms; }
+.view-enter > *:nth-child(3) { animation-delay: 70ms; }
+.view-enter > *:nth-child(4) { animation-delay: 100ms; }
+.view-enter > *:nth-child(5) { animation-delay: 130ms; }
+.view-enter > *:nth-child(6) { animation-delay: 155ms; }
+.view-enter > *:nth-child(7) { animation-delay: 180ms; }
+.view-enter > *:nth-child(n+8) { animation-delay: 200ms; }
+
+/* AI 骨架屏（等待流式内容时的呼吸占位） */
+@keyframes sklShimmer { 0% { opacity: .45; } 50% { opacity: 1; } 100% { opacity: .45; } }
+.skl-line { height: 13px; border-radius: 4px; background: var(--line); margin: 8px 0; animation: sklShimmer 1.3s ease-in-out infinite; }
+.skl-line.skl-w60 { width: 60%; }
+.skl-line.skl-w80 { width: 80%; }
+
+/* 流式输出光标 */
+@keyframes aiBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+.ai-cursor { display: inline-block; width: 8px; height: 15px; margin-left: 2px; vertical-align: -2px; background: var(--text-primary); animation: aiBlink 1s step-end infinite; }
+
+/* ---------- 每日作战简报卡 ---------- */
+.brief-card { border-left: 3px solid var(--text-primary); }
+.brief-meta { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+.brief-body { font-size: 14px; line-height: 1.85; margin-top: 6px; word-break: break-word; }
+.brief-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); }
+
+/* ---------- 全局 AI 教练 Copilot ---------- */
+#copilot-fab {
+  position: fixed; bottom: 76px; right: max(16px, calc(50% - 344px)); z-index: 90;
+  width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--text-primary); color: #fff; font-size: 24px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 150ms, opacity 150ms;
+}
+#copilot-fab:active { transform: scale(.92); }
+#copilot-fab.cp-hide { opacity: 0; pointer-events: none; transform: scale(.6); }
+body.focus-lock #copilot-fab { display: none; }
+body.cp-lock { overflow: hidden; }
+
+#copilot-panel {
+  position: fixed; left: 50%; bottom: 0; z-index: 150;
+  width: 100%; max-width: 720px; height: min(76vh, 660px);
+  transform: translate(-50%, 102%); transition: transform 260ms cubic-bezier(.2,.75,.25,1);
+  background: var(--surface); border: 1px solid var(--line); border-bottom: none;
+  border-radius: 14px 14px 0 0; display: flex; flex-direction: column; overflow: hidden;
+}
+#copilot-panel.cp-open { transform: translate(-50%, 0); }
+.cp-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.cp-title { font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+.cp-mem { font-size: 11px; color: var(--text-muted); border: 1px solid var(--line); border-radius: 99px; padding: 2px 8px; cursor: pointer; transition: all 200ms; }
+.cp-mem-flash { background: var(--ok); color: #fff; border-color: var(--ok); }
+.cp-close { border: none; background: none; font-size: 22px; color: var(--text-muted); cursor: pointer; padding: 0 4px; line-height: 1; }
+.cp-msgs { flex: 1; overflow-y: auto; padding: 14px 14px 6px; background: var(--surface-muted); }
+.cp-empty { text-align: center; color: var(--text-muted); font-size: 13px; line-height: 2; padding: 36px 20px; }
+.cp-row { display: flex; margin-bottom: 10px; animation: cardIn 200ms both; }
+.cp-user { justify-content: flex-end; }
+.cp-bubble { max-width: 86%; padding: 9px 12px; border-radius: 12px; font-size: 14px; line-height: 1.75; word-break: break-word; }
+.cp-user .cp-bubble { background: var(--text-primary); color: #fff; border-bottom-right-radius: 4px; }
+.cp-ai .cp-bubble { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.cp-thinking { color: var(--text-muted); font-size: 13px; }
+.cp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cp-act { border: 1px solid var(--text-primary); background: var(--surface); color: var(--text-primary); border-radius: var(--r-btn); padding: 5px 10px; font-size: 12px; cursor: pointer; transition: all 120ms; }
+.cp-act:active { transform: scale(.96); }
+.cp-act:disabled { border-color: var(--ok); color: var(--ok); cursor: default; }
+.cp-quick { display: flex; gap: 6px; padding: 8px 12px; overflow-x: auto; flex: 0 0 auto; background: var(--surface-muted); scrollbar-width: none; }
+.cp-quick::-webkit-scrollbar { display: none; }
+.cp-chip { flex: 0 0 auto; border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 5px 12px; font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 120ms; }
+.cp-chip:active { background: var(--text-primary); color: #fff; }
+.cp-input { display: flex; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); flex: 0 0 auto; }
+.cp-input textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 10px; font-size: 14px; font-family: inherit; line-height: 1.5; outline: none; }
+.cp-input textarea:focus { border-color: var(--text-primary); }
+.cp-input .btn { flex: 0 0 auto; align-self: flex-end; }
+
+/* ---------- AI 记忆管理卡（设置页） ---------- */
+.mem-profile { font-size: 13.5px; line-height: 1.8; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 10px 12px; margin: 8px 0; word-break: break-word; }
+.mem-fact { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); margin-bottom: 6px; font-size: 13px; }
+.mem-fact-text { flex: 1; line-height: 1.6; }
+.mem-kind { flex: 0 0 auto; font-size: 11px; color: var(--text-muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-top: 1px; }
+.mem-kind.weakness { color: var(--danger); border-color: var(--danger); }
+.mem-kind.habit { color: var(--warn); border-color: var(--warn); }
+.mem-kind.preference { color: var(--purple); border-color: var(--purple); }
+.mem-kind.goal { color: var(--ok); border-color: var(--ok); }
+.mem-ops { flex: 0 0 auto; display: flex; gap: 4px; }
+.mem-ops button { border: none; background: none; cursor: pointer; font-size: 13px; padding: 2px; opacity: .55; transition: opacity 120ms; }
+.mem-ops button:hover { opacity: 1; }
+.mem-fact.mem-pinned { border-color: var(--text-primary); }
+.mem-stat { display: flex; gap: 14px; font-size: 12px; color: var(--text-muted); margin: 6px 0; }
+.mem-hits { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
+
+/* 尊重系统减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .view-enter, .view-enter > *, .cp-row { animation: none !important; }
+  .skl-line { animation: none; opacity: .7; }
+  .ai-cursor { animation: none; }
+  #copilot-panel { transition: none; }
+}
+
 </style>
 </head>
 <body>
@@ -1254,7 +1358,16 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       weaknessProfile: null,      // 弱点画像 {generatedAt, basedOn:[painPoint...], summary, weakAreas:[...], advice} —— 由拍题疑难点汇聚分析得出
       dailyQuiz: null,            // 每日一题 {date:'YYYY-MM-DD', question, solution, trap, subject, generatedAt}
       dailyQuizHistory: [],       // 历史每日一题 [{date,question,solution,trap,subject,generatedAt}]（"再来一题"时归档）
-      ai: { endpoint: '', key: '', model: '', preset: '', stream: false, thinkingMode: undefined },
+      // ---- AI 记忆系统（越用越懂你的核心）----
+      aiMemory: {
+        profile: '',              // AI 维护的考生画像总结（每次反思时重写，注入所有 AI 提示词）
+        facts: [],                // 记忆事实 [{id,text,kind:'weakness'|'habit'|'preference'|'goal'|'context'|'pattern',hits,createdAt,updatedAt,pinned,source:'ai'|'user'|'system'}]
+        reflectCount: 0,          // 已反思次数（用于首次提示）
+        updatedAt: ''
+      },
+      dailyBrief: null,           // AI 每日作战简报 {date:'YYYY-MM-DD', content, generatedAt}（按天缓存，手动可重新生成）
+      copilotChats: {},           // 'YYYY-MM-DD' -> [{role:'user'|'assistant', content, ts}] Copilot 会话（保留最近7天，每天≤60条）
+      ai: { endpoint: '', key: '', model: '', preset: '', stream: false, thinkingMode: undefined, memAuto: true, briefAuto: true },
       deepReview: null,            // 深度复盘持久化 {week, snap, reasoning, output, status, running, generatedAt} —— 切页面/刷新后保留，避免阻塞式重生成
       majorData: {},               // AI生成的专业数据缓存 { profName: { modules, topics, conceptGraph, ... } }
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false,
@@ -3276,21 +3389,30 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     try { return (DB.getActiveMajor().name) || '专业课'; } catch (e) { return '专业课'; }
   }
 
-  // 系统教练提示词（专业课名称 + 教练画像均动态注入，画像来自 settings.coachProfile，可被 AI/用户改写）
+  // 记忆摘要：越用越懂你的关键 —— 所有提示词都可注入（静默容错）
+  function memoryDigest(budget) {
+    try { return window.AiMemory ? AiMemory.digest(budget) : ''; } catch (e) { return ''; }
+  }
+
+  // 系统教练提示词（专业课名称 + 教练画像 + 长期记忆均动态注入，画像来自 settings.coachProfile，可被 AI/用户改写）
   function systemPrompt() {
     var major = activeMajorName();
     var cp = (function () { try { return DB.coachProfile(); } catch (e) { return null; } })() || { mathWeak: '数学计算易错', distractions: '分心/畏难', redlineNote: '“二战”是违禁词' };
+    var memBlock = memoryDigest();
     return '你是一名严厉的2026考研教练，服务对象是一名考研考生，专业课为「' + major + '」。' +
       '其目标：公共课高分、专业课高分，一志愿上岸拒绝二战。' +
       '其致命弱点：' + cp.mathWeak + '、偶有' + cp.distractions + '冲动。' +
+      (memBlock ? '\n' + memBlock + '\n' : '') +
       '回复要求：1) 直接、犀利、不灌鸡汤；2) 优先指出风险与防呆措施；3) 建议必须落到具体章节/题量/时间；' +
       '4) 发现' + cp.redlineNote + '，立即引用红线禁令制止；5) 用简体中文，200-400字。';
   }
 
-  // 出题提示词（数学 + 当前专业课，动态）
+  // 出题提示词（数学 + 当前专业课，动态；注入记忆 → 题目直击弱点）
   function quizPrompt() {
     var major = activeMajorName();
+    var memBlock = memoryDigest(400);
     return '你是考研数学 / ' + major + ' 出题官。根据用户给出的考点、层级、薄弱错误类型，出1道题。' +
+      (memBlock ? '参考考生记忆，优先针对其长期弱点命题：\n' + memBlock + '\n' : '') +
       '必须只输出 JSON，不要任何多余文字、不要markdown代码块。格式：' +
       '{"stem":"题干（公式用纯文本，如 ∫(0到1) x dx）","type":"choice|solve",' +
       '"options":["A. ...","B. ...","C. ...","D. ..."](仅choice需要),"answer":"标准答案",' +
@@ -3564,6 +3686,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   const AI = {
     configured, applyPreset, weeklySummary, chat, chatJSON, chatStream,
+    memoryDigest,
     useStream() { return !!Store.get().ai.stream; },
     useThinking() { return Store.get().ai.thinkingMode === true; },
     // 通用稳健 JSON 提取器（供各模块复用）
@@ -3606,6 +3729,283 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   };
 
   window.AI = AI;
+})();
+
+
+/* ===== js/core/aimemory.js ===== */
+/* ============================================================
+ * aimemory.js — AI 记忆系统（越用越懂你的核心）
+ * 三层记忆：
+ *  1) profile：AI 维护的考生画像（每次反思重写，一段话）
+ *  2) facts：长期记忆事实库（AI反思沉淀 + 用户手写 + 本地信号），带命中次数/置顶
+ *  3) 本地信号：从错题/时长/情绪数据零成本提取的模式（source:'system'，自动刷新）
+ * 所有 AI 提示词通过 AiMemory.digest() 注入记忆 → 每次对话都基于"完整的你"。
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  var MAX_FACTS = 30;          // 事实库上限（超出按分值淘汰：置顶 > 命中 > 新近）
+  var DIGEST_BUDGET = 700;     // 注入提示词的字符预算（控制 token 成本）
+
+  function mem() {
+    var s = Store.get();
+    if (!s.aiMemory) s.aiMemory = { profile: '', facts: [], reflectCount: 0, updatedAt: '' };
+    if (!s.aiMemory.facts) s.aiMemory.facts = [];
+    return s.aiMemory;
+  }
+
+  function normText(t) { return (t || '').replace(/\s+/g, '').slice(0, 60); }
+
+  // 事实分值：置顶优先，其次命中次数，再其次新近度
+  function score(f) {
+    return (f.pinned ? 10000 : 0) + (f.hits || 1) * 10 + Math.min(9, Math.floor((Date.now() - new Date(f.updatedAt || f.createdAt).getTime()) / U.DAY_MS) * -1);
+  }
+
+  function sortFacts(arr) {
+    return arr.slice().sort(function (a, b) { return score(b) - score(a); });
+  }
+
+  function evictIfNeeded(m) {
+    if (m.facts.length <= MAX_FACTS) return;
+    var sorted = sortFacts(m.facts);
+    var keep = sorted.slice(0, MAX_FACTS);
+    var keepIds = {};
+    keep.forEach(function (f) { keepIds[f.id] = true; });
+    m.facts = m.facts.filter(function (f) { return keepIds[f.id]; });
+  }
+
+  // ---------- 事实库 CRUD ----------
+  function addFact(text, kind, source, sigKey) {
+    text = (text || '').trim();
+    if (!text || text.length < 4) return null;
+    if (text.length > 80) text = text.slice(0, 80);
+    var now = new Date().toISOString();
+    var result = null;
+    Store.update(function (s) {
+      var m = mem();
+      var nt = normText(text);
+      // 去重：同文本 → 命中+1；同 sigKey（本地信号）→ 覆盖更新
+      for (var i = 0; i < m.facts.length; i++) {
+        var f = m.facts[i];
+        if ((sigKey && f.sigKey === sigKey) || normText(f.text) === nt) {
+          f.text = text;
+          f.hits = (f.hits || 1) + 1;
+          f.updatedAt = now;
+          if (kind) f.kind = kind;
+          result = f;
+          m.updatedAt = now;
+          return;
+        }
+      }
+      var nf = { id: U.uid(), text: text, kind: kind || 'context', hits: 1, createdAt: now, updatedAt: now, pinned: false, source: source || 'ai' };
+      if (sigKey) nf.sigKey = sigKey;
+      m.facts.push(nf);
+      evictIfNeeded(m);
+      m.updatedAt = now;
+      result = nf;
+    });
+    return result;
+  }
+
+  function reinforceByText(text) {
+    var nt = normText(text);
+    if (!nt) return false;
+    var found = false;
+    Store.update(function (s) {
+      var m = mem();
+      m.facts.forEach(function (f) {
+        if (normText(f.text) === nt || f.text.indexOf(nt.slice(0, 12)) >= 0) {
+          f.hits = (f.hits || 1) + 1;
+          f.updatedAt = new Date().toISOString();
+          found = true;
+        }
+      });
+      if (found) m.updatedAt = new Date().toISOString();
+    });
+    return found;
+  }
+
+  function removeFact(id) {
+    Store.update(function (s) {
+      var m = mem();
+      m.facts = m.facts.filter(function (f) { return f.id !== id; });
+      m.updatedAt = new Date().toISOString();
+    });
+  }
+
+  function togglePin(id) {
+    Store.update(function (s) {
+      var m = mem();
+      m.facts.forEach(function (f) { if (f.id === id) f.pinned = !f.pinned; });
+    });
+  }
+
+  function setProfile(p) {
+    Store.update(function (s) {
+      var m = mem();
+      m.profile = (p || '').slice(0, 400);
+      m.updatedAt = new Date().toISOString();
+    });
+  }
+
+  // ---------- 记忆摘要（注入所有 AI 提示词）----------
+  function digest(budget) {
+    budget = budget || DIGEST_BUDGET;
+    var m = mem();
+    var out = '';
+    if (m.profile) out += '【考生画像】' + m.profile + '\n';
+    var facts = sortFacts(m.facts);
+    var used = out.length;
+    var lines = [];
+    for (var i = 0; i < facts.length; i++) {
+      var line = '- ' + facts[i].text;
+      if (used + line.length + 1 > budget) break;
+      lines.push(line);
+      used += line.length + 1;
+    }
+    if (lines.length) out += '【关于考生的记忆】\n' + lines.join('\n') + '\n请在回复中体现你对他的了解，但不要机械复述记忆条目。';
+    return out.trim();
+  }
+
+  // ---------- 本地信号：零成本从数据提取模式记忆 ----------
+  // 每条信号有稳定 sigKey，反复刷新只更新不堆积
+  function syncLocalSignals() {
+    try {
+      var s = Store.get();
+      // 1. 本周符号错误频发
+      var signW = Store.mistakeCountWeek('sign');
+      upsertSignal('sig-sign', signW >= 3 ? '近期符号错误频发（本周' + signW + '次），做题需强制验算' : null, 'weakness');
+      // 2. 本周错误类型 Top1
+      var top = Store.weekTopMistakes();
+      var typeMap = { sign: '符号错误', fraction: '分式处理', integral: '积分', concept: '概念不清', careless: '粗心', other: '其他' };
+      upsertSignal('sig-toperr', (top && top.length && top[0].count >= 2) ? '本周主要错误类型是「' + (typeMap[top[0].key] || top[0].key) + '」（' + top[0].count + '次）' : null, 'weakness');
+      // 3. 数学正确率
+      var acc = Store.currentMathAccuracy();
+      upsertSignal('sig-acc', (acc != null && acc < 70) ? '当前数学正确率仅' + acc + '%，低于安全线70%' : null, 'weakness');
+      // 4. 学习节奏：本周日均时长 vs 目标
+      var wh = Store.weekHours();
+      var worked = wh.filter(function (h) { return h > 0; });
+      if (worked.length >= 2) {
+        var avgH = U.round1(U.sum(wh) / 7);
+        var target = (s.settings.weeklyTargetHours || 50) / 7;
+        upsertSignal('sig-pace', avgH < target * 0.7 ? '本周日均学习' + avgH + 'h，明显低于目标' + U.round1(target) + 'h' : null, 'habit');
+      }
+      // 5. 科目冷落：近3天没碰数学/专业课
+      if (!Store.subjectDoneInDays('math', 3)) upsertSignal('sig-idle-math', '已连续3天没有完成数学任务', 'habit');
+      else removeSignal('sig-idle-math');
+      if (!Store.subjectDoneInDays('ctrl', 3)) upsertSignal('sig-idle-ctrl', '已连续3天没有碰专业课', 'habit');
+      else removeSignal('sig-idle-ctrl');
+      // 6. 情绪连续偏低
+      var recentMental = (s.mental || []).slice(-3);
+      if (recentMental.length >= 3 && recentMental.every(function (x) { return x.mood <= 5; })) {
+        upsertSignal('sig-mood', '近3天心情持续偏低（≤5分），需要关注状态', 'habit');
+      } else removeSignal('sig-mood');
+      // 7. 拍题疑难点热词（来自弱点画像）
+      if (s.weaknessProfile && s.weaknessProfile.weakAreas && s.weaknessProfile.weakAreas.length) {
+        upsertSignal('sig-weakareas', '拍题暴露的薄弱点：' + s.weaknessProfile.weakAreas.slice(0, 3).join('、'), 'weakness');
+      } else removeSignal('sig-weakareas');
+    } catch (e) { /* 静默 */ }
+  }
+
+  function upsertSignal(sigKey, text, kind) {
+    if (!text) { removeSignal(sigKey); return; }
+    addFact(text, kind, 'system', sigKey);
+  }
+  function removeSignal(sigKey) {
+    Store.update(function (s) {
+      var m = mem();
+      m.facts = m.facts.filter(function (f) { return f.sigKey !== sigKey; });
+    });
+  }
+
+  // ---------- AI 反思：从对话/事件中沉淀长期记忆 ----------
+  function reflectSystem() {
+    return '你是一名考研教练的"记忆官"。根据教练与考生的最近对话和已有记忆，提取值得长期记住的事实。'
+      + '只输出 JSON，不要多余文字、不要 markdown 代码块。格式：'
+      + '{"add":[{"text":"一句话事实(≤40字)","kind":"weakness|habit|preference|goal|context"}],'
+      + '"reinforce":["已有记忆中被再次验证的原文片段"],'
+      + '"remove":["已过时/被纠正的记忆原文片段"],'
+      + '"profile":"重写后的考生画像一段话(≤120字，融合新旧认知，无变化则原样返回)"}。'
+      + '规则：1) 只沉淀稳定的、跨会话有用的认知（弱点/习惯/偏好/目标/背景），不要记录一次性闲聊；'
+      + '2) add 最多3条，宁缺毋滥；3) reinforce/remove 引用【已有记忆】中的原文；4) 简体中文。';
+  }
+
+  // 反思入口：传入最近对话文本。静默失败（不打断主流程）。
+  function reflect(conversationText) {
+    var s = Store.get();
+    if (!AI.configured() || s.ai.memAuto === false) return Promise.resolve(false);
+    if (!conversationText || conversationText.length < 30) return Promise.resolve(false);
+    var m = mem();
+    var existing = m.facts.map(function (f) { return f.text; }).slice(0, 30);
+    var userPayload = '【当前画像】' + (m.profile || '（空）') + '\n'
+      + '【已有记忆】\n' + (existing.length ? existing.map(function (t) { return '- ' + t; }).join('\n') : '（无）') + '\n'
+      + '【最近对话】\n' + conversationText.slice(-3000);
+    return AI.chatJSON(reflectSystem(), userPayload).then(function (ops) {
+      applyOps(ops);
+      Store.update(function (x) { x.aiMemory.reflectCount = (x.aiMemory.reflectCount || 0) + 1; });
+      return true;
+    }).catch(function () { return false; });
+  }
+
+  function applyOps(ops) {
+    if (!ops) return;
+    if (ops.profile && typeof ops.profile === 'string') setProfile(ops.profile);
+    (ops.add || []).slice(0, 3).forEach(function (o) {
+      if (o && o.text) addFact(o.text, o.kind || 'context', 'ai');
+    });
+    (ops.reinforce || []).slice(0, 5).forEach(function (t) { if (t) reinforceByText(t); });
+    (ops.remove || []).slice(0, 5).forEach(function (t) {
+      if (!t) return;
+      var nt = normText(t);
+      Store.update(function (s) {
+        var m = mem();
+        m.facts = m.facts.filter(function (f) { return normText(f.text) !== nt && f.text.indexOf(nt.slice(0, 12)) < 0; });
+      });
+    });
+  }
+
+  // 事件沉淀队列：各模块上报关键事件，攒够批量反思（控制成本）
+  var eventQueue = [];
+  function recordEvent(label, detail) {
+    var line = '[' + U.hm() + '] ' + label + (detail ? '：' + detail : '');
+    eventQueue.push(line);
+    if (eventQueue.length >= 4) flushEvents();
+  }
+  function flushEvents() {
+    if (!eventQueue.length) return;
+    var text = '考生近期行为事件：\n' + eventQueue.join('\n');
+    eventQueue = [];
+    reflect(text);
+  }
+
+  function stats() {
+    var m = mem();
+    return {
+      facts: m.facts.length,
+      pinned: m.facts.filter(function (f) { return f.pinned; }).length,
+      aiFacts: m.facts.filter(function (f) { return f.source === 'ai'; }).length,
+      hasProfile: !!m.profile,
+      reflectCount: m.reflectCount || 0,
+      updatedAt: m.updatedAt || ''
+    };
+  }
+
+  window.AiMemory = {
+    MAX_FACTS: MAX_FACTS,
+    digest: digest,
+    addFact: addFact,
+    reinforceByText: reinforceByText,
+    removeFact: removeFact,
+    togglePin: togglePin,
+    setProfile: setProfile,
+    syncLocalSignals: syncLocalSignals,
+    reflect: reflect,
+    recordEvent: recordEvent,
+    flushEvents: flushEvents,
+    stats: stats,
+    list: function () { return sortFacts(mem().facts); },
+    profile: function () { return mem().profile || ''; }
+  };
 })();
 
 
@@ -3780,12 +4180,13 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
     el.innerHTML =
       '<div id="alert-slot">' + Alerts.bannerHtml() + '</div>'
+      + briefHtml(s)
       + nowHtml
       + '<div class="card"><div class="card-title-row"><span class="card-title">今日作战序列</span>'
       + '<button class="link-btn" id="go-sched">完整排程 →</button></div>' + (seqHtml || '<div class="empty">暂无任务</div>') + '</div>'
       + '<div class="chip-row">' + chips + '</div>'
       + '<div class="quick-grid">'
-      + '<button class="quick-btn" data-go="tasks">✅<span>任务</span></button>'
+      + '<button class="quick-btn" data-go="scheduler">✅<span>任务</span></button>'
       + '<button class="quick-btn" data-go="mistakes">🎯<span>错题</span></button>'
       + '<button class="quick-btn" data-go="review">📊<span>复盘</span></button>'
       + '<button class="quick-btn" data-go="redline">⛔<span>红线</span></button>'
@@ -3800,6 +4201,159 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
     bind(el, next);
     ensureDailyQuiz(el);
+    ensureBrief(el);
+  }
+
+  // ============================================================
+  // 📰 AI 每日作战简报（越用越懂你的门面）
+  // 按天缓存；进入作战台自动生成一次；可手动重新生成。
+  // AI 未配置时 → 本地数据动态简报（每次渲染实时计算，绝不死板）。
+  // ============================================================
+  var briefGenerating = false;
+  var briefStreamBuf = '';
+
+  function greetByTime() {
+    var h = new Date().getHours();
+    if (h < 6) return '🌙 夜深了';
+    if (h < 9) return '🌅 早上好';
+    if (h < 12) return '☀️ 上午好';
+    if (h < 14) return '🍚 中午好';
+    if (h < 18) return '⛅ 下午好';
+    return '🌆 晚上好';
+  }
+
+  // 本地动态简报（无 AI 也有生命力）：由实时数据拼装
+  function localBrief(s) {
+    var today = U.dkey();
+    var days = U.daysTo(s.settings.examDate);
+    var st = Store.todayTaskStats();
+    var done = 0, total = 0;
+    Object.keys(st).forEach(function (k) { done += st[k][0]; total += st[k][1]; });
+    // 昨日完成率
+    var y = new Date(Date.now() - U.DAY_MS);
+    var yKey = U.dkey(y);
+    var arch = (s.taskArchive || {})[yKey] || [];
+    var yDone = arch.filter(function (t) { return t.done; }).length;
+    // 连续学习天数
+    var streak = 0;
+    for (var i = 0; i < 60; i++) {
+      var k = U.dkey(new Date(Date.now() - i * U.DAY_MS));
+      if ((s.studyHours[k] || 0) > 0 || (s.completions[k] || []).length > 0) streak++;
+      else if (i === 0) continue; // 今天还没开始不算断
+      else break;
+    }
+    var lines = [];
+    lines.push('距考试还有 <b>' + days + '</b> 天' + (streak >= 2 ? '，已连续作战 <b>' + streak + '</b> 天' : '') + '。');
+    if (arch.length) lines.push('昨日完成 ' + yDone + '/' + arch.length + (yDone === arch.length && arch.length > 0 ? '，干净利落。' : yDone / arch.length < 0.6 ? '，欠债要还。' : '，还差一点。'));
+    if (total > 0) lines.push('今日 ' + total + ' 项任务已就位' + (done > 0 ? '，已清 ' + done + ' 项' : '') + '。');
+    var signW = Store.mistakeCountWeek('sign');
+    if (signW >= 3) lines.push('⚠️ 本周符号错误 ' + signW + ' 次，做题时强制末步验算。');
+    var acc = Store.currentMathAccuracy();
+    if (acc != null && acc < 70) lines.push('⚠️ 数学正确率 ' + acc + '% 低于安全线，先补概念再刷量。');
+    return lines.join('<br>');
+  }
+
+  function briefHtml(s) {
+    var today = U.dkey();
+    var brief = s.dailyBrief;
+    var head = '<div class="card-title-row"><span class="card-title">📰 今日作战简报</span>'
+      + '<span class="brief-meta">' + greetByTime() + ' · ' + today.slice(5).replace('-', '.') + '</span></div>';
+    if (brief && brief.date === today && brief.content) {
+      return '<div class="card brief-card" id="brief-card">' + head
+        + '<div class="brief-body" id="brief-body">' + renderMathSafe(brief.content) + '</div>'
+        + '<div class="brief-foot"><span class="muted-sm">🧠 结合你的记忆与数据生成</span>'
+        + '<button class="link-btn" id="brief-regen">🔄 换一版</button></div></div>';
+    }
+    if (AI.configured() && s.ai.briefAuto !== false && !(brief && brief.date === today && brief.failed)) {
+      // 生成中 / 等待生成：骨架屏
+      return '<div class="card brief-card" id="brief-card">' + head
+        + '<div class="brief-body" id="brief-body">'
+        + (briefGenerating && briefStreamBuf ? renderMathSafe(briefStreamBuf) + '<span class="ai-cursor"></span>'
+          : '<div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w60"></div>')
+        + '</div></div>';
+    }
+    // 本地动态简报（含 AI 失败回落）
+    return '<div class="card brief-card" id="brief-card">' + head
+      + '<div class="brief-body">' + localBrief(s) + '</div>'
+      + (brief && brief.date === today && brief.failed
+        ? '<div class="muted-sm" style="margin-top:6px">⚠️ AI 简报生成失败（' + U.esc((brief.error || '').slice(0, 40)) + '）<button class="link-btn" id="brief-regen">🔄 重试</button></div>'
+        : (AI.configured() ? '' : '<div class="muted-sm" style="margin-top:6px">配置 AI 后，这里会变成真正懂你的每日简报 →</div>'))
+      + '</div>';
+  }
+
+  function briefSystem() {
+    var major = '专业课';
+    try { major = DB.getActiveMajor().name || '专业课'; } catch (e) { }
+    var mem = AI.memoryDigest(400);
+    return '你是严厉的2026考研教练，正在为考生（专业课：' + major + '）写「今日作战简报」。'
+      + (mem ? '\n' + mem + '\n' : '')
+      + '要求：1) 三段式——一句话定调（结合时段与数据）→ 今日最关键的3个重点（具体到科目章节动作）→ 一句狠话收尾；'
+      + '2) 全文130-200字，用换行分段，不要标题不要列表符号；3) 直接犀利不灌鸡汤；'
+      + '4) 引用数据要自然（"昨天你只学了3h"），禁止罗列；5) 简体中文。';
+  }
+
+  function briefPayload() {
+    var s = Store.get();
+    var today = U.dkey();
+    var st = Store.todayTaskStats();
+    var done = 0, total = 0, undone = [];
+    Object.keys(st).forEach(function (k) { done += st[k][0]; total += st[k][1]; });
+    var doneIds = s.completions[today] || [];
+    s.tasks.forEach(function (t) {
+      if (!t.done && doneIds.indexOf(t.id) < 0) undone.push(DB.SUBJECTS[t.subject].short + '·' + t.text);
+    });
+    var yKey = U.dkey(new Date(Date.now() - U.DAY_MS));
+    var arch = (s.taskArchive || {})[yKey] || [];
+    var yDone = arch.filter(function (t) { return t.done; }).length;
+    var acc = Store.currentMathAccuracy();
+    var h = new Date().getHours();
+    return '现在是' + today + ' ' + h + '点。距考试' + U.daysTo(s.settings.examDate) + '天。\n'
+      + '昨日：完成 ' + yDone + '/' + arch.length + ' 任务，学习 ' + (s.studyHours[yKey] || 0) + 'h。\n'
+      + '今日：任务 ' + done + '/' + total + '，未完成清单：' + (undone.slice(0, 6).join('；') || '无') + '\n'
+      + '本周：日均 ' + U.round1(U.sum(Store.weekHours()) / 7) + 'h（目标' + U.round1((s.settings.weeklyTargetHours || 50) / 7) + 'h），符号错误 ' + Store.mistakeCountWeek('sign') + ' 次，数学正确率 ' + (acc != null ? acc + '%' : '未录入') + '。';
+  }
+
+  function ensureBrief(el) {
+    var s = Store.get();
+    var today = U.dkey();
+    if (typeof AI === 'undefined' || !AI.configured()) return;
+    if (s.ai.briefAuto === false) return;
+    if (s.dailyBrief && s.dailyBrief.date === today) return; // 今日已有结果（成功或失败占位）→ 不再自动生成
+    if (briefGenerating) return;
+    startBrief(false);
+  }
+
+  function startBrief(force) {
+    if (briefGenerating) return;
+    if (!AI.configured()) return;
+    briefGenerating = true;
+    briefStreamBuf = '';
+    var lastWrite = 0;
+    AI.chatStream(briefSystem(), briefPayload(), function (full) {
+      briefStreamBuf = full || '';
+      var now = Date.now();
+      if (now - lastWrite > 400) {
+        lastWrite = now;
+        var body = document.getElementById('brief-body');
+        if (body) { body.innerHTML = renderMathSafe(briefStreamBuf) + '<span class="ai-cursor"></span>'; body.scrollTop = body.scrollHeight; }
+      }
+    }).then(function (full) {
+      briefGenerating = false;
+      var text = (full || '').trim();
+      if (text) {
+        Store.update(function (s) { s.dailyBrief = { date: U.dkey(), content: text.slice(0, 1200), generatedAt: new Date().toISOString() }; });
+        AiMemory.recordEvent('查看今日作战简报');
+      } else {
+        throw new Error('empty');
+      }
+      App.refresh();
+    }).catch(function (e) {
+      briefGenerating = false;
+      briefStreamBuf = '';
+      // 失败占位：当日不再自动生成（防刷新死循环），回落本地动态简报 + 手动重试
+      Store.update(function (s) { s.dailyBrief = { date: U.dkey(), failed: true, error: (e && e.message) || '生成失败' }; });
+      App.refresh();
+    });
   }
 
   // ---------- 每日一题 ----------
@@ -4107,7 +4661,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     const focBtn = el.querySelector('#now-focus');
     if (focBtn && next) focBtn.onclick = () => { App.go('focus'); };
     const addBtn = el.querySelector('#now-add');
-    if (addBtn) addBtn.onclick = () => App.go('tasks');
+    if (addBtn) addBtn.onclick = () => App.go('scheduler');
 
     // 序列就地勾选
     el.querySelectorAll('.seq-row input[type=checkbox]').forEach(cb => {
@@ -4120,6 +4674,15 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     // 快捷入口
     el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => App.go(b.getAttribute('data-go')));
     el.querySelector('#go-sched').onclick = () => App.go('scheduler');
+
+    // 简报「换一版」
+    var briefRegen = el.querySelector('#brief-regen');
+    if (briefRegen) briefRegen.onclick = () => {
+      briefRegen.disabled = true;
+      briefRegen.textContent = '生成中…';
+      Store.update(s => { s.dailyBrief = null; });
+      startBrief(true);
+    };
 
     // 每日一题：科目选择
     var dqSubjSel = el.querySelector('#dq-subj');
@@ -4175,6 +4738,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       // 连击反馈
       Toast.show(['✓ 打卡', '✓ 拿下', '✓ 干净利落', '✓ 继续推进'][count % 4] + '（今日第' + count + '个）', 'success', 1800);
       confettiBurst();
+      if (window.AiMemory && subject) AiMemory.recordEvent('完成任务', DB.SUBJECTS[subject].short + '任务（今日第' + count + '个）');
       if (subject === 'math' && Store.mistakeCountToday('sign') > 0) {
         Modal.open({
           title: '⚠️ 数学防呆提醒',
@@ -4202,192 +4766,6 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   }
 
   window.DashboardModule = { render };
-})();
-
-
-/* ===== js/modules/tasks.js ===== */
-/* ============================================================
- * tasks.js — 任务中心：添加/打卡/就地编辑/删除 + 防呆提醒区
- * 业务规则：
- *  1. 数学任务勾选完成且今日符号错误>0 → 防呆弹窗
- *  2. 政治任务超过2个 → 警告
- *  3. 任务文本含硬件关键词 → 禁止添加 + 红线警告
- * ============================================================ */
-(function () {
-  'use strict';
-  let filter = 'all';
-
-  function hitHardware(text) {
-    return DB.redlineKeywords().find(k => text.indexOf(k) >= 0);
-  }
-
-  function render(el) {
-    const s = Store.get();
-    const tabs = [['all', '全部'], ['math', DB.SUBJECTS.math.short], ['ctrl', DB.SUBJECTS.ctrl.short], ['eng', DB.SUBJECTS.eng.short], ['pol', DB.SUBJECTS.pol.short]];
-
-    let tabsHtml = '';
-    tabs.forEach(t => {
-      const n = t[0] === 'all' ? s.tasks.length : s.tasks.filter(x => x.subject === t[0]).length;
-      tabsHtml += '<button class="tab' + (filter === t[0] ? ' tab-on' : '') + '" data-f="' + t[0] + '">' + t[1] + ' <span class="tab-n">' + n + '</span></button>';
-    });
-
-    const list = s.tasks.filter(t => filter === 'all' || t.subject === filter)
-      .sort((a, b) => (a.done - b.done) || ((a.order != null ? a.order : Number.MAX_SAFE_INTEGER) - (b.order != null ? b.order : Number.MAX_SAFE_INTEGER)));
-
-    let rows = '';
-    if (list.length === 0) {
-      rows = '<div class="empty">暂无任务，在下方添加一条吧</div>';
-    } else {
-      list.forEach(t => {
-        const subj = DB.SUBJECTS[t.subject] || { short: '?', color: '#999' };
-        rows += '<div class="task' + (t.done ? ' task-done' : '') + '" data-id="' + t.id + '">'
-          + '<label class="task-check"><input type="checkbox"' + (t.done ? ' checked' : '') + ' data-act="toggle"><span class="box"></span></label>'
-          + '<span class="task-tag" style="background:' + subj.color + '">' + subj.short + '</span>'
-          + '<span class="task-text" data-act="edit" title="点击编辑">' + U.esc(t.text) + '</span>'
-          + '<button class="task-x" data-act="del" aria-label="删除">×</button>'
-          + '</div>';
-      });
-    }
-
-    el.innerHTML =
-      '<div class="card"><div class="card-title">任务中心</div>'
-      + '<div class="tab-row">' + tabsHtml + '</div>'
-      + '<div class="task-list">' + rows + '</div>'
-      + '<div class="add-row">'
-      +   '<select id="add-subj" class="input input-sel">'
-      +     '<option value="math">' + DB.SUBJECTS.math.name + '</option><option value="ctrl">' + DB.SUBJECTS.ctrl.short + '</option>'
-      +     '<option value="eng">' + DB.SUBJECTS.eng.name + '</option><option value="pol">' + DB.SUBJECTS.pol.name + '</option>'
-      +   '</select>'
-      +   '<input id="add-text" class="input" placeholder="添加任务，回车确认（硬件关键词将被拦截）">'
-      +   '<button id="add-btn" class="btn btn-primary">添加</button>'
-      + '</div></div>'
-
-      // 防呆提醒区（固定在列表下方，PRD 4.2-4）
-      + '<div class="warn-box">'
-      + '<div class="warn-title">⚠️ 防呆提醒</div>'
-      + '<div class="warn-body">数学任务执行前请确认：<br>'
-      + '1. 符号前置，负号立即提到最前面<br>'
-      + '2. 分式合并三步法（分母→分子→计算）<br>'
-      + '3. 草稿分区：左侧乱草，右侧正稿</div>'
-      + '</div>';
-
-    bind(el);
-  }
-
-  function addTask(el) {
-    const subj = el.querySelector('#add-subj').value;
-    const input = el.querySelector('#add-text');
-    const text = input.value.trim();
-    if (!text) { Toast.warn('任务内容不能为空'); return; }
-
-    // 业务规则3：分心源冲动拦截（拦截词来自 redlineKeywords，含默认硬件词 + 用户追加分心源）
-    const hit = hitHardware(text);
-    if (hit) {
-      const dist = (function () { try { return DB.coachProfile().distractions; } catch (e) { return '分心源'; } })();
-      Toast.danger('🚫 红线拦截：检测到「' + hit + '」。初试前请暂停「' + dist + '」！');
-      Modal.open({
-        title: '🚫 红线警告',
-        html: '<p>你试图添加包含 <b>「' + U.esc(hit) + '」</b> 的任务。</p>'
-          + '<p>这触犯了绝对禁令第1条：<b>初试前绝对禁止 ' + U.esc(dist) + '</b>。</p>'
-          + '<p class="muted-sm">你的 ' + U.esc(dist) + ' 经历已经够用了。现在每一小时分心时间，都是在从 ' + DB.SUBJECTS.math.name + ' 的分数里偷分。任务已被拒绝。</p>',
-        actions: [{ label: '我明白，回去学数学', kind: 'btn-primary' }]
-      });
-      return;
-    }
-
-    // 业务规则2：政治时间监控
-    if (subj === 'pol') {
-      const polCount = Store.get().tasks.filter(t => t.subject === 'pol' && !t.done).length;
-      if (polCount >= 2) {
-        Toast.warn('⚠️ 政治任务已超标，请优先保证数学/专业课。');
-      }
-    }
-
-    Store.update(s => {
-      let maxOrder = -1;
-      s.tasks.forEach(t => { if (typeof t.order === 'number' && t.order > maxOrder) maxOrder = t.order; });
-      s.tasks.push({ id: U.uid(), subject: subj, text, done: false, createdAt: new Date().toISOString(), order: maxOrder + 1 });
-    });
-    Toast.success('已添加');
-    App.refresh();
-  }
-
-  function bind(el) {
-    el.querySelectorAll('.tab').forEach(b => b.onclick = () => { filter = b.getAttribute('data-f'); render(el); });
-    el.querySelector('#add-btn').onclick = () => addTask(el);
-    el.querySelector('#add-text').addEventListener('keydown', e => { if (e.key === 'Enter') addTask(el); });
-
-    el.querySelectorAll('.task').forEach(row => {
-      const id = row.getAttribute('data-id');
-      row.querySelector('[data-act="toggle"]').onchange = e => toggleTask(id, e.target.checked);
-      row.querySelector('[data-act="del"]').onclick = () => {
-        Modal.confirm('删除任务', '<p>确认删除该任务？此操作不可恢复。</p>', '删除', () => {
-          Store.update(s => { s.tasks = s.tasks.filter(t => t.id !== id); });
-          App.refresh();
-        }, true);
-      };
-      // 就地编辑
-      const textEl = row.querySelector('[data-act="edit"]');
-      textEl.onclick = () => {
-        if (row.classList.contains('editing')) return;
-        const task = Store.get().tasks.find(t => t.id === id);
-        if (!task) return;
-        row.classList.add('editing');
-        const inp = document.createElement('input');
-        inp.className = 'input task-edit-input';
-        inp.value = task.text;
-        textEl.replaceWith(inp);
-        inp.focus(); inp.select();
-        const commit = save => {
-          if (save) {
-            const v = inp.value.trim();
-            const hit = v && hitHardware(v);
-            if (hit) { Toast.danger('🚫 红线拦截：文本包含「' + hit + '」，修改被拒绝'); }
-            else if (v) Store.update(s => { const t = s.tasks.find(x => x.id === id); if (t) t.text = v; });
-          }
-          App.refresh();
-        };
-        inp.onkeydown = e => {
-          if (e.key === 'Enter') commit(true);
-          else if (e.key === 'Escape') commit(false);
-        };
-        inp.onblur = () => commit(true);
-      };
-    });
-  }
-
-  function toggleTask(id, done) {
-    let subject = null;
-    Store.update(s => {
-      const t = s.tasks.find(x => x.id === id);
-      if (!t) return;
-      t.done = done;
-      subject = t.subject;
-      const k = U.dkey();
-      s.completions[k] = s.completions[k] || [];
-      const i = s.completions[k].indexOf(id);
-      if (done && i < 0) s.completions[k].push(id);
-      if (!done && i >= 0) s.completions[k].splice(i, 1);
-    });
-
-    if (done) {
-      Toast.success('✓ 打卡完成');
-      // 业务规则1：数学防呆触发（今日符号错误>0才弹）
-      if (subject === 'math' && Store.mistakeCountToday('sign') > 0) {
-        Modal.open({
-          title: '⚠️ 数学防呆提醒',
-          html: '<p>检测到今日已记录 <b>' + Store.mistakeCountToday('sign') + '</b> 次符号错误。下一题开始前请默念：</p>'
-            + '<ol style="padding-left:18px;line-height:1.9"><li>符号前置，负号立即提到最前面</li>'
-            + '<li>分式合并三步法（分母→分子→计算）</li>'
-            + '<li>草稿分区：左侧乱草，右侧正稿</li></ol>',
-          actions: [{ label: '收到，继续', kind: 'btn-primary' }]
-        });
-      }
-    }
-    App.refresh();
-  }
-
-  window.TasksModule = { render };
 })();
 
 
@@ -4477,7 +4855,9 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   // ---------- AI 动态编排 ----------
   function buildSchedulerSystem() {
+    var mem = (typeof AI !== 'undefined' && AI.memoryDigest) ? AI.memoryDigest(300) : '';
     return '你是考研每日任务编排教练。根据考生的正确率/连续打卡/易错类型/政治红线等真实状态，对“待办任务池”做最优排序，输出今日唯一最优序列。'
+      + (mem ? '\n' + mem + '\n编排顺序时参考这些长期认知（如作息偏好、已知弱点）。\n' : '')
       + '只输出JSON，不要多余文字、不要markdown代码块。格式：'
       + '{"sequence":[{"id":"任务id","reason":"为何排此位（落到具体科目/题量/时间）","weight":0-100}],"reasons":["全局调度说明1","2"]}'
       + '要求：1) sequence 必须包含全部给定 id（顺序即优先级，重要的在前）；2) 数学正确率低时数学靠前；3) 专业课冷却时专业课靠前；4) 政治当日不超过红线数量；5) weight 用 0-100 表示优先级。';
@@ -6241,6 +6621,12 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       if (s.quizHistory.length > 100) s.quizHistory = s.quizHistory.slice(-100);
     });
 
+    // 记忆事件：测验结果汇入 AI 反思队列（攒够批量沉淀，成本可控）
+    if (window.AiMemory) {
+      AiMemory.recordEvent('AI测验「' + topic.name + '」得' + score + '分',
+        (judge.errorType && judge.errorType !== 'none' ? '错误类型:' + judge.errorType + '；' : '') + (judge.comment || '').slice(0, 50));
+    }
+
     if (judge.errorType === 'sign') {
       setTimeout(() => {
         Modal.open({
@@ -7341,6 +7727,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<label class="fld"><span>今日最卡壳的科目/知识点</span><input id="mt-stuck" class="input" placeholder="' + U.esc('如：' + _stuckEg) + '"></label>'
       + '</div>'
       + '<button class="btn btn-primary" id="mt-save">' + (today ? '更新今日记录' : '提交今日记录') + '</button>'
+      + '<button class="btn btn-ghost" id="mt-chat" style="margin-left:8px">💬 和 AI 教练聊聊</button>'
       + '</div>'
 
       + (lowStreak ? '<div class="alert alert-danger">😴 疲劳预警：连续3天心情<5分。建议明天强制休息半日——效率崩了，努力只是自我感动。</div>' : '')
@@ -7366,6 +7753,16 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   function bind(el, today) {
     const mood = el.querySelector('#mt-mood');
     mood.oninput = () => { document.getElementById('mt-mood-v').textContent = mood.value; };
+    // 一键倾诉：把当前情绪状态带给 AI 教练
+    const chatBtn = el.querySelector('#mt-chat');
+    if (chatBtn) chatBtn.onclick = () => {
+      var moodV = mood.value;
+      var fatigueMap = { fresh: '清醒', tired: '略累', exhausted: '疲惫', giveup: '有点想放弃' };
+      var fat = fatigueMap[el.querySelector('#mt-fatigue').value] || '一般';
+      var stuck = el.querySelector('#mt-stuck').value.trim();
+      var msg = '我现在心情 ' + moodV + '/10，感觉' + fat + (stuck ? '，卡在「' + stuck + '」' : '') + '。能陪我聊两句吗？';
+      if (window.Copilot) Copilot.open({ send: msg });
+    };
     if (today) {
       mood.value = today.mood; document.getElementById('mt-mood-v').textContent = today.mood;
       el.querySelector('#mt-fatigue').value = today.fatigue;
@@ -7856,6 +8253,39 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     ];
   }
 
+  // ---------- AI 记忆管理卡 ----------
+  var KIND_NAMES = { weakness: '弱点', habit: '习惯', preference: '偏好', goal: '目标', context: '背景', pattern: '模式' };
+  function memoryCardHtml(s) {
+    if (!window.AiMemory) return '';
+    var st = AiMemory.stats();
+    var profile = AiMemory.profile();
+    var facts = AiMemory.list();
+    var srcMark = { ai: '🤖', user: '✍️', system: '📊' };
+    var factsHtml = facts.map(function (f) {
+      return '<div class="mem-fact' + (f.pinned ? ' mem-pinned' : '') + '" data-id="' + f.id + '">'
+        + '<span class="mem-kind ' + U.esc(f.kind || 'context') + '">' + (KIND_NAMES[f.kind] || '背景') + '</span>'
+        + '<span class="mem-fact-text">' + U.esc(f.text) + '<span class="mem-hits">' + (srcMark[f.source] || '🤖') + ' ×' + (f.hits || 1) + '</span></span>'
+        + '<span class="mem-ops">'
+        + '<button class="mem-pin" title="' + (f.pinned ? '取消置顶' : '置顶（永不被淘汰）') + '">' + (f.pinned ? '📌' : '📍') + '</button>'
+        + '<button class="mem-del" title="删除">🗑</button>'
+        + '</span></div>';
+    }).join('');
+    return '<div class="card" id="ai-memory-card"><div class="card-title">🧠 AI 记忆（越用越懂你）</div>'
+      + '<div class="muted-sm">AI 教练会从每次对话与你的学习数据中沉淀长期记忆，之后所有 AI 回复都会带着这些认知。你可以审阅、修正它。</div>'
+      + '<div class="mem-stat"><span>记忆 <b>' + st.facts + '</b>/' + AiMemory.MAX_FACTS + ' 条</span><span>AI 沉淀 ' + st.aiFacts + ' 条</span><span>反思 ' + st.reflectCount + ' 次</span></div>'
+      + (profile
+        ? '<div class="card-title-sm" style="margin-top:8px">AI 眼中的你</div><div class="mem-profile">' + U.esc(profile) + '</div>'
+        : '<div class="muted-sm" style="margin-top:8px">画像尚未形成——和 AI 教练聊几句，或点下方「立即反思」。</div>')
+      + (facts.length ? '<div class="card-title-sm" style="margin:10px 0 6px">记忆事实（置顶 > 命中 > 新近，满额自动淘汰）</div>' + factsHtml : '')
+      + '<div class="add-row" style="margin-top:8px"><input id="mem-add-in" class="input" placeholder="手动告诉 AI 一条关于你的事，如：我晚上效率最高"><button class="btn btn-ghost" id="mem-add-btn">记住</button></div>'
+      + '<label class="check-row" style="margin-top:8px"><input type="checkbox" id="mem-auto"' + (s.ai.memAuto !== false ? ' checked' : '') + '><span class="box"></span><span>对话后自动反思沉淀记忆（每次少量 token）</span></label>'
+      + '<label class="check-row" style="margin-top:6px"><input type="checkbox" id="brief-auto"' + (s.ai.briefAuto !== false ? ' checked' : '') + '><span class="box"></span><span>每日首次打开自动生成「作战简报」</span></label>'
+      + '<div class="btn-row" style="margin-top:10px">'
+      + '<button class="btn btn-ghost" id="mem-reflect">🔄 立即反思（从近期数据沉淀）</button>'
+      + '<button class="btn btn-ghost" id="mem-clear">清空记忆</button>'
+      + '</div></div>';
+  }
+
   function render(el) {
     const s = Store.get();
     const usage = Store.usageBytes();
@@ -8011,6 +8441,9 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<button class="btn btn-ghost" id="ai-test">测试连通</button>'
       + '</div></div>'
 
+      // AI 记忆（越用越懂你的中枢）
+      + memoryCardHtml(s)
+
       // 危险区
       + '<div class="card"><div class="card-title card-title-red">危险区</div>'
       + '<button class="btn btn-danger" id="st-reset">清空全部数据并重置</button>'
@@ -8093,6 +8526,55 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   }
 
   function bind(el) {
+    // ---------- AI 记忆管理 ----------
+    if (window.AiMemory) {
+      el.querySelectorAll('.mem-pin').forEach(b => b.onclick = () => {
+        AiMemory.togglePin(b.closest('.mem-fact').getAttribute('data-id'));
+        App.refresh();
+      });
+      el.querySelectorAll('.mem-del').forEach(b => b.onclick = () => {
+        AiMemory.removeFact(b.closest('.mem-fact').getAttribute('data-id'));
+        Toast.show('已删除该条记忆', 'info');
+        App.refresh();
+      });
+      var memAddBtn = el.querySelector('#mem-add-btn');
+      if (memAddBtn) memAddBtn.onclick = () => {
+        var v = el.querySelector('#mem-add-in').value.trim();
+        if (!v) { Toast.warn('先写点内容'); return; }
+        AiMemory.addFact(v, 'context', 'user');
+        Toast.success('已记住：' + v.slice(0, 20));
+        App.refresh();
+      };
+      var memAuto = el.querySelector('#mem-auto');
+      if (memAuto) memAuto.onchange = () => { Store.update(s => { s.ai.memAuto = memAuto.checked; }); Toast.show(memAuto.checked ? '已开启自动反思' : '已关闭自动反思', 'info'); };
+      var briefAuto = el.querySelector('#brief-auto');
+      if (briefAuto) briefAuto.onchange = () => { Store.update(s => { s.ai.briefAuto = briefAuto.checked; }); };
+      var memReflect = el.querySelector('#mem-reflect');
+      if (memReflect) memReflect.onclick = () => {
+        if (!AI.configured()) { Toast.warn('请先保存 AI 配置'); return; }
+        memReflect.disabled = true;
+        memReflect.textContent = '反思中…';
+        AiMemory.syncLocalSignals();
+        var s = Store.get();
+        var recentData = '考生近期数据快照：\n' + AI.weeklySummary() + '\n近3条心情记录：'
+          + (s.mental || []).slice(-3).map(m => m.date + ' 心情' + m.mood + '/10' + (m.stuck ? ' 卡壳:' + m.stuck : '')).join('；');
+        AiMemory.reflect(recentData).then(ok => {
+          memReflect.disabled = false;
+          memReflect.textContent = '🔄 立即反思（从近期数据沉淀）';
+          Toast.show(ok ? '反思完成，记忆已更新' : '反思未产生新记忆（或AI未配置）', ok ? 'success' : 'info');
+          App.refresh();
+        });
+      };
+      var memClear = el.querySelector('#mem-clear');
+      if (memClear) memClear.onclick = () => {
+        Modal.confirm('清空 AI 记忆', '<p>将删除全部记忆事实与画像（不影响任何学习数据）。AI 会重新从零了解你。继续？</p>', '清空', () => {
+          Store.update(s => { s.aiMemory = { profile: '', facts: [], reflectCount: 0, updatedAt: '' }; });
+          Toast.show('AI 记忆已清空', 'info');
+          App.refresh();
+        }, false);
+      };
+    }
+
     // 专业课：切换并适配
     const profSwitchBtn = el.querySelector('#st-prof-switch');
     if (profSwitchBtn) profSwitchBtn.onclick = () => {
@@ -9197,6 +9679,10 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       // 提示文案：首次解析且 AI 给出了疑难点时，告知已自动填充
       var painMsg = (wasEmpty && autoPain) ? '（已自动建议疑难点：' + autoPain + '）' : '';
       Toast.success('✓ AI 解析完成' + painMsg);
+      // 记忆事件：拍题暴露的错因汇入反思队列
+      if (window.AiMemory) {
+        AiMemory.recordEvent('拍题错题解析', ((analysis.errorCause || autoPain || '已解析') + '').slice(0, 60));
+      }
       setTimeout(function () { Modal.close(); App.refresh(); }, 600);
     }).catch(function (err) {
       if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
@@ -9433,6 +9919,326 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 })();
 
 
+/* ===== js/modules/copilot.js ===== */
+/* ============================================================
+ * copilot.js — 全局 AI 教练（悬浮助手）
+ * 任意页面唤起；看得见当前页面与全部学习数据；带长期记忆（越聊越懂你）。
+ * 支持 [[ACTION]] 动作协议：AI 可直接给出「执行按钮」——加任务/跳转页面。
+ * 会话自动反思沉淀进 AiMemory（可在设置中关闭）。
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  var PAGE_NAMES = {
+    dashboard: '作战台', scheduler: '排程', review: '复盘', photomistake: '拍题错题本',
+    quiz: 'AI测验', mistakes: '错题画像', heatmap: '考点热力', inspector: '步骤审查',
+    focus: '深度专注', concept: '概念图谱', decision: '院校决策', mental: '心理状态',
+    reading: '英语阅读', redline: '红线禁令', progress: '进度追踪', settings: '设置'
+  };
+
+  var QUICK = {
+    dashboard: ['帮我安排今天的学习', '根据我的数据指出最大风险', '我现在状态不好'],
+    scheduler: ['今天的任务顺序合理吗', '哪些任务该砍、为什么', '给我加一道防呆任务'],
+    review: ['帮我总结这一周', '用数据指出我最致命的问题', '下周最该改的一件事'],
+    photomistake: ['这些错题暴露了我什么模式', '疑难点背后真正的概念漏洞', '按我的薄弱点给我练习建议'],
+    quiz: ['怎么提高数学正确率', '我总在什么题型上翻车'],
+    mental: ['我很焦虑，学不进去', '最近总想玩手机', '感觉来不及了好慌'],
+    reading: ['阅读正确率怎么突破', '给我讲讲定位法的精髓'],
+    focus: ['我总是学20分钟就走神', '帮我设计今天下午的专注节奏'],
+    default: ['今天该怎么学', '检查我的进度风险', '给我一句狠话骂醒我']
+  };
+
+  var mounted = false;
+  var isOpen = false;
+  var sending = false;
+  var userMsgSinceReflect = 0;
+  var hasGreeted = false;
+
+  // ---------- 上下文快照（注入系统提示词，让 AI 看得见你的当下） ----------
+  function snapshot() {
+    var s = Store.get();
+    var st = Store.todayTaskStats();
+    var done = 0, total = 0, undone = [];
+    Object.keys(st).forEach(function (k) { done += st[k][0]; total += st[k][1]; });
+    s.tasks.forEach(function (t) {
+      var doneIds = s.completions[U.dkey()] || [];
+      if (!t.done && doneIds.indexOf(t.id) < 0 && undone.length < 3) undone.push(t.text);
+    });
+    var lastMental = (s.mental || []).slice(-1)[0];
+    var acc = Store.currentMathAccuracy();
+    return '【考生实时状态】\n'
+      + '当前页面：' + (PAGE_NAMES[App.current] || App.current) + ' | 距考试：' + U.daysTo(s.settings.examDate) + '天\n'
+      + '今日任务：' + done + '/' + total + ' 完成' + (undone.length ? ' | 未完成：' + undone.join('；') : '') + '\n'
+      + '今日时长：' + Store.todayHours() + 'h | 本周日均：' + U.round1(U.sum(Store.weekHours()) / 7) + 'h\n'
+      + '数学正确率：' + (acc != null ? acc + '%' : '未录入') + ' | 目标院校：' + (s.settings.targetSchool === 'undecided' ? '未定' : s.settings.targetSchool) + '\n'
+      + (lastMental ? '最近心情：' + lastMental.mood + '/10（' + lastMental.date + '）\n' : '');
+  }
+
+  function systemPrompt() {
+    var major = '专业课';
+    try { major = DB.getActiveMajor().name || '专业课'; } catch (e) { }
+    var memBlock = AI.memoryDigest(500);
+    return '你是「考研AI教练」，与一名2026考研考生实时对话（专业课：' + major + '）。'
+      + '风格：直接、犀利、口语化，像微信聊天一样分段短句，不灌鸡汤，不堆砌列表；每次回复控制在150字内（除非用户要求详细展开）。'
+      + '你看得见他的实时数据与长期记忆，要像老朋友一样自然地引用（"你这周符号错误已经3次了"），但禁止机械罗列数据。'
+      + (memBlock ? '\n' + memBlock + '\n' : '')
+      + '\n' + snapshot()
+      + '\n【动作协议】必要时你可以在回复末尾附一个动作（每回复最多1个），系统会渲染成可点按钮：'
+      + '加任务 [[ACTION:{"type":"addTask","subject":"math|ctrl|eng|pol","text":"任务内容"}]]；'
+      + '跳转页面 [[ACTION:{"type":"goto","tab":"页面id","label":"按钮文字"}]]（可选tab：' + Object.keys(PAGE_NAMES).join('/') + '）。'
+      + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
+      + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。';
+  }
+
+  // ---------- 历史持久化（保留最近7天，每天≤60条） ----------
+  function history() {
+    var s = Store.get();
+    return s.copilotChats[U.dkey()] || [];
+  }
+  function pushHistory(role, content) {
+    Store.update(function (s) {
+      var k = U.dkey();
+      if (!s.copilotChats) s.copilotChats = {};
+      if (!s.copilotChats[k]) s.copilotChats[k] = [];
+      s.copilotChats[k].push({ role: role, content: content, ts: Date.now() });
+      while (s.copilotChats[k].length > 60) s.copilotChats[k].shift();
+      var keys = Object.keys(s.copilotChats).sort();
+      while (keys.length > 7) delete s.copilotChats[keys.shift()];
+    });
+  }
+
+  // ---------- 消息渲染（TeX + 动作按钮） ----------
+  function renderContent(text) {
+    var clean = text.replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').trim();
+    var html = U.esc(clean);
+    try { html = Tex.renderInline(html); } catch (e) { }
+    return html.replace(/\n/g, '<br>');
+  }
+
+  function parseActions(text) {
+    var out = [];
+    var re = /\[\[ACTION:([\s\S]*?)\]\]/g, m;
+    while ((m = re.exec(text)) !== null) {
+      try {
+        var a = AI.extractRobustJSON(m[1]);
+        if (a && a.type) out.push(a);
+      } catch (e) { }
+    }
+    return out.slice(0, 2);
+  }
+
+  function actionLabel(a) {
+    if (a.type === 'goto') return a.label || ('→ 去' + (PAGE_NAMES[a.tab] || a.tab));
+    if (a.type === 'addTask') return '＋ 添加任务：' + (a.text || '').slice(0, 14) + ((a.text || '').length > 14 ? '…' : '');
+    return a.label || '执行';
+  }
+
+  function executeAction(a, btn) {
+    if (a.type === 'goto' && PAGE_NAMES[a.tab]) {
+      close();
+      App.go(a.tab);
+    } else if (a.type === 'addTask' && a.text) {
+      var now = new Date().toISOString();
+      Store.update(function (s) {
+        var maxOrder = 0;
+        s.tasks.forEach(function (t) { if (t.order != null && t.order > maxOrder) maxOrder = t.order; });
+        s.tasks.push({ id: U.uid(), subject: a.subject || 'math', text: a.text, done: false, createdAt: now, updatedAt: now, order: maxOrder + 1 });
+      });
+      AiMemory.recordEvent('AI教练建议并添加任务', a.text);
+      btn.textContent = '✓ 已添加';
+      btn.disabled = true;
+      Toast.show('已加入今日任务', 'success');
+      if (App.current === 'dashboard' || App.current === 'scheduler') App.refresh();
+    }
+  }
+
+  // ---------- 面板 DOM ----------
+  function mount() {
+    if (mounted) return;
+    mounted = true;
+    var fab = document.createElement('button');
+    fab.id = 'copilot-fab';
+    fab.setAttribute('aria-label', 'AI教练');
+    fab.innerHTML = '🤖';
+    fab.onclick = function () { open(); };
+    document.body.appendChild(fab);
+
+    var panel = document.createElement('div');
+    panel.id = 'copilot-panel';
+    panel.innerHTML =
+      '<div class="cp-head">'
+      + '<div class="cp-title">🤖 AI 教练 <span class="cp-mem" id="cp-mem"></span></div>'
+      + '<button class="cp-close" id="cp-close" aria-label="关闭">×</button>'
+      + '</div>'
+      + '<div class="cp-msgs" id="cp-msgs"></div>'
+      + '<div class="cp-quick" id="cp-quick"></div>'
+      + '<div class="cp-input">'
+      + '<textarea id="cp-text" rows="1" placeholder="和教练聊聊…（Enter 发送）"></textarea>'
+      + '<button id="cp-send" class="btn btn-primary">发送</button>'
+      + '</div>';
+    document.body.appendChild(panel);
+
+    document.getElementById('cp-close').onclick = function () { close(); };
+    document.getElementById('cp-send').onclick = function () { doSend(); };
+    var ta = document.getElementById('cp-text');
+    ta.onkeydown = function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+    };
+    ta.oninput = function () {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(96, ta.scrollHeight) + 'px';
+    };
+  }
+
+  function memBadge() {
+    var n = AiMemory.stats().facts;
+    var el = document.getElementById('cp-mem');
+    if (el) {
+      el.textContent = n > 0 ? ('🧠 已记住你 ' + n + ' 条') : '🧠 记忆中';
+      el.title = '点击查看记忆管理';
+      el.onclick = function () { close(); App.go('settings'); setTimeout(function () { var c = document.getElementById('ai-memory-card'); if (c) c.scrollIntoView({ behavior: 'smooth' }); }, 120); };
+    }
+  }
+
+  function quickChips() {
+    var list = QUICK[App.current] || QUICK.default;
+    var wrap = document.getElementById('cp-quick');
+    wrap.innerHTML = list.map(function (q, i) { return '<button class="cp-chip" data-i="' + i + '">' + U.esc(q) + '</button>'; }).join('');
+    wrap.querySelectorAll('.cp-chip').forEach(function (b) {
+      b.onclick = function () { sendText(list[+b.getAttribute('data-i')]); };
+    });
+  }
+
+  function renderMessages() {
+    var box = document.getElementById('cp-msgs');
+    var msgs = history();
+    if (!msgs.length) {
+      box.innerHTML = '<div class="cp-empty">'
+        + (AI.configured()
+          ? '我看过你的全部学习数据。聊得越多，我越懂你。<br>点下面快捷问题，或直接输入。'
+          : '还没有配置 AI。<br>请先到「设置 → 云端AI配置」填入 API 信息，我才能上岗。')
+        + '</div>';
+      return;
+    }
+    box.innerHTML = msgs.map(function (m) {
+      if (m.role === 'user') return '<div class="cp-row cp-user"><div class="cp-bubble">' + U.esc(m.content) + '</div></div>';
+      var acts = parseActions(m.content);
+      return '<div class="cp-row cp-ai"><div class="cp-bubble">' + renderContent(m.content)
+        + (acts.length ? '<div class="cp-actions">' + acts.map(function (a, i) { return '<button class="cp-act" data-ai="' + i + '">' + U.esc(actionLabel(a)) + '</button>'; }).join('') + '</div>' : '')
+        + '</div></div>';
+    }).join('');
+    // 绑定历史动作按钮
+    var rows = box.querySelectorAll('.cp-row.cp-ai');
+    msgs.filter(function (m) { return m.role !== 'user'; }).forEach(function (m, ri) {
+      var acts = parseActions(m.content);
+      var row = rows[ri];
+      if (!row) return;
+      row.querySelectorAll('.cp-act').forEach(function (b) {
+        b.onclick = function () { executeAction(acts[+b.getAttribute('data-ai')], b); };
+      });
+    });
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function open(opts) {
+    mount();
+    isOpen = true;
+    hasGreeted = true;
+    document.getElementById('copilot-panel').classList.add('cp-open');
+    document.getElementById('copilot-fab').classList.add('cp-hide');
+    document.body.classList.add('cp-lock');
+    memBadge();
+    quickChips();
+    renderMessages();
+    setTimeout(function () { document.getElementById('cp-text').focus(); }, 250);
+    if (opts && opts.send) setTimeout(function () { sendText(opts.send); }, 300);
+  }
+
+  function close() {
+    isOpen = false;
+    var p = document.getElementById('copilot-panel');
+    var f = document.getElementById('copilot-fab');
+    if (p) p.classList.remove('cp-open');
+    if (f) f.classList.remove('cp-hide');
+    document.body.classList.remove('cp-lock');
+    reflectIfWorthy(true);
+  }
+
+  // ---------- 发送与流式回复 ----------
+  function doSend() {
+    var ta = document.getElementById('cp-text');
+    var text = ta.value.trim();
+    if (!text) return;
+    ta.value = '';
+    ta.style.height = 'auto';
+    sendText(text);
+  }
+
+  function sendText(text) {
+    if (sending) return;
+    if (!AI.configured()) { Toast.show('请先在设置中配置 AI', 'warn'); close(); App.go('settings'); return; }
+    sending = true;
+    pushHistory('user', text);
+    userMsgSinceReflect++;
+    renderMessages();
+
+    var box = document.getElementById('cp-msgs');
+    var row = document.createElement('div');
+    row.className = 'cp-row cp-ai';
+    row.innerHTML = '<div class="cp-bubble"><span class="cp-thinking">思考中</span><span class="ai-cursor"></span></div>';
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+    var bubble = row.querySelector('.cp-bubble');
+
+    var sysMsgs = history().slice(-12); // 近12条作为对话上下文
+    var convoText = sysMsgs.slice(0, -1).map(function (m) {
+      return (m.role === 'user' ? '考生' : '教练') + '：' + m.content;
+    }).join('\n');
+    var userPayload = (convoText ? '【近期对话】\n' + convoText + '\n\n' : '') + '考生：' + text;
+
+    AI.chatStream(systemPrompt(), userPayload, function (full) {
+      bubble.innerHTML = renderContent(full || '') + '<span class="ai-cursor"></span>';
+      box.scrollTop = box.scrollHeight;
+    }).then(function (full) {
+      sending = false;
+      pushHistory('assistant', full || '（无回复）');
+      renderMessages();
+      memBadge();
+      reflectIfWorthy(false);
+    }).catch(function (e) {
+      sending = false;
+      bubble.innerHTML = '调用失败：' + U.esc(e.message) + '<br>请检查设置中的 AI 配置。';
+    });
+  }
+
+  // 满2条用户消息（或关闭面板时有余量）→ 自动反思沉淀记忆
+  function reflectIfWorthy(isClose) {
+    if (userMsgSinceReflect < (isClose ? 2 : 2)) return;
+    var msgs = history().slice(-8);
+    if (msgs.filter(function (m) { return m.role === 'user'; }).length < 1) return;
+    userMsgSinceReflect = 0;
+    var text = msgs.map(function (m) { return (m.role === 'user' ? '考生' : '教练') + '：' + m.content; }).join('\n');
+    AiMemory.reflect(text).then(function (ok) {
+      if (ok) {
+        memBadge();
+        var el = document.getElementById('cp-mem');
+        if (el && isOpen) {
+          el.classList.add('cp-mem-flash');
+          setTimeout(function () { el.classList.remove('cp-mem-flash'); }, 1600);
+        }
+      }
+    });
+  }
+
+  window.Copilot = {
+    open: open,
+    close: close,
+    mount: mount,
+    get isOpen() { return isOpen; }
+  };
+})();
+
+
 /* ===== js/app.js ===== */
 /* ============================================================
  * app.js — 应用主控
@@ -9528,12 +10334,19 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     });
   }
 
-  function render() {
+  function render(animate) {
     renderStatusBar();
     renderNav();
     const view = document.getElementById('view');
     const tab = ALL.find(t => t[0] === current);
+    if (!tab) { current = 'dashboard'; return render(animate); }
     tab[3].render(view);
+    // 页面切换过渡：淡入+上移（原地 refresh 不播，避免打卡时闪动）
+    if (animate) {
+      view.classList.remove('view-enter');
+      void view.offsetWidth; // 强制回流以重启动画
+      view.classList.add('view-enter');
+    }
     view.querySelectorAll('.pbar-fill').forEach(f => {
       requestAnimationFrame(() => { f.style.width = f.getAttribute('data-w') + '%'; });
     });
@@ -9547,14 +10360,14 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   }
 
   const App = {
-    go(tab) { current = tab; render(); scrollToTop(); },
+    go(tab) { current = tab; render(true); scrollToTop(); },
     // 原地刷新：保留当前滚动位置（避免云同步/打卡等操作把页面滚回顶部）
     refresh() {
       const view = document.getElementById('view');
       const y = view ? view.scrollTop : 0;
       const wy = window.scrollY || window.pageYOffset || 0;
       DB.syncSubjects();
-      render();
+      render(false);
       if (view) view.scrollTop = y;
       window.scrollTo(0, wy);
     },
@@ -9565,7 +10378,11 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     DB.syncSubjects();
     rolloverIfNeeded();
     Notify.ensurePermission();
-    render();
+    // AI 记忆：本地信号零成本刷新（弱点/节奏/冷落科目等模式记忆）
+    try { if (window.AiMemory) AiMemory.syncLocalSignals(); } catch (e) { }
+    render(true);
+    // 全局 AI 教练悬浮入口
+    try { if (window.Copilot) Copilot.mount(); } catch (e) { }
     cloudReady.then(function () {
       if (Onboarding.needed()) Onboarding.show();
     }).catch(function () {
