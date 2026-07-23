@@ -1254,7 +1254,8 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       weaknessProfile: null,      // 弱点画像 {generatedAt, basedOn:[painPoint...], summary, weakAreas:[...], advice} —— 由拍题疑难点汇聚分析得出
       dailyQuiz: null,            // 每日一题 {date:'YYYY-MM-DD', question, solution, trap, subject, generatedAt}
       dailyQuizHistory: [],       // 历史每日一题 [{date,question,solution,trap,subject,generatedAt}]（"再来一题"时归档）
-      ai: { endpoint: '', key: '', model: '', preset: '', stream: false, thinkingMode: true },
+      ai: { endpoint: '', key: '', model: '', preset: '', stream: false, thinkingMode: undefined },
+      deepReview: null,            // 深度复盘持久化 {week, snap, reasoning, output, status, running, generatedAt} —— 切页面/刷新后保留，避免阻塞式重生成
       majorData: {},               // AI生成的专业数据缓存 { profName: { modules, topics, conceptGraph, ... } }
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false,
         examConfig: { mathType: 'shuyi', engType: 'yingyi', profName: '自控原理' },
@@ -1571,7 +1572,15 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   let pushTimer = null;
   let meta = loadMeta();
 
-  function loadMeta() { try { return JSON.parse(localStorage.getItem(META_KEY)) || {}; } catch (e) { return {}; } }
+  function loadMeta() {
+    let m;
+    try { m = JSON.parse(localStorage.getItem(META_KEY)); } catch (e) { m = null; }
+    m = m || {};
+    // 默认开启「同步 AI Key」：未显式关闭过（undefined）即视为同步，
+    // 已显式关闭（=false）的用户仍保留其选择。
+    if (m.syncAiKey === undefined) m.syncAiKey = true;
+    return m;
+  }
   function saveMeta() {
     meta.gistId = state.gistId; meta.lastPushedAt = state.lastPushedAt; meta.lastSyncAt = state.lastSyncAt;
     try { localStorage.setItem(META_KEY, JSON.stringify(meta)); } catch (e) {}
@@ -1675,8 +1684,8 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         // 跳过合并与刷新——既避免每次操作后的自动同步把页面滚回顶部，
         // 也避免 reconcile 拉取在无变更时销毁用户正在进行的就地编辑。
         const localObj = JSON.parse(window.Store.exportJSON());
-        // 与上传负载一致：默认不上云 AI Key（与 buildPayload 逻辑对齐）
-        if (!meta.syncAiKey && localObj.ai && typeof localObj.ai.key === 'string') localObj.ai.key = '';
+        // 与上传负载一致：仅在显式关闭同步时才剥离 AI Key（默认同步）
+        if (meta.syncAiKey === false && localObj.ai && typeof localObj.ai.key === 'string') localObj.ai.key = '';
         const localHash = contentHash(JSON.stringify(localObj));
         const remoteHash = contentHash(content);
         if (localHash === remoteHash) {
@@ -1706,10 +1715,10 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     }, SAVE_DEBOUNCE);
   }
 
-  // 构建上传负载：默认剥离 ai.key（Gist 链接可被匿名访问，敏感 Key 不默认上云）
+  // 构建上传负载：默认携带 ai.key（已默认开启同步；仅显式关闭时不带）
   function buildPayload() {
     const full = JSON.parse(window.Store.exportJSON());
-    if (!meta.syncAiKey && full.ai && typeof full.ai.key === 'string') full.ai.key = '';
+    if (meta.syncAiKey === false && full.ai && typeof full.ai.key === 'string') full.ai.key = '';
     return JSON.stringify(full);
   }
 
@@ -1929,7 +1938,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<span style="color:#c0392b;display:block;margin-top:6px">⚠ 跨设备同步的前提：<b>每台设备都粘贴【同一个】GitHub 令牌</b>。令牌指向同一份 Gist（即上方 ID 一致）→ 自动同步；若某台 ID 不同或显示「未同步」，说明它用的是另一个令牌/账号，数据自然各是各的。</span></div>'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:10px;color:#444">'
       + '<input type="checkbox" id="cv-ai"' + (meta.syncAiKey ? ' checked' : '') + '>'
-      + ' 同步 AI Key 到云端（默认关，Gist 链接可被匿名访问）</label>'
+      + ' 同步 AI Key 到云端（默认开，方便换设备免重填；Gist 链接可被匿名访问，介意可取消）</label>'
       + '<div class="row"><button class="primary" id="cv-sync">拉取+推送</button><button class="ghost" id="cv-pull">仅拉取远端</button></div>'
       + '<div class="row"><button class="primary" id="cv-copy">复制同步令牌</button><button class="ghost" id="cv-out">退出</button></div>'
       + '<div class="err" id="cv-err"></div>'
@@ -3302,6 +3311,22 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     return !!(a.endpoint && a.key && a.model);
   }
 
+  // 一次性迁移：老用户 thinkingMode 默认是 true（旧硬编码），从未手动设置过思考模式的应归为 undefined
+  // 这样非 DeepSeek 接口不会收到 chat_template_kwargs，避免 400
+  (function migrateThinkingMode() {
+    try {
+      var a = Store.get().ai;
+      // 只有值为 true 且用户从没手动改过（即 preset 还是默认或未设）才迁移
+      if (a && a.thinkingMode === true && !a._thinkingModeSetByUser) {
+        Store.update(function (s) {
+          if (s.ai.thinkingMode === true && !s.ai._thinkingModeSetByUser) {
+            s.ai.thinkingMode = undefined;
+          }
+        });
+      }
+    } catch (e) { /* 静默失败 */ }
+  })();
+
   function applyPreset(key) {
     const p = DB.AI_PRESETS[key];
     if (!p) return;
@@ -3342,20 +3367,31 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   function rawChat(messages, _noKwArgs) {
     _noKwArgs = !!_noKwArgs;
     const a = Store.get().ai;
-    const body = { model: a.model, messages, temperature: 0.6 };
-    // 思考模式关闭时，通知 API 不启用 Thinking 扩展（提速）
-    if (a.thinkingMode === false && !_noKwArgs) {
-      body.chat_template_kwargs = { enable_thinking: false };
+    // _noKwArgs 重试模式：极简 body
+    const body = _noKwArgs
+      ? { model: a.model, messages: messages }
+      : { model: a.model, messages: messages, temperature: 0.6 };
+    // 思考模式控制 Thinking 扩展：
+    //   thinkingMode === true  → 发 enable_thinking:true（让支持思考的模型进入思考）
+    //   thinkingMode === false → 发 enable_thinking:false（显式关闭）
+    //   未设置(undefined)     → 不发送 chat_template_kwargs（兼容非 DeepSeek 接口）
+    //   _noKwArgs=true        → 强制跳过（400 自动重试时使用）
+    if (!_noKwArgs && (a.thinkingMode === true || a.thinkingMode === false)) {
+      body.chat_template_kwargs = { enable_thinking: a.thinkingMode };
     }
+    var jsonBody = JSON.stringify(body);
+    console.log('[AI] rawChat 请求 endpoint=' + (a.endpoint || '').slice(0, 60) + ' model=' + a.model
+      + ' messages数量=' + messages.length + ' body前200字=' + jsonBody.slice(0, 200));
     return fetch(a.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + a.key },
-      body: JSON.stringify(body)
+      body: jsonBody
     }).then(function (r) {
       if (!r.ok) {
-        // 如果 400 且发送了 chat_template_kwargs，尝试不带该参数重试一次（兼容非 DeepSeek 接口）
-        if (r.status === 400 && a.thinkingMode === false && !_noKwArgs && body.chat_template_kwargs) {
-          console.warn('[AI] chat_template_kwargs 导致 400，自动去除重试');
+        // 400 无条件重试：首次失败时用极简 body 重试一次（只保留 model+messages）
+        if (r.status === 400 && !_noKwArgs) {
+          console.error('[AI] rawChat 400！原始body前300字:', jsonBody.slice(0, 300));
+          console.warn('[AI] 自动用极简请求体重试…');
           return rawChat(messages, true);
         }
         return httpError(r, '请求被拒绝');
@@ -3375,7 +3411,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     ]);
   }
 
-  // JSON 调用：容错提取首个 JSON 对象
+  // JSON 调用：多层容错提取（代码块 → 括号计数 → 修复 → 正则兜底）
   function chatJSON(systemPrompt, userText, imageDataUrl) {
     const userMsg = imageDataUrl
       ? { role: 'user', content: [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: imageDataUrl } }] }
@@ -3383,11 +3419,77 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     return rawChat([
       { role: 'system', content: systemPrompt },
       userMsg
-    ]).then(txt => {
-      const m = txt.match(/\{[\s\S]*\}/);
-      if (!m) throw new Error('AI未返回JSON');
-      return JSON.parse(m[0]);
-    });
+    ]).then(txt => extractRobustJSON(txt));
+  }
+
+  // 通用稳健 JSON 提取器（供 chatJSON 和各模块复用）
+  function extractRobustJSON(raw) {
+    var str = (raw || '').trim();
+
+    // 第 1 层：markdown 代码块
+    var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (m) { try { return JSON.parse(m[1].trim()); } catch (e) {} }
+
+    // 第 2 层：括号计数找最外层 [{...}] 或 {...}
+    var start = -1;
+    for (var i = 0; i < str.length; i++) {
+      if (str.charAt(i) === '[' || str.charAt(i) === '{') { start = i; break; }
+    }
+    if (start === -1) throw new Error('AI未返回JSON（未找到 [ 或 {）');
+    var isArr = str.charAt(start) === '[';
+    var openChar = isArr ? '[' : '{';
+    var closeChar = isArr ? ']' : '}';
+    var depth = 0, inStr = false, esc = false, end = -1;
+    for (var j = start; j < str.length; j++) {
+      var c = str.charAt(j);
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === openChar) depth++;
+      else if (c === closeChar) { depth--; if (depth === 0) { end = j + 1; break; } }
+    }
+    if (end <= start) throw new Error('AI返回的JSON不完整');
+
+    var jsonStr = str.slice(start, end);
+
+    // 第 3 层：直接解析
+    try { return JSON.parse(jsonStr); } catch (e) {}
+
+    // 第 4 层：修复常见格式问题后重试
+    var repaired = jsonStr
+      .replace(/\/\/[^\n]*/g, '')          // 去单行注释
+      .replace(/\/\*[\s\S]*?\*\//g, '')     // 去块注释
+      .replace(/,\s*([}\]])/g, '$1')        // 去尾逗号
+      .replace(/'/g, '"');                  // 单引号→双引号
+    try { return JSON.parse(repaired); } catch (e) {}
+
+    // 第 5 层（终极兜底）：正则逐字段捞值，构造对象
+    if (!isArr) {
+      var fields = {};
+      var patterns = [
+        ['w', /"w"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['com', /"com"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['rare', /"rare"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['ex', /"ex"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['word', /"word"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['question', /"question"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['solution', /"solution"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['subject', /"subject"\s*:\s*"([^"]*)"/],
+        ['keySteps', /"keySteps"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['errorCause', /"errorCause"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['extractedQuestion', /"extractedQuestion"\s*:\s*"((?:[^"\\]|\\.)*)"/],
+        ['painPoint', /"painPoint"\s*:\s*"((?:[^"\\]|\\.)*)"/]
+      ];
+      patterns.forEach(function (p) {
+        var mm = raw.match(p[1]);
+        if (mm) fields[p[0]] = mm[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+      });
+      // 如果捞到了关键字段就返回，否则抛出原始错误
+      if (fields.w || fields.word || fields.question) return fields;
+    }
+
+    throw new Error('AI未返回有效JSON（已尝试5层提取均失败）。原始回复前200字：' + str.slice(0, 200));
   }
 
   // 流式调用（SSE）：onChunk(累积正式内容, 累积思考内容) 逐字回调，最后 resolve 完整正式内容。
@@ -3399,22 +3501,32 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     const userMsg = imageDataUrl
       ? { role: 'user', content: [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: imageDataUrl } }] }
       : { role: 'user', content: userText };
-    const body = { model: a.model, stream: true,
-      messages: [{ role: 'system', content: systemPrompt }, userMsg]
-    };
-    // 思考模式关闭时，通知 API 不启用 Thinking 扩展（提速）
-    if (a.thinkingMode === false && !_noKwArgs) {
-      body.chat_template_kwargs = { enable_thinking: false };
+    // _noKwArgs 重试模式：极简 body（只保留 model + messages，去掉 stream/temperature 等可选字段）
+    const body = _noKwArgs
+      ? { model: a.model, messages: [{ role: 'system', content: systemPrompt }, userMsg] }
+      : { model: a.model, stream: true,
+          messages: [{ role: 'system', content: systemPrompt }, userMsg]
+        };
+    // 思考模式控制（同 rawChat 逻辑：仅在显式设置时发送；_noKwArgs 强制跳过）
+    if (!_noKwArgs && (a.thinkingMode === true || a.thinkingMode === false)) {
+      body.chat_template_kwargs = { enable_thinking: a.thinkingMode };
     }
+    var jsonBody = JSON.stringify(body);
+    // 调试日志：400 时可在控制台看到完整请求体（帮助定位问题）
+    console.log('[AI] chatStream 请求 endpoint=' + a.endpoint + ' model=' + a.model
+      + ' messages[0].content长度=' + (systemPrompt || '').length
+      + ' messages[1].content长度=' + (userText || '').length
+      + ' body前200字=' + jsonBody.slice(0, 200));
     return fetch(a.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + a.key },
-      body: JSON.stringify(body)
+      body: jsonBody
     }).then(function (r) {
       if (!r.ok) {
-        // 如果 400 且发送了 chat_template_kwargs，尝试不带该参数重试一次
-        if (r.status === 400 && a.thinkingMode === false && !_noKwArgs && body.chat_template_kwargs) {
-          console.warn('[AI] chatStream chat_template_kwargs 导致 400，自动去除重试');
+        // 400 无条件安全网：首次失败时，用最精简的请求体重试一次（只保留 model+messages，去掉 stream/temperature 等所有可选字段）
+        if (r.status === 400 && !_noKwArgs) {
+          console.error('[AI] chatStream 400！原始body前300字:', jsonBody.slice(0, 300));
+          console.warn('[AI] 自动用极简请求体重试…');
           return chatStream(systemPrompt, userText, onChunk, imageDataUrl, true);
         }
         return httpError(r, '请求被拒绝');
@@ -3453,9 +3565,25 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   const AI = {
     configured, applyPreset, weeklySummary, chat, chatJSON, chatStream,
     useStream() { return !!Store.get().ai.stream; },
-    useThinking() { return Store.get().ai.thinkingMode !== false; },
+    useThinking() { return Store.get().ai.thinkingMode === true; },
+    // 通用稳健 JSON 提取器（供各模块复用）
+    extractRobustJSON,
     // 动态出题提示词：每次访问按当前专业课生成（getter 保证换专业后即时生效）
     get QUIZ_PROMPT() { return quizPrompt(); },
+    // 深度复盘系统提示词：基于打包的「学习进度全景快照」做结构化深度分析
+    get DEEP_REVIEW_PROMPT() {
+      var major = activeMajorName();
+      return '你是一名2026考研深度复盘教练，服务对象专业课为「' + major + '」。'
+        + '用户提交了一份【当前学习进度全景快照】（已控制在5000字内，含四科进度、正确率趋势、错题/疑难点、弱点画像、心理状态、里程碑、学习时长等）。\n'
+        + '请基于这份快照做一次**深度复盘**，结构清晰、可直接指导行动：\n'
+        + '1. 总体诊断：当前状态健康度评估（给出风险等级：安全 / 警戒 / 危险）；\n'
+        + '2. 学科短板定位：每科最致命的 1-2 个问题（务必引用快照中的具体数据说话）；\n'
+        + '3. 根因分析：为何出现这些短板（学习习惯 / 时间分配 / 概念漏洞 / 心态）；\n'
+        + '4. 下周作战方案：逐日可执行的任务调整（具体到科目 / 题量 / 时长）；\n'
+        + '5. 防呆强化：针对符号、分式、易错点的强化动作；\n'
+        + '6. 心态与节奏：基于心理状态记录给出建议。\n'
+        + '要求：用简体中文；每个结论都要落到具体动作；避免空话套话；如快照数据不足请明确指出缺什么。';
+    },
     JUDGE_PROMPT,
     reviewWeekly(reportText) {
       const summary = weeklySummary();
@@ -3676,12 +3804,18 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
   // ---------- 每日一题 ----------
   var dailyGenerating = false;
+  var dqSubject = 'auto'; // 用户选定的出题科目：auto|math|ctrl|eng|pol
 
   function dailyQuizHtml(s) {
     var dq = s.dailyQuiz;
     var today = U.dkey();
+    var subjOpts = ['auto|🎲 自动(薄弱点)', 'math|📐 数学', 'ctrl|🎛 专业课', 'eng|📚 英语', 'pol|🏛 政治']
+      .map(function (o) { var p = o.split('|'); return '<option value="' + p[0] + '"' + (dqSubject === p[0] ? ' selected' : '') + '>' + p[1] + '</option>'; }).join('');
     var title = '<div class="card-title-row"><span class="card-title">📅 每日一题</span>'
-      + '<span style="display:flex;gap:4px">'
+      + '<span style="display:flex;gap:4px;align-items:center">'
+      + '<select id="dq-subj" class="input input-sel" style="font-size:11px;padding:2px 4px;height:auto;width:auto" title="指定出题科目">'
+      + subjOpts
+      + '</select>'
       + (dq && dq.date === today && dq.question
           ? '<button class="btn btn-ghost" id="dq-again" style="font-size:11px;padding:3px 8px">🔁 再来一题</button>'
           : '')
@@ -3734,11 +3868,13 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     });
   }
 
-  // 生成每日一题。force=true 为「再来一题」（覆盖今日）
-  function generateDailyQuiz(force, done) {
+  // 生成每日一题。force=true 为「再来一题」（覆盖今日）；subject 指定出题科目（auto|math|ctrl|eng|pol）
+  function generateDailyQuiz(force, done, subject) {
     if (typeof AI === 'undefined' || !AI.configured()) { if (done) done(); return; }
     var s = Store.get();
     var today = U.dkey();
+    var chosen = (subject || 'auto');
+    var chosenSubject = (chosen && chosen !== 'auto') ? chosen : null;
 
     var majorName = '';
     try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
@@ -3754,13 +3890,21 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       .slice(-6).map(function (p) { return (p.extractedQuestion || p.note).trim().slice(0, 50); });
 
     var ctxParts = [];
+    if (chosenSubject) {
+      var subjName = (DB.SUBJECTS[chosenSubject] && DB.SUBJECTS[chosenSubject].name) || chosenSubject;
+      ctxParts.push('本次请**聚焦科目「' + subjName + '」**出题（不要出其它科目的题）。');
+    }
     if (wp && wp.weakAreas && wp.weakAreas.length) ctxParts.push('考生薄弱点画像关键词：' + wp.weakAreas.join('、'));
     if (painPoints.length) ctxParts.push('近期疑难点标签：' + painPoints.join('、'));
     if (qSamples.length) ctxParts.push('部分错题题干样例：\n- ' + qSamples.join('\n- '));
     var ctx = ctxParts.length ? ctxParts.join('\n') : '（暂无错题记录，请基于该考生专业课「' + profName + '」常见易错点出题）';
 
+    var subjectHint = chosenSubject
+      ? '本题必须属于科目「' + ((DB.SUBJECTS[chosenSubject] && DB.SUBJECTS[chosenSubject].name) || chosenSubject) + '」，输出 JSON 时 "subject" 字段固定填 "' + chosenSubject + '"。'
+      : '输出 JSON 时 "subject" 字段填该题目实际所属科目（math|ctrl|eng|pol）。';
     var systemPrompt = '你是考研出题官，熟悉「' + profName + '」及数学公共课的命题。'
       + '根据考生的薄弱点画像与近期错题，出一道**针对性练习题**（聚焦其真正薄弱的考点，难度贴合真题）。'
+      + subjectHint
       + '输出严格 JSON（不要 markdown、不要多余文字）：'
       + '{"subject":"math|ctrl|eng|pol（该题目所属科目）",'
       + '"question":"完整题干（数学表达式用 LaTeX 如 \\frac{a}{b}、\\sqrt{x}、x^{2}、\\int、\\sum）",'
@@ -3781,7 +3925,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
           .replace(/^\s*"question"\s*:\s*"/i, '')
           .replace(/",\s*solution"\s*:.*/s, '');               // 截断到 question 尾
         cleaned = cleaned.trim().replace(/\n+$/, '');
-        res = { subject: 'math', question: cleaned || fullText, solution: '', trap: '' };
+        res = { subject: chosenSubject || 'math', question: cleaned || fullText, solution: '', trap: '' };
       }
       Store.update(function (st) {
         var prev = st.dailyQuiz;
@@ -3796,7 +3940,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         }
         st.dailyQuiz = {
           date: today,
-          subject: res.subject || 'math',
+          subject: chosenSubject || res.subject || 'math',
           question: res.question || '',
           solution: res.solution || '',
           trap: res.trap || '',
@@ -3977,18 +4121,22 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => App.go(b.getAttribute('data-go')));
     el.querySelector('#go-sched').onclick = () => App.go('scheduler');
 
+    // 每日一题：科目选择
+    var dqSubjSel = el.querySelector('#dq-subj');
+    if (dqSubjSel) dqSubjSel.onchange = () => { dqSubject = dqSubjSel.value; };
+
     // 每日一题「再来一题」/「重试生成」
     var dqAgain = el.querySelector('#dq-again');
     if (dqAgain) dqAgain.onclick = () => {
       dqAgain.disabled = true;
       dqAgain.textContent = '生成中…';
-      generateDailyQuiz(true, function () { App.refresh(); });
+      generateDailyQuiz(true, function () { App.refresh(); }, dqSubject);
     };
     var dqRetry = el.querySelector('#dq-retry');
     if (dqRetry) dqRetry.onclick = () => {
       dqRetry.disabled = true;
       dqRetry.textContent = '生成中…';
-      generateDailyQuiz(true, function () { App.refresh(); });
+      generateDailyQuiz(true, function () { App.refresh(); }, dqSubject);
     };
 
     // 记时长
@@ -5091,9 +5239,22 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<div class="card"><div class="card-title">本周战报 <button class="link-btn" id="rv-copy">复制文本</button></div>'
       + '<pre class="report" id="rv-report"></pre>'
       + '<div class="btn-row">'
-      + '<button class="btn btn-ghost" id="rv-ai">🤖 发送给 AI 深度复盘</button>'
+      + '<button class="btn btn-primary" id="rv-deep-btn">🧠 启动深度复盘（看AI思考过程）</button>'
+      + '<button class="btn btn-ghost" id="rv-ai">🤖 发给AI(快速版)</button>'
       + '<button class="btn btn-ghost" id="rv-export">导出本周JSON</button>'
-      + '</div></div>'
+      + '</div>'
+      + '<div class="card" id="rv-deep-card" style="display:none;margin-top:10px">'
+      + '<div class="card-title">🧠 AI 深度复盘'
+      + '<span class="muted-sm">（结果已自动保存，切去别的页面再回来仍在这里）</span></div>'
+      + '<details style="margin-bottom:8px"><summary class="muted-sm">查看打包发给 AI 的进度快照（≤5000字）</summary>'
+      + '<pre class="report" id="rv-deep-snap" style="max-height:200px;overflow:auto;font-size:11px;white-space:pre-wrap"></pre></details>'
+      + '<div id="rv-deep-think-wrap" style="display:none;margin-bottom:8px">'
+      + '<div class="card-title-sm" style="opacity:.72">💭 AI 思考过程</div>'
+      + '<pre class="report" id="rv-deep-think" style="max-height:220px;overflow:auto;opacity:.82;font-size:12px;white-space:pre-wrap"></pre></div>'
+      + '<div class="card-title-sm">📋 深度分析结论</div>'
+      + '<pre class="report" id="rv-deep-out" style="min-height:80px;white-space:pre-wrap">等待开始…</pre>'
+      + '<div class="muted-sm" id="rv-deep-status"></div>'
+      + '</div>'
 
       // 月里程碑检查
       + '<div class="card"><div class="card-title">月里程碑检查</div>'
@@ -5108,10 +5269,15 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
     document.getElementById('rv-report').textContent = reportText(d);
     bind(el);
+    restoreDeepReview(); // 切回本页时恢复已持久化的深度复盘结果（非阻塞、无需重生成）
   }
 
   function bind(el) {
     el.querySelector('#go-mental').onclick = () => App.go('mental');
+    el.querySelector('#rv-deep-btn').onclick = () => {
+      if (!window.AI || !AI.configured()) { Toast.warn('请先在「设置」中配置 AI'); return; }
+      startDeepReview();
+    };
     el.querySelector('#rv-save').onclick = () => {
       const acc = parseFloat(el.querySelector('#rv-acc').value);
       Store.update(s => {
@@ -5155,6 +5321,171 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         Toast.success('已更新');
       };
     });
+  }
+
+  // ---------- 深度复盘：打包全部学习进度快照（≤5000字）----------
+  function activeProfName() {
+    try { return (DB.getActiveMajor() && DB.getActiveMajor().name) || '专业课'; } catch (e) { return '专业课'; }
+  }
+  function schoolLabel(t) {
+    if (!t || t === 'undecided') return '未定';
+    return (DB.SCHOOLS[t] && DB.SCHOOLS[t].name) || t;
+  }
+  function deepSnapshot() {
+    const s = Store.get();
+    const lines = [];
+    const push = (t) => lines.push(t);
+    push('【考研学习进度全景快照】生成日期：' + U.dkey());
+    // 目标与背景
+    push('目标院校：' + schoolLabel(s.settings.targetSchool) + '；专业课：' + activeProfName()
+      + '；周目标时长：' + (s.settings.weeklyTargetHours || 50) + 'h；考试日期：' + (s.settings.examDate || '未设'));
+    // 四科进度
+    push('\n【四科进度】');
+    ['math', 'ctrl', 'eng', 'pol'].forEach(k => {
+      const meta = DB.SUBJECTS[k];
+      const p = s.progress[k] || {};
+      let mods = '';
+      if (p.modules) { const ks = Object.keys(p.modules); if (ks.length) mods = ' 模块：' + ks.map(m => m + ':' + p.modules[m] + '%').join('、'); }
+      push('· ' + meta.name + '：总进度 ' + (p.percent || 0) + '%' + (p.stage ? '（阶段：' + p.stage + '）' : '') + mods);
+    });
+    // 正确率趋势（近8周）
+    push('\n【数学正确率趋势（近8周）】');
+    const wks = Object.keys(s.weeklyStats || {}).sort().reverse().slice(0, 8).reverse();
+    push(wks.length ? wks.map(k => k + '=' + ((s.weeklyStats[k] && s.weeklyStats[k].mathAccuracy != null) ? s.weeklyStats[k].mathAccuracy + '%' : '-')).join('  ') : '（无记录）');
+    // 错题
+    push('\n【错题统计】');
+    const totalM = (s.mistakes || []).length;
+    const wkM = (s.mistakes || []).filter(m => U.inThisWeek((m.createdAt || '').slice(0, 10))).length;
+    push('累计 ' + totalM + ' 条，本周 ' + wkM + ' 条；符号错误本周 ' + Store.mistakeCountWeek('sign') + ' 次');
+    const top = Store.weekTopMistakes().map(t => ((DB.MISTAKE_TYPES[t.key] || {}).name || t.key) + '×' + t.count);
+    push('本周主要错误类型：' + (top.length ? top.join('、') : '无'));
+    // 拍题疑难点 + 弱点画像
+    push('\n【拍题疑难点标签】');
+    const pains = (s.mistakePhotos || []).filter(p => p.painPoint && p.painPoint.trim()).map(p => p.painPoint.trim());
+    push(pains.length ? pains.slice(-20).join('、') : '（无记录）');
+    if (s.weaknessProfile) {
+      const wp = s.weaknessProfile;
+      push('\n【弱点画像】（' + (wp.generatedAt || '').slice(0, 10) + '）');
+      push('薄弱点：' + (wp.weakAreas || []).join('、'));
+      push('总结：' + (wp.summary || ''));
+      push('复习建议：' + (wp.advice || ''));
+    }
+    // 每日一题历史
+    push('\n【每日一题历史（最近5道）】');
+    const dqh = (s.dailyQuizHistory || []).slice(-5).reverse();
+    push(dqh.length ? dqh.map((q, i) => ((i + 1) + '. ' + ((DB.SUBJECTS[q.subject] || { short: '题' }).short) + '：' + (q.question || '').slice(0, 40))).join('\n') : '（无）');
+    // 心理状态
+    push('\n【心理状态（最近8条）】');
+    const mentalMap = { normal: '正常', anxious: '焦虑', tired: '疲劳', impulsive: '冲动', panic: '恐慌' };
+    const ment = (s.mental || []).slice(-8);
+    push(ment.length ? ment.map(m => (m.date || '').slice(5) + ':' + (mentalMap[m.mood] || m.mood) + (m.hwUrge ? '(分心冲动)' : '')).join('  ') : '（无记录）');
+    // 里程碑
+    push('\n【里程碑达成】');
+    push(DB.MILESTONES.map(m => (s.milestones[m.id] ? '✓' : '✗') + m.date + (m.title ? (' ' + m.title.slice(0, 22)) : '')).join('  '));
+    // 学习时长
+    push('\n【本周学习时长】');
+    push(Store.weekHours().map((v, i) => (['一', '二', '三', '四', '五', '六', '日'][i] + ':' + v + 'h')).join(' '));
+    const focusSessions = (s.focus && s.focus.sessions) || [];
+    push('累计专注 ' + U.round1(U.sum(focusSessions.map(x => x.mins)) / 60) + 'h，专注次数 ' + focusSessions.length);
+    // 教练已知弱点
+    const cp = DB.coachProfile();
+    push('\n【教练已知你的弱点】数学：' + cp.mathWeak + '；分心源：' + cp.distractions);
+
+    let txt = lines.join('\n');
+    const MAX = 5000;
+    if (txt.length > MAX) txt = txt.slice(0, MAX) + '\n…（已截断至5000字）';
+    return txt;
+  }
+
+  // 启动深度复盘（流式，结果持久化到 Store，切页面/刷新不丢失，非阻塞）
+  let _lastSaveTs = 0;
+  function saveDeep(partial) {
+    Store.update(s => {
+      s.deepReview = Object.assign(s.deepReview || {}, { generatedAt: s.deepReview && s.deepReview.generatedAt || new Date().toISOString() }, partial);
+    });
+  }
+  function startDeepReview() {
+    const card = document.getElementById('rv-deep-card');
+    const snapEl = document.getElementById('rv-deep-snap');
+    const thinkEl = document.getElementById('rv-deep-think');
+    const thinkWrap = document.getElementById('rv-deep-think-wrap');
+    const outEl = document.getElementById('rv-deep-out');
+    const statusEl = document.getElementById('rv-deep-status');
+    const btn = document.getElementById('rv-deep-btn');
+    if (card) card.style.display = '';
+    const snap = deepSnapshot();
+    if (snapEl) snapEl.textContent = snap;
+    if (thinkWrap) thinkWrap.style.display = 'none';
+    if (thinkEl) thinkEl.textContent = '';
+    if (outEl) { outEl.textContent = '🤔 AI 思考中…'; outEl.scrollTop = 0; }
+    if (statusEl) statusEl.textContent = '⏳ 正在生成深度复盘（可随时切到其它页面，结果会自动保存）…';
+    if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+
+    // 安全校验：确保 prompt 和 snapshot 有效
+    var sysPrompt = AI.DEEP_REVIEW_PROMPT;
+    if (typeof sysPrompt !== 'string' || !sysPrompt) {
+      console.error('[DeepReview] DEEP_REVIEW_PROMPT 异常！type=' + typeof sysPrompt, sysPrompt);
+      if (outEl) outEl.textContent = '错误：系统提示词生成失败，请刷新页面重试。';
+      if (btn) { btn.disabled = false; btn.textContent = '🧠 重试深度复盘'; }
+      return;
+    }
+    console.log('[DeepReview] 开始调用AI sysPrompt长度=' + sysPrompt.length + ' snap长度=' + snap.length);
+
+    // 持久化初始状态（即使切走也能恢复）
+    saveDeep({ week: Store.weekKey(), snap: snap, reasoning: '', output: '🤔 AI 思考中…', status: '生成中', running: true });
+
+    AI.chatStream(sysPrompt, snap, function (text, reasoning) {
+      if (reasoning && thinkEl && thinkWrap) { thinkWrap.style.display = ''; thinkEl.textContent = reasoning; thinkEl.scrollTop = thinkEl.scrollHeight; }
+      if (text && outEl) { outEl.textContent = text; outEl.scrollTop = outEl.scrollHeight; }
+      if (statusEl && text) statusEl.textContent = '✓ 流式输出中…';
+      // 节流写入 Store（每 ~1.2s 一次，避免每次 chunk 都触发 localStorage 写）
+      var now = Date.now();
+      if (now - _lastSaveTs > 1200) {
+        _lastSaveTs = now;
+        saveDeep({ reasoning: reasoning || '', output: text || '', status: '生成中', running: true });
+      }
+    }).then(function () {
+      if (statusEl) statusEl.textContent = '✓ 深度复盘完成。可复制下方结论，或继续其它操作。';
+      if (btn) { btn.disabled = false; btn.textContent = '🧠 重新深度复盘'; }
+      // 终态持久化（确保最后的完整结论被保存）
+      saveDeep({ status: '完成', running: false, generatedAt: new Date().toISOString() });
+      // 把最终 output 从 DOM 同步回 Store（节流可能漏掉最后几字）
+      if (outEl) saveDeep({ output: outEl.textContent, reasoning: (thinkEl ? thinkEl.textContent : '') });
+    }).catch(function (e) {
+      if (outEl) outEl.textContent = '生成失败：' + (e && e.message ? e.message : e);
+      if (statusEl) statusEl.textContent = '⚠ 生成失败，请检查 AI 配置后重试。';
+      if (btn) { btn.disabled = false; btn.textContent = '🧠 重试深度复盘'; }
+      saveDeep({ status: '失败：' + (e && e.message ? e.message : e), running: false });
+    });
+  }
+
+  // 渲染时恢复已持久化的深度复盘结果（切页面/刷新后不丢失，无需重生成）
+  function restoreDeepReview() {
+    const s = Store.get();
+    const dr = s.deepReview;
+    if (!dr || !dr.week || dr.week !== Store.weekKey()) return; // 仅当周有效
+    const card = document.getElementById('rv-deep-card');
+    const snapEl = document.getElementById('rv-deep-snap');
+    const thinkEl = document.getElementById('rv-deep-think');
+    const thinkWrap = document.getElementById('rv-deep-think-wrap');
+    const outEl = document.getElementById('rv-deep-out');
+    const statusEl = document.getElementById('rv-deep-status');
+    const btn = document.getElementById('rv-deep-btn');
+    if (!card) return;
+    card.style.display = '';
+    if (snapEl) snapEl.textContent = dr.snap || '';
+    if (thinkEl) thinkEl.textContent = dr.reasoning || '';
+    if (thinkWrap) thinkWrap.style.display = (dr.reasoning ? '' : 'none');
+    if (outEl) outEl.textContent = dr.output || '等待开始…';
+    if (statusEl) {
+      statusEl.textContent = dr.running
+        ? '⏳ 正在生成中（后台进行，可切换页面；回来此处自动刷新）…'
+        : (dr.status || '✓ 已完成（结果已保存）');
+    }
+    if (btn) {
+      if (dr.running) { btn.disabled = true; btn.textContent = '生成中…'; }
+      else { btn.disabled = false; btn.textContent = '🧠 重新深度复盘'; }
+    }
   }
 
   window.ReviewModule = { render, reportText, weekData };
@@ -7076,10 +7407,14 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 
 /* ===== js/modules/reading.js ===== */
 /* ============================================================
- * reading.js — 英语阅读定位法训练器
+ * reading.js — 英语阅读定位法训练器 + AI 深度辅助
  * 功能1：熟词僻义闪卡（Leitner盒间隔重复）
  * 功能2：定位法计时训练（每题≤90秒）
  * 功能3：虚假繁荣检测（连续全对但用时极短 → 提示）
+ * 功能4：🔍 AI 单词深度解析（搭配/真题例句/记忆法/同反义词）
+ * 功能5：📝 AI 长难句拆解（语法结构+翻译+考点）
+ * 功能6：📋 AI 阅读理解出题（基于粘贴文本自动生成题目+选项+解析）
+ * 功能7：🎯 AI 智能复习建议（基于错词/弱词数据生成个性化计划）
  * ============================================================ */
 (function () {
   'use strict';
@@ -7144,6 +7479,20 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         + '<button class="btn btn-primary" id="rd-start">开始计时定位</button>'
         + '</div><div id="rd-arena"></div></div>'
 
+        // ---- AI 长难句拆解 ----
+        + '<div class="card"><div class="card-title">📝 AI 长难句拆解分析</div>'
+        + '<div class="muted-sm">粘贴考研英语长难句，AI 自动拆解语法结构、标注从句层次、给出参考翻译和考点提示。</div>'
+        + '<textarea class="input" id="rd-sentence" rows="3" placeholder="粘贴一个长难句，如：The idea that some groups of people may be more intelligent than others is one of those hypotheses that dare not speak its name."></textarea>'
+        + '<div class="btn-row" style="margin:8px 0"><button class="btn btn-primary" id="rd-sentence-ai">🔍 AI 拆解句子</button></div>'
+        + '<div id="rd-sentence-result"></div></div>'
+
+        // ---- AI 阅读理解出题 ----
+        + '<div class="card"><div class="card-title">📋 AI 阅读理解出题</div>'
+        + '<div class="muted-sm">粘贴一段英文阅读材料（100~800词），AI 自动生成 2~4 道考研风格阅读理解题（含选项、答案、解析）。</div>'
+        + '<textarea class="input" id="rd-passage" rows="4" placeholder="粘贴阅读原文段落…"></textarea>'
+        + '<div class="btn-row" style="margin:8px 0"><button class="btn btn-primary" id="rd-quiz-ai">📋 AI 生成题目</button></div>'
+        + '<div id="rd-quiz-result"></div></div>'
+
         + (bubble ? '<div class="alert alert-warn">🎈 虚假繁荣检测：近10题全对但平均仅 ' + bubble.avgSecs + ' 秒。是否存在蒙对可能？建议精读错题分析，并对每题复述定位依据。</div>' : '')
 
         + '<div class="card"><div class="card-title">近期定位记录（' + results.length + ' 题）</div>'
@@ -7158,19 +7507,30 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         '<div class="card"><div class="card-title-row"><span class="card-title">熟词僻义闪卡（Leitner间隔重复）</span>'
         + '<button class="link-btn" id="fc-import">+ 导入单词</button></div>'
         + '<div class="muted-sm">到期 ' + due.length + ' 张 · 已入库 ' + learned + '/' + allVocab().length + ' 词（含自定义 ' + (Store.get().reading.customVocab || []).length + '）。答错回到第1盒，答对晋级。</div>'
-        + (cur
+        +         (cur
           ? '<div class="flashcard" id="fc-card">'
             + '<div class="fc-word">' + U.esc(cur.w) + '</div>'
             + (cardFlip
               ? '<div class="fc-back"><div><b>常义：</b>' + U.esc(cur.com) + '</div><div class="fc-rare"><b>僻义：</b>' + U.esc(cur.rare) + '</div><div class="fc-ex">' + U.esc(cur.ex) + '</div></div>'
               : '<div class="fc-hint">点击卡片翻面（先回忆僻义再翻）</div>')
             + '</div>'
-          + (cardFlip
-            ? '<div class="btn-row"><button class="btn btn-danger" id="fc-no">没想起来</button><button class="btn btn-primary" id="fc-yes">想起来了</button></div>'
-            : '')
+            + (cardFlip
+              ? '<div class="btn-row">'
+                + '<button class="btn btn-ghost" id="fc-ai-detail" style="font-size:12px">🔍 AI深度解析</button>'
+                + '<button class="btn btn-danger" id="fc-no">没想起来</button><button class="btn btn-primary" id="fc-yes">想起来了</button></div>'
+              : '')
           : '<div class="empty">今日闪卡全部完成！明天再来。</div>')
         + '</div>'
-        + '<div class="card"><div class="card-title">词库掌握分布</div><div id="fc-dist"></div></div>';
+        + '<div class="card"><div class="card-title">词库掌握分布</div><div id="fc-dist"></div></div>'
+
+        // ---- AI 单词深度解析结果区（动态注入）----
+        + '<div id="fc-ai-detail-result"></div>'
+
+        // ---- AI 智能复习建议 ----
+        + '<div class="card"><div class="card-title-row"><span class="card-title">🎯 AI 智能复习建议</span>'
+        + '<button class="link-btn" id="fc-ai-review">生成复习计划</button></div>'
+        + '<div class="muted-sm">基于你的错词记录和掌握分布，AI 生成个性化复习策略。</div>'
+        + '<div id="fc-review-result"></div></div>';
     }
 
     el.innerHTML =
@@ -7244,9 +7604,138 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
     if (yes) yes.onclick = () => { const cur = due[cardIdx % due.length]; grade(cur.w, true); cardIdx++; cardFlip = false; render(el); };
     if (no) no.onclick = () => { const cur = due[cardIdx % due.length]; grade(cur.w, false); cardIdx++; cardFlip = false; Toast.warn('已回到第1盒，明天再见'); render(el); };
 
+    // ---- AI 单词深度解析 ----
+    const aiDetailBtn = el.querySelector('#fc-ai-detail');
+    if (aiDetailBtn) aiDetailBtn.onclick = () => {
+      const cur = due[cardIdx % due.length];
+      if (!cur) return;
+      aiDetailBtn.disabled = true; aiDetailBtn.textContent = '🔍 分析中…';
+      const resultEl = document.getElementById('fc-ai-detail-result');
+      if (resultEl) resultEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在深度解析「' + U.esc(cur.w) + '」…</div>';
+      AI.chatStream(
+        '你是考研英语词汇专家。对给定单词做深度解析，用简体中文回答。结构要求：\n'
+        + '1. **词源与记忆法**：词根词缀拆解+联想记忆（一句话）\n'
+        + '2. **考研核心僻义**：列出2-3个考研最常考的生僻含义，每个配真题风格例句（英文+中文翻译）\n'
+        + '3. **高频搭配**：5个常考短语/固定搭配\n'
+        + '4. **同义/反义词**：各3-4个（优先考研高频词）\n'
+        + '5. **易错警示**：考生最容易混淆的用法或含义\n'
+        + '格式清晰，用 emoji 分段。不要用 JSON。',
+        '请深度解析单词：' + cur.w + '（已知常见义：' + cur.com + '；僻义：' + cur.rare + '）',
+        function (text) {
+          if (resultEl) resultEl.innerHTML = '<div class="card" style="margin-top:10px;background:var(--bg-card);border:1px solid var(--accent);border-radius:8px;padding:14px">'
+            + '<div class="card-title" style="font-size:13px">🔍 「' + U.esc(cur.w) + '」AI 深度解析</div>'
+            + '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap">' + U.esc(text) + '</div></div>';
+        }
+      ).then(function () {
+        aiDetailBtn.disabled = false; aiDetailBtn.textContent = '🔍 AI深度解析';
+      }).catch(function (err) {
+        if (resultEl) resultEl.innerHTML = '<div class="alert alert-danger">解析失败：' + U.esc(err && err.message || err || '未知错误') + '</div>';
+        aiDetailBtn.disabled = false; aiDetailBtn.textContent = '🔍 AI深度解析';
+      });
+    };
+
+    // ---- AI 智能复习建议 ----
+    const reviewBtn = el.querySelector('#fc-ai-review');
+    if (reviewBtn) reviewBtn.onclick = () => {
+      if (!AI.configured()) { Toast.warn('需先配置 AI Key'); return; }
+      reviewBtn.disabled = true; reviewBtn.textContent = '生成中…';
+      const resultEl = document.getElementById('fc-review-result');
+      // 收集学习数据
+      const s = Store.get();
+      const cards = s.reading.cards || {};
+      const customVocab = s.reading.customVocab || [];
+      const results = s.reading.results || [];
+      // 统计错词（box=1 的词 = 刚答错的）
+      var wrongWords = [];
+      Object.keys(cards).forEach(function (w) { if (cards[w].box === 1) wrongWords.push(w); });
+      // 统计近期正确率
+      var recent = results.slice(-20);
+      var recentAcc = recent.length ? Math.round(recent.filter(function (r) { return r.correct; }).length / recent.length * 100) : 0;
+      var avgTime = recent.length ? Math.round(recent.reduce(function (s, r) { return s + r.secs; }, 0) / recent.length) : 0;
+      var dataCtx = '总入库词数：' + allVocab().length + '（自定义' + customVocab.length + '）\n'
+        + '已学词数：' + Object.keys(cards).length + '\n'
+        + '当前薄弱词（盒1，共' + wrongWords.length + '个）：' + (wrongWords.slice(0, 15).join('、') || '无') + '\n'
+        + '近20题正确率：' + recentAcc + '%，平均用时：' + avgTime + '秒\n'
+        + '自定义词列表：' + customVocab.map(function (v) { return v.w + '(' + v.rare + ')'; }).join('、').slice(0, 500);
+      if (resultEl) resultEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在分析你的词汇数据…</div>';
+      AI.chatStream(
+        '你是考研英语复习规划师。基于用户词汇学习数据，给出个性化复习建议。\n'
+        + '输出结构（用中文，分段清晰）：\n'
+        + '## 📊 当前状态评估\n（总体掌握程度判断）\n'
+        + '## 🎯 薄弱词重点突破计划\n（针对薄弱词给出具体记忆策略，每天5-10个）\n'
+        + '## 📅 本周复习日程表\n（按天分配：哪些词复习、用什么方法）\n'
+        + '## 💡 提分建议\n（阅读定位/熟词僻义/长难句的具体提升动作）\n'
+        + '要求：具体可执行，避免空话。',
+        dataCtx,
+        function (text) {
+          if (resultEl) resultEl.innerHTML = '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap;margin-top:8px">' + U.esc(text) + '</div>';
+        }
+      ).then(function () {
+        reviewBtn.disabled = false; reviewBtn.textContent = '生成复习计划';
+      }).catch(function (err) {
+        if (resultEl) resultEl.innerHTML = '<div class="alert alert-danger">生成失败：' + U.esc(err && err.message || err || '未知') + '</div>';
+        reviewBtn.disabled = false; reviewBtn.textContent = '生成复习计划';
+      });
+    };
+
     // ---- 导入单词 ----
     const imp = el.querySelector('#fc-import');
     if (imp) imp.onclick = () => openImport(el);
+
+    // ---- AI 长难句拆解（drill tab）----
+    const sentBtn = el.querySelector('#rd-sentence-ai');
+    if (sentBtn) sentBtn.onclick = () => {
+      var sentence = (el.querySelector('#rd-sentence').value || '').trim();
+      if (!sentence) { Toast.warn('请先粘贴一个句子'); return; }
+      if (!AI.configured()) { Toast.warn('需先配置 AI Key'); return; }
+      sentBtn.disabled = true; sentBtn.textContent = '🔍 拆解中…';
+      var resEl = el.querySelector('#rd-sentence-result');
+      if (resEl) resEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在拆解…</div>';
+      AI.chatStream(
+        '你是考研英语语法专家。对给定长难句做结构拆解分析。用中文回答，格式要求：\n'
+        + '## 🔤 句子原文\n（原句）\n'
+        + '## 🏗️ 语法结构\n（主语/谓语/宾语/定语/状语/同位语/插入语等层次标注）\n'
+        + '## 📖 参考翻译\n（通顺的中文翻译）\n'
+        + '## 🎯 考点提示\n（本句涉及的考研语法考点：从句类型、非谓语、倒装、省略、分隔结构等）\n'
+        + '## 💡 难点突破\n（一句话点明最容易卡住的地方）',
+        sentence,
+        function (text) {
+          if (resEl) resEl.innerHTML = '<div style="font-size:13px;line-height:1.8;white-space:pre-wrap;margin-top:8px;padding:12px;background:var(--bg-card);border-radius:8px;border:1px solid var(--accent)">' + U.esc(text) + '</div>';
+        }
+      ).then(function () { sentBtn.disabled = false; sentBtn.textContent = '🔍 AI 拆解句子'; })
+        .catch(function (err) {
+          if (resEl) resEl.innerHTML = '<div class="alert alert-danger">拆解失败：' + U.esc(err && err.message || err || '') + '</div>';
+          sentBtn.disabled = false; sentBtn.textContent = '🔍 AI 拆解句子';
+        });
+    };
+
+    // ---- AI 阅读理解出题（drill tab）----
+    const quizBtn = el.querySelector('#rd-quiz-ai');
+    if (quizBtn) quizBtn.onclick = () => {
+      var passage = (el.querySelector('#rd-passage').value || '').trim();
+      if (!passage) { Toast.warn('请先粘贴阅读材料'); return; }
+      if (!AI.configured()) { Toast.warn('需先配置 AI Key'); return; }
+      quizBtn.disabled = true; quizBtn.textContent = '📋 出题中…';
+      var resEl = el.querySelector('#rd-quiz-result');
+      if (resEl) resEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在阅读材料并生成题目…</div>';
+      AI.chatStream(
+        '你是考研英语命题专家。基于给定的英文阅读材料，生成2~4道考研风格的阅读理解题。\n'
+        + '每题必须包含：\n'
+        + '- **题目**（完整问题文本）\n'
+        + '- **选项** A/B/C/D 四个选项\n'
+        + '- **正确答案** 及 **详细解析**（指出定位依据、干扰项陷阱）\n'
+        + '- **题型标签**（细节题/推断题/主旨题/态度题/词义题）\n'
+        + '要求：题目难度贴近真题；选项要有迷惑性；解析要具体到句子级别；用中文出题和解析。',
+        passage.slice(0, 3000),
+        function (text) {
+          if (resEl) resEl.innerHTML = '<div style="font-size:13px;line-height:1.8;white-space:pre-wrap;margin-top:8px;padding:14px;background:var(--bg-card);border-radius:8px;border:1px solid var(--accent)">' + U.esc(text) + '</div>';
+        }
+      ).then(function () { quizBtn.disabled = false; quizBtn.textContent = '📋 AI 生成题目'; })
+        .catch(function (err) {
+          if (resEl) resEl.innerHTML = '<div class="alert alert-danger">出题失败：' + U.esc(err && err.message || err || '') + '</div>';
+          quizBtn.disabled = false; quizBtn.textContent = '📋 AI 生成题目';
+        });
+    };
   }
 
   // 导入弹窗：手动粘贴 或 AI整理
@@ -7515,7 +8004,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
       + '<label class="fld"><span>模型</span><input id="ai-model" class="input" value="' + U.esc(s.ai.model) + '"></label>'
       + '</div>'
       + '<label class="check-row" style="margin-top:8px"><input type="checkbox" id="ai-stream"' + (s.ai.stream ? ' checked' : '') + '><span class="box"></span><span>流式输出（AI回复逐字显示，体验更流畅）</span></label>'
-      + '<label class="check-row" style="margin-top:6px"><input type="checkbox" id="ai-thinking"' + (s.ai.thinkingMode !== false ? ' checked' : '') + '><span class="box"></span><span>思考模式（开启后 AI 会先思考再回答，质量更高但稍慢；关闭可提速）</span></label>'
+      + '<label class="check-row" style="margin-top:6px"><input type="checkbox" id="ai-thinking"' + (s.ai.thinkingMode === true ? ' checked' : '') + '><span class="box"></span><span>思考模式（开启后 AI 会先思考再回答，质量更高但稍慢；关闭可提速）</span></label>'
       + '<div class="muted-sm" id="ai-hint">' + U.esc((DB.AI_PRESETS[s.ai.preset] || DB.AI_PRESETS.deepseek).hint) + '</div>'
       + '<div class="btn-row" style="margin-top:10px">'
       + '<button class="btn btn-primary" id="ai-save">保存配置</button>'
@@ -7847,6 +8336,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
         s.ai.model = el.querySelector('#ai-model').value.trim();
         s.ai.stream = el.querySelector('#ai-stream').checked;
         s.ai.thinkingMode = el.querySelector('#ai-thinking').checked;
+        if (s.ai.thinkingMode === true || s.ai.thinkingMode === false) s.ai._thinkingModeSetByUser = true;
       });
       Toast.success('AI 配置已保存' + (AI.configured() ? '，可直接使用AI复盘' : ''));
     };
