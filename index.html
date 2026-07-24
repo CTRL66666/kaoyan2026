@@ -740,6 +740,78 @@ body.cp-lock { overflow: hidden; }
   #copilot-panel { transition: none; }
 }
 
+/* ============================================================
+ * Round 2：作战日历 / 每日一题作答 / 状态栏streak / 到期复习 / Copilot图片
+ * ============================================================ */
+/* 状态栏连续作战 */
+.sb-streak { color: #d4380d; }
+
+/* ---------- 作战日历 ---------- */
+.cal-grid { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.cal-row { display: flex; gap: 3px; }
+.cal-cell { flex: 1; aspect-ratio: 1; border-radius: 3px; background: var(--line); min-width: 0; }
+.cal-lv0 { background: #ededed; }
+.cal-lv1 { background: #d4d4d4; }
+.cal-lv2 { background: #a3a3a3; }
+.cal-lv3 { background: #666; }
+.cal-lv4 { background: #111; }
+.cal-empty { background: transparent; }
+.cal-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.cal-legend .cal-cell { flex: 0 0 12px; width: 12px; height: 12px; aspect-ratio: auto; }
+
+/* ---------- 每日一题作答模式 ---------- */
+.dq-fold { padding: 10px 12px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r-btn); font-size: 13px; color: var(--text-secondary); margin: 8px 0; }
+.dq-eval-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.dq-eval { margin-top: 10px; padding: 8px 10px; border-radius: var(--r-btn); font-size: 13px; }
+.dq-eval-ok { background: #f6ffed; border: 1px solid #b7eb8f; color: var(--ok); }
+.dq-eval-no { background: #fff7e6; border: 1px solid #ffd591; color: var(--warn); }
+
+/* ---------- 今日到期复习 ---------- */
+.rvd-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #fffbe6; border: 1px solid #ffe58f; border-radius: var(--r-btn); margin-bottom: 6px; font-size: 13px; }
+.rvd-stage { flex: 0 0 auto; font-size: 11px; font-weight: 500; color: var(--warn); border: 1px solid #ffe58f; background: #fff; border-radius: 4px; padding: 1px 6px; }
+.rvd-text { flex: 1; line-height: 1.5; }
+.rvd-done { flex: 0 0 auto; }
+
+/* ---------- Copilot 图片 ---------- */
+.cp-imgbar { display: none; padding: 8px 12px 0; background: var(--surface); }
+.cp-imgbar.cp-has { display: flex; align-items: center; gap: 8px; }
+.cp-imgbar img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.cp-imgbar .cp-img-del { border: none; background: none; cursor: pointer; font-size: 16px; color: var(--text-muted); }
+.cp-img-ph { display: inline-block; padding: 2px 8px; background: rgba(255,255,255,.2); border-radius: 4px; font-size: 12px; margin-right: 6px; }
+.cp-attach { flex: 0 0 auto; align-self: flex-end; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-btn); width: 38px; height: 38px; font-size: 17px; cursor: pointer; transition: all 120ms; }
+.cp-attach:active { transform: scale(.94); }
+
+/* 复习计划进度（拍题卡） */
+.rvd-progress { margin-top: 8px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rvd-stage-done { color: var(--ok) !important; border-color: #b7eb8f !important; background: #f6ffed !important; }
+.rvd-stage-due { color: #fff !important; background: var(--warn) !important; border-color: var(--warn) !important; }
+.rvd-wrap { margin-bottom: 10px; }
+
+/* ---------- 作文批改 (essay) ---------- */
+.essay-input-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.essay-thumb { max-width: 88px; max-height: 64px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.essay-text { margin-top: 10px; width: 100%; resize: vertical; }
+.essay-score-row { display: flex; align-items: baseline; gap: 12px; margin: 10px 0 4px; }
+.essay-score { font-size: 34px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.essay-max { font-size: 15px; color: var(--text-muted); }
+.essay-band { font-size: 14px; font-weight: 500; }
+.essay-issue { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 10px; margin-top: 6px; font-size: 13px; line-height: 1.7; }
+.essay-q { color: var(--text-secondary); }
+.essay-p { color: var(--danger); }
+.essay-f { color: var(--ok); }
+.essay-up { font-size: 13px; line-height: 2; }
+.essay-up s { color: var(--text-muted); }
+.essay-row .tag { color: #fff; }
+
+/* ---------- AI 周计划 (scheduler) ---------- */
+.wp-day { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 10px; margin-top: 8px; background: var(--surface); }
+.wp-day.wp-today { border-color: var(--text-primary); border-width: 2px; }
+.wp-day-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wp-date { font-weight: 500; font-size: 13px; }
+.wp-focus { font-size: 12px; color: var(--text-muted); flex: 1; }
+.wp-items { margin-top: 6px; }
+.wp-item { font-size: 13px; line-height: 2; }
+
 </style>
 </head>
 <body>
@@ -1333,7 +1405,7 @@ body.cp-lock { overflow: hidden; }
       meta: { createdAt: new Date().toISOString(), version: '2.0.0', lastBackupReminder: '' },
       tasks: defaultTasks(),
       taskTomb: {},              // 已删除任务的墓碑 {id: 时间戳}，用于跨设备"删除"同步（仅标记，防止被另一台设备的旧副本"复活"）
-      tomb: { quizBank: {}, mistakePhotos: {} }, // 其它可删除集合（题库/拍题）的墓碑，机制同 taskTomb：删除=标记而非真删，合并时按墓碑过滤，避免被云端旧副本"复活"
+      tomb: { quizBank: {}, mistakePhotos: {}, essays: {} }, // 其它可删除集合（题库/拍题/作文批改）的墓碑，机制同 taskTomb：删除=标记而非真删，合并时按墓碑过滤，避免被云端旧副本"复活"
       completions: {},            // 'YYYY-MM-DD' -> [taskId...] 每日打卡记录
       taskArchive: {},            // 'YYYY-MM-DD' -> [{subject,text,done}] 前日任务归档（供复盘统计）
       mistakes: [],               // {id, subject, type, desc, date:'M.D', createdAt}
@@ -1354,7 +1426,8 @@ body.cp-lock { overflow: hidden; }
       decision: { inputs: { mathSims: [], profScore: '', engAccuracy: '', polProgress: 0, xiankongScore: 5 }, result: null, updatedAt: '' },
       inspector: { runs: [] },    // {id,date,type,risk,flags:[]}
       quizBank: [],               // 收藏的题目 {id, topicId, topicName, stem, type, options, answer, solution, trap, diff, savedAt, note}
-      mistakePhotos: [],          // 拍题错题本 {id, subject, imageBase64(压缩), note, painPoint, extractedQuestion, aiAnalysis:{keySteps,errorCause}, similarProblem, createdAt, analyzedAt}
+      mistakePhotos: [],          // 拍题错题本 {id, subject, imageBase64(压缩), note, painPoint, extractedQuestion, aiAnalysis:{keySteps,errorCause}, similarProblem, reviewPlan{start,done{d1,d3,d7,d15}}, createdAt, analyzedAt}
+      essays: [],                 // 作文批改 {id, essayType, score, band, max, summary, result{issues,upgrades,...}, topic, textSnippet, imageBase64(压缩), date, createdAt}（≤20）
       weaknessProfile: null,      // 弱点画像 {generatedAt, basedOn:[painPoint...], summary, weakAreas:[...], advice} —— 由拍题疑难点汇聚分析得出
       dailyQuiz: null,            // 每日一题 {date:'YYYY-MM-DD', question, solution, trap, subject, generatedAt}
       dailyQuizHistory: [],       // 历史每日一题 [{date,question,solution,trap,subject,generatedAt}]（"再来一题"时归档）
@@ -1369,6 +1442,7 @@ body.cp-lock { overflow: hidden; }
       copilotChats: {},           // 'YYYY-MM-DD' -> [{role:'user'|'assistant', content, ts}] Copilot 会话（保留最近7天，每天≤60条）
       ai: { endpoint: '', key: '', model: '', preset: '', stream: false, thinkingMode: undefined, memAuto: true, briefAuto: true },
       deepReview: null,            // 深度复盘持久化 {week, snap, reasoning, output, status, running, generatedAt} —— 切页面/刷新后保留，避免阻塞式重生成
+      weekPlan: null,              // AI 周计划 {start:'YYYY-MM-DD', strategy, days:[{date,focus,items:[{subject,text}],landed}], generatedAt}（7天一周期，过期重新生成）
       majorData: {},               // AI生成的专业数据缓存 { profName: { modules, topics, conceptGraph, ... } }
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false,
         examConfig: { mathType: 'shuyi', engType: 'yingyi', profName: '自控原理' },
@@ -1431,7 +1505,7 @@ body.cp-lock { overflow: hidden; }
     replace(data) { cache = Store.migrate(data); Store.save(); U.emit('store:change'); },
     // 带墓碑的删除：从集合数组移除，同时在 tomb[name][id] 打标记。
     // 合并（云端拉取）时按墓碑过滤被删项，使"本地删除"可跨设备传播，且不会被云端旧副本复活。
-    // 对应集合：quizBank、mistakePhotos（与 initialState().tomb 的键一致）。
+    // 对应集合：quizBank、mistakePhotos、essays（与 initialState().tomb 的键一致）。
     removeFromColl(name, id) {
       Store.update(s => {
         if (!s[name]) return;
@@ -1472,8 +1546,8 @@ body.cp-lock { overflow: hidden; }
       const local = Store.get();
       // 墓碑合并：任一侧标记删除的 id 都视为已删
       const tomb = Object.assign({}, local.taskTomb || {}, r.taskTomb || {});
-      // 集合墓碑（题库/拍题等）：任一侧删除都生效
-      const TOMB_COLLS = ['quizBank', 'mistakePhotos'];
+      // 集合墓碑（题库/拍题/作文等）：任一侧删除都生效
+      const TOMB_COLLS = ['quizBank', 'mistakePhotos', 'essays'];
       const collTomb = {};
       TOMB_COLLS.forEach(name => { collTomb[name] = Object.assign({}, (local.tomb && local.tomb[name]) || {}, (r.tomb && r.tomb[name]) || {}); });
       const localKept = (local.tasks || []).filter(t => !tomb[t.id]);
@@ -1568,6 +1642,18 @@ body.cp-lock { overflow: hidden; }
     // 今天已累计时长
     todayHours() { return Store.get().studyHours[U.dkey()] || 0; },
     addHours(h) { Store.update(s => { const k = U.dkey(); s.studyHours[k] = U.round1((s.studyHours[k] || 0) + h); }); },
+    // 连续作战天数（有时长或有打卡记1天；今天还没开始不断档）
+    studyStreak() {
+      const s = Store.get();
+      let streak = 0;
+      for (let i = 0; i < 90; i++) {
+        const k = U.dkey(new Date(Date.now() - i * U.DAY_MS));
+        if ((s.studyHours[k] || 0) > 0 || (s.completions[k] || []).length > 0) streak++;
+        else if (i === 0) continue;
+        else break;
+      }
+      return streak;
+    },
     // 今日某错误类型次数
     mistakeCountToday(type) {
       const today = U.dkey();
@@ -4183,7 +4269,7 @@ body.cp-lock { overflow: hidden; }
       + briefHtml(s)
       + nowHtml
       + '<div class="card"><div class="card-title-row"><span class="card-title">今日作战序列</span>'
-      + '<button class="link-btn" id="go-sched">完整排程 →</button></div>' + (seqHtml || '<div class="empty">暂无任务</div>') + '</div>'
+      + '<button class="link-btn" id="go-sched">完整排程 →</button></div>' + reviewDueHtml(s) + (seqHtml || '<div class="empty">暂无任务</div>') + '</div>'
       + '<div class="chip-row">' + chips + '</div>'
       + '<div class="quick-grid">'
       + '<button class="quick-btn" data-go="scheduler">✅<span>任务</span></button>'
@@ -4196,6 +4282,8 @@ body.cp-lock { overflow: hidden; }
       + '<div id="wk-chart">' + Charts.bar(barData, { height: 130, unit: 'h', hiColor: '#000' }) + '</div>'
       + '<div class="muted-sm">今日 ' + Store.todayHours() + 'h · 本周累计 ' + U.round1(U.sum(hours)) + 'h / 目标 ' + (s.settings.weeklyTargetHours || 50) + 'h</div>'
       + '</div>'
+
+      + calendarHtml(s)
 
       + dailyQuizHtml(s);
 
@@ -4235,13 +4323,7 @@ body.cp-lock { overflow: hidden; }
     var arch = (s.taskArchive || {})[yKey] || [];
     var yDone = arch.filter(function (t) { return t.done; }).length;
     // 连续学习天数
-    var streak = 0;
-    for (var i = 0; i < 60; i++) {
-      var k = U.dkey(new Date(Date.now() - i * U.DAY_MS));
-      if ((s.studyHours[k] || 0) > 0 || (s.completions[k] || []).length > 0) streak++;
-      else if (i === 0) continue; // 今天还没开始不算断
-      else break;
-    }
+    var streak = Store.studyStreak();
     var lines = [];
     lines.push('距考试还有 <b>' + days + '</b> 天' + (streak >= 2 ? '，已连续作战 <b>' + streak + '</b> 天' : '') + '。');
     if (arch.length) lines.push('昨日完成 ' + yDone + '/' + arch.length + (yDone === arch.length && arch.length > 0 ? '，干净利落。' : yDone / arch.length < 0.6 ? '，欠债要还。' : '，还差一点。'));
@@ -4356,6 +4438,73 @@ body.cp-lock { overflow: hidden; }
     });
   }
 
+  // ---------- 今日到期复习（文字错题 + 拍题，艾宾浩斯 1/3/7/15 天统一曲线） ----------
+  function collectReviewDue(s) {
+    var stages = [1, 3, 7, 15];
+    var due = [];
+    function scan(coll, kind) {
+      (coll || []).forEach(function (p) {
+        if (!p.reviewPlan) return;
+        var diff = Math.floor((Date.parse(U.dkey()) - Date.parse(p.reviewPlan.start)) / U.DAY_MS);
+        for (var i = 0; i < stages.length; i++) {
+          var st = stages[i];
+          if (diff >= st && !(p.reviewPlan.done && p.reviewPlan.done['d' + st])) {
+            due.push({ id: p.id, kind: kind, stage: st, text: (kind === 'photo' ? (p.painPoint || p.extractedQuestion || p.note || '一道拍题错题') : (p.desc || '一条错题')).slice(0, 18) });
+            break;
+          }
+        }
+      });
+    }
+    scan(s.mistakes, 'mistake');
+    scan(s.mistakePhotos, 'photo');
+    return due;
+  }
+
+  function reviewDueHtml(s) {
+    var due = collectReviewDue(s);
+    if (!due.length) return '';
+    return '<div class="rvd-wrap"><div class="muted-sm" style="margin-bottom:6px">📅 今日到期复习（重做原题，勿看解析）</div>'
+      + due.slice(0, 5).map(function (d) {
+        return '<div class="rvd-item"><span class="rvd-stage">D' + d.stage + '</span>'
+          + '<span class="rvd-text">' + (d.kind === 'photo' ? '📸 ' : '✍️ ') + U.esc(d.text) + '</span>'
+          + '<button class="btn btn-ghost btn-sm rvd-done" data-kind="' + d.kind + '" data-pid="' + d.id + '" data-stage="' + d.stage + '">✓ 重做完成</button></div>';
+      }).join('') + '</div>';
+  }
+
+  // ---------- 作战日历（12周 GitHub 风热力图，黑白灰 5 级强度） ----------
+  function calendarHtml(s) {
+    var WEEKS = 12;
+    var today = new Date();
+    today.setHours(23, 59, 59, 999);
+    var monday = U.weekMonday(new Date());
+    monday = new Date(monday.getTime() - (WEEKS - 1) * 7 * U.DAY_MS);
+    var rowsHtml = '';
+    var totalH = 0, activeDays = 0;
+    for (var d = 0; d < 7; d++) {
+      rowsHtml += '<div class="cal-row">';
+      for (var w = 0; w < WEEKS; w++) {
+        var date = new Date(monday.getTime() + (w * 7 + d) * U.DAY_MS);
+        if (date > today) { rowsHtml += '<span class="cal-cell cal-empty"></span>'; continue; }
+        var k = U.dkey(date);
+        var h = s.studyHours[k] || 0;
+        var doneN = (s.completions[k] || []).length;
+        // 强度 = 时长为主，打卡加成
+        var eff = h + doneN * 0.5;
+        var lv = eff <= 0 ? 0 : eff < 2 ? 1 : eff < 4 ? 2 : eff < 6 ? 3 : 4;
+        if (lv > 0) { activeDays++; totalH += h; }
+        rowsHtml += '<span class="cal-cell cal-lv' + lv + '" title="' + k + ' · ' + h + 'h · 完成' + doneN + '项"></span>';
+      }
+      rowsHtml += '</div>';
+    }
+    var streak = Store.studyStreak();
+    return '<div class="card"><div class="card-title-row"><span class="card-title">作战日历</span>'
+      + '<span class="muted-sm">' + (streak >= 2 ? '🔥 连续 ' + streak + ' 天 · ' : '') + '近12周 ' + activeDays + ' 天活跃</span></div>'
+      + '<div class="cal-grid">' + rowsHtml + '</div>'
+      + '<div class="cal-legend"><span class="muted-sm">少</span><span class="cal-cell cal-lv0"></span><span class="cal-cell cal-lv1"></span><span class="cal-cell cal-lv2"></span><span class="cal-cell cal-lv3"></span><span class="cal-cell cal-lv4"></span><span class="muted-sm">多</span>'
+      + '<span class="muted-sm" style="margin-left:auto">累计 ' + U.round1(totalH) + 'h</span></div>'
+      + '</div>';
+  }
+
   // ---------- 每日一题 ----------
   var dailyGenerating = false;
   var dqSubject = 'auto'; // 用户选定的出题科目：auto|math|ctrl|eng|pol
@@ -4376,12 +4525,28 @@ body.cp-lock { overflow: hidden; }
       + '</span></div>';
 
     if (dq && dq.date === today && dq.question) {
-      // 今日已生成
+      // 今日已生成：作答模式（解答默认折叠，自评回写）
       var subj = DB.SUBJECTS[dq.subject] || { short: '题', color: '#666' };
-      return '<div class="card" id="dq-card">' + title
-        + '<div class="pm-question"><b>📝 ' + subj.short + '题：</b>' + renderMathSafe(dq.question) + '</div>'
-        + (dq.solution ? '<div class="pm-ai-section"><b>🔑 解答：</b><div class="pm-ai-body">' + renderMathSafe(dq.solution) + '</div></div>' : '')
-        + (dq.trap ? '<div class="pm-ai-section"><b>⚠️ 易错点：</b><div class="pm-ai-body">' + renderMathSafe(dq.trap) + '</div></div>' : '')
+      var body = '<div class="pm-question"><b>📝 ' + subj.short + '题：</b>' + renderMathSafe(dq.question) + '</div>';
+      if (dq.selfEval === 'known') {
+        body += '<div class="pm-ai-section"><b>🔑 解答：</b><div class="pm-ai-body">' + renderMathSafe(dq.solution || '') + '</div></div>'
+          + (dq.trap ? '<div class="pm-ai-section"><b>⚠️ 易错点：</b><div class="pm-ai-body">' + renderMathSafe(dq.trap) + '</div></div>' : '')
+          + '<div class="dq-eval dq-eval-ok">✓ 已自评：会了。保持这个节奏。</div>';
+      } else if (dq.selfEval === 'unknown') {
+        body += '<div class="pm-ai-section"><b>🔑 解答：</b><div class="pm-ai-body">' + renderMathSafe(dq.solution || '') + '</div></div>'
+          + (dq.trap ? '<div class="pm-ai-section"><b>⚠️ 易错点：</b><div class="pm-ai-body">' + renderMathSafe(dq.trap) + '</div></div>' : '')
+          + '<div class="dq-eval dq-eval-no">✗ 已自评：还不会——已记入错题本，明天简报会盯着你复习。</div>';
+      } else if (dq.revealed) {
+        body += '<div class="pm-ai-section"><b>🔑 解答：</b><div class="pm-ai-body">' + renderMathSafe(dq.solution || '') + '</div></div>'
+          + (dq.trap ? '<div class="pm-ai-section"><b>⚠️ 易错点：</b><div class="pm-ai-body">' + renderMathSafe(dq.trap) + '</div></div>' : '')
+          + '<div class="dq-eval-row"><span class="muted-sm">看完解答，诚实自评：</span>'
+          + '<button class="btn btn-primary btn-sm" id="dq-known">✓ 会了</button>'
+          + '<button class="btn btn-ghost btn-sm" id="dq-unknown">✗ 还不会</button></div>';
+      } else {
+        body += '<div class="dq-fold">🫣 解答已折叠——先拿草稿纸做一遍，再对答案。</div>'
+          + '<button class="btn btn-ghost btn-sm" id="dq-reveal">👀 查看解答</button>';
+      }
+      return '<div class="card" id="dq-card">' + title + body
         + '<div class="muted-sm" style="margin-top:6px">基于你的薄弱点生成 · ' + (dq.generatedAt || '').slice(0, 16).replace('T', ' ') + '</div>'
         + '</div>';
     }
@@ -4671,6 +4836,26 @@ body.cp-lock { overflow: hidden; }
       };
     });
 
+    // 到期复习：重做完成（双源：文字错题 mistakes / 拍题 mistakePhotos）
+    el.querySelectorAll('.rvd-done').forEach(b => {
+      b.onclick = () => {
+        var kind = b.getAttribute('data-kind');
+        var pid = b.getAttribute('data-pid');
+        var stage = b.getAttribute('data-stage');
+        var coll = kind === 'photo' ? 'mistakePhotos' : 'mistakes';
+        Store.update(s => {
+          var p = (s[coll] || []).find(x => x.id === pid);
+          if (p && p.reviewPlan) {
+            if (!p.reviewPlan.done) p.reviewPlan.done = {};
+            p.reviewPlan.done['d' + stage] = U.dkey();
+          }
+        });
+        if (window.AiMemory) AiMemory.recordEvent('完成到期复习', 'D' + stage + '阶段' + (kind === 'photo' ? '拍题' : '错题') + '重做');
+        Toast.success('✓ 复习完成，记忆又牢了一层');
+        App.refresh();
+      };
+    });
+
     // 快捷入口
     el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => App.go(b.getAttribute('data-go')));
     el.querySelector('#go-sched').onclick = () => App.go('scheduler');
@@ -4700,6 +4885,30 @@ body.cp-lock { overflow: hidden; }
       dqRetry.disabled = true;
       dqRetry.textContent = '生成中…';
       generateDailyQuiz(true, function () { App.refresh(); }, dqSubject);
+    };
+
+    // 每日一题：折叠/自评
+    var dqReveal = el.querySelector('#dq-reveal');
+    if (dqReveal) dqReveal.onclick = () => {
+      Store.update(s => { if (s.dailyQuiz) s.dailyQuiz.revealed = true; });
+      App.refresh();
+    };
+    var dqKnown = el.querySelector('#dq-known');
+    if (dqKnown) dqKnown.onclick = () => {
+      Store.update(s => { if (s.dailyQuiz) s.dailyQuiz.selfEval = 'known'; });
+      Toast.success('✓ 拿下。明天继续。');
+      App.refresh();
+    };
+    var dqUnknown = el.querySelector('#dq-unknown');
+    if (dqUnknown) dqUnknown.onclick = () => {
+      var q = (Store.get().dailyQuiz || {}).question || '';
+      Store.update(s => {
+        if (s.dailyQuiz) s.dailyQuiz.selfEval = 'unknown';
+        s.mistakes.push({ id: U.uid(), subject: s.dailyQuiz.subject || 'math', type: 'concept', desc: '【每日一题】未掌握：' + q.slice(0, 40), date: U.shortDate(), createdAt: new Date().toISOString() });
+      });
+      if (window.AiMemory) AiMemory.recordEvent('每日一题自评「还不会」', q.slice(0, 40));
+      Toast.show('已记入错题本。周末清账，别攒着。', 'warn');
+      App.refresh();
     };
 
     // 记时长
@@ -5103,10 +5312,138 @@ body.cp-lock { overflow: hidden; }
       + '<li>政治任务当日超' + cfg.polCap + '个 → 超出部分自动削减</li>'
       + '</ul></div>'
 
+      // ===== AI 周计划（未来7天逐日蓝图，一键落今日任务）=====
+      + weekPlanCardHtml()
+
       // ===== 任务管理（原「任务」页功能并入此处）=====
       + renderTaskSection();
 
     bind(el);
+  }
+
+  // ---------- AI 周计划（未来7天逐日蓝图，一键落今日任务）----------
+  var weekPlanGenerating = false;
+
+  function weekPlanValid(p) {
+    if (!p || !p.start || !p.days || !p.days.length) return false;
+    return Date.now() < Date.parse(p.start) + 7 * U.DAY_MS;
+  }
+
+  function weekPlanCardHtml() {
+    var p = Store.get().weekPlan;
+    var valid = weekPlanValid(p);
+    var head = '<div class="card-title-row"><span class="card-title">🗓 AI 周计划（未来7天）</span>'
+      + (AI.configured() ? '<button class="link-btn" id="wp-gen"' + (weekPlanGenerating ? ' disabled' : '') + '>' + (valid ? '🔄 重新生成' : '🤖 生成周计划') + '</button>' : '') + '</div>';
+    if (weekPlanGenerating) {
+      return '<div class="card">' + head + '<div id="wp-stream" class="muted-sm" style="margin-top:8px;min-height:50px"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w80"></div></div></div>';
+    }
+    // 已有有效计划 → 无论 AI 当前是否可用都正常展示（AI 只影响生成/重新生成）
+    if (!valid) {
+      if (!AI.configured()) {
+        return '<div class="card">' + head + '<div class="muted-sm">配置 AI 后，教练会根据你的记忆与进度，一键生成未来 7 天逐日学习计划。</div></div>';
+      }
+      return '<div class="card">' + head + '<div class="muted-sm">还没有周计划。点右上角「生成周计划」——AI 会综合你的长期记忆、四科进度、最近正确率与目标分数，排出未来 7 天逐日任务蓝图，今日项可一键落入任务池。</div></div>';
+    }
+    var today = U.dkey();
+    var daysHtml = p.days.map(function (d) {
+      var isToday = d.date === today;
+      var dow = '周' + '日一二三四五六'.charAt(new Date(Date.parse(d.date)).getDay());
+      return '<div class="wp-day' + (isToday ? ' wp-today' : '') + '">'
+        + '<div class="wp-day-head"><span class="wp-date">' + d.date.slice(5).replace('-', '.') + ' ' + dow + '</span><span class="wp-focus">' + U.esc(d.focus || '') + '</span>'
+        + (isToday && !d.landed ? '<button class="btn btn-primary btn-sm wp-land">落入今日任务</button>' : '')
+        + (isToday && d.landed ? '<span class="tag" style="background:var(--ok);color:#fff">已落入</span>' : '')
+        + '</div>'
+        + '<div class="wp-items">' + (d.items || []).map(function (it) {
+          var meta = DB.SUBJECTS[it.subject] || { short: it.subject, color: '#8c8c8c' };
+          return '<div class="wp-item"><span class="task-tag" style="background:' + meta.color + '">' + meta.short + '</span> ' + U.esc(it.text) + '</div>';
+        }).join('') + '</div></div>';
+    }).join('');
+    return '<div class="card">' + head
+      + (p.strategy ? '<div class="reason-box" style="margin-top:8px">🎯 本周策略：' + U.esc(p.strategy) + '</div>' : '')
+      + daysHtml + '</div>';
+  }
+
+  function genWeekPlan() {
+    if (weekPlanGenerating || !AI.configured()) return;
+    weekPlanGenerating = true;
+    App.refresh();
+    var s = Store.get();
+    var start = U.dkey();
+    var dates = [];
+    for (var i = 0; i < 7; i++) dates.push(U.dkey(new Date(Date.now() + i * U.DAY_MS)));
+    var mem = AI.memoryDigest ? AI.memoryDigest(400) : '';
+    var sys = '你是考研规划教练。为考生制定未来7天逐日学习计划。'
+      + (mem ? '\n' + mem + '\n' : '')
+      + '只输出 JSON，不要多余文字、不要 markdown：{"strategy":"总体策略(≤80字)","days":[{"date":"YYYY-MM-DD","focus":"当日主题(≤12字)","items":[{"subject":"math|ctrl|eng|pol","text":"具体任务(含章节/题量,≤22字)"}]}]}'
+      + '纪律：1) 日期逐天使用给定列表；2) 每天3-5项，数学每天有，政治每天≤2项；3) 任务具体可执行；'
+      + '4) 结合考生记忆与进度短板加权（弱处多排）；5) 简体中文。';
+    var prog = s.progress;
+    var progTxt = ['math', 'ctrl', 'eng', 'pol'].map(function (k) { return DB.SUBJECTS[k].short + (prog[k] ? prog[k].percent : 0) + '%'; }).join('，');
+    var acc = Store.currentMathAccuracy();
+    var usr = '今天是' + start + '（距考试' + U.daysTo(s.settings.examDate) + '天）。未来7天日期：' + dates.join('、') + '。\n'
+      + '四科进度：' + progTxt + '。本周日均 ' + U.round1(U.sum(Store.weekHours()) / 7) + 'h（目标日均' + U.round1((s.settings.weeklyTargetHours || 50) / 7) + 'h）。\n'
+      + '符号错误本周 ' + Store.mistakeCountWeek('sign') + ' 次，数学正确率 ' + (acc != null ? acc + '%' : '未录入') + '。\n'
+      + '目标：' + (s.settings.targetSchool === 'undecided' ? '院校未定' : s.settings.targetSchool)
+      + '（数学' + s.settings.targetScores.math + '/专业课' + s.settings.targetScores.prof + '/英语' + s.settings.targetScores.eng + '/政治' + s.settings.targetScores.pol + '）。\n'
+      + '请给出未来7天逐日计划。';
+    var buf = '';
+    var lastWrite = 0;
+    AI.chatStream(sys, usr, function (full) {
+      buf = full || '';
+      var now = Date.now();
+      if (now - lastWrite > 500) {
+        lastWrite = now;
+        var st = document.getElementById('wp-stream');
+        if (st) st.textContent = buf.slice(-400);
+      }
+    }).then(function (full) {
+      weekPlanGenerating = false;
+      var j = null;
+      try { j = AI.extractRobustJSON(full || ''); } catch (e) { }
+      if (j && j.days && j.days.length) {
+        var days = j.days.slice(0, 7).map(function (d, i) {
+          return {
+            date: dates[i] || d.date, focus: (d.focus || '').slice(0, 14),
+            items: (d.items || []).slice(0, 5).filter(function (it) { return it && it.text; }).map(function (it) {
+              return { subject: ['math', 'ctrl', 'eng', 'pol'].indexOf(it.subject) >= 0 ? it.subject : 'math', text: ('' + it.text).slice(0, 30) };
+            }),
+            landed: false
+          };
+        });
+        Store.update(function (x) { x.weekPlan = { start: start, strategy: (j.strategy || '').slice(0, 120), days: days, generatedAt: new Date().toISOString() }; });
+        if (window.AiMemory) AiMemory.recordEvent('生成AI周计划', (j.strategy || '').slice(0, 50));
+        Toast.success('✓ 周计划已生成，今日项点「落入今日任务」');
+      } else {
+        Toast.show('计划解析失败，请重试', 'warn');
+      }
+      App.refresh();
+    }).catch(function (e) {
+      weekPlanGenerating = false;
+      Toast.show('生成失败：' + e.message, 'danger');
+      App.refresh();
+    });
+  }
+
+  function landTodayPlan() {
+    var today = U.dkey();
+    var now = new Date().toISOString();
+    var landed = 0;
+    Store.update(function (x) {
+      var wp = x.weekPlan;
+      if (!wp || !wp.days) return;
+      var day = wp.days.find(function (d) { return d.date === today; });
+      if (!day || day.landed) return;
+      var maxOrder = 0, existing = {};
+      x.tasks.forEach(function (t) { if (t.order != null && t.order > maxOrder) maxOrder = t.order; existing[t.text] = true; });
+      (day.items || []).forEach(function (it) {
+        if (existing[it.text]) return;
+        x.tasks.push({ id: U.uid(), subject: it.subject, text: it.text, done: false, createdAt: now, updatedAt: now, order: ++maxOrder });
+        landed++;
+      });
+      day.landed = true;
+    });
+    Toast.show(landed > 0 ? '已落入 ' + landed + ' 项今日任务，去打卡吧' : '今日项已在任务池中', landed > 0 ? 'success' : 'info');
+    App.refresh();
   }
 
   // 任务管理区域渲染（独立函数，方便 paint 末尾调用）
@@ -5189,6 +5526,12 @@ body.cp-lock { overflow: hidden; }
     // 手动重新 AI 编排（忽略今日缓存，强制再调一次）
     const regen = el.querySelector('#sc-regen');
     if (regen) regen.onclick = () => { startAutoGen(el); };
+
+    // 周计划：生成 / 落入今日任务
+    const wpGen = el.querySelector('#wp-gen');
+    if (wpGen) wpGen.onclick = () => genWeekPlan();
+    const wpLand = el.querySelector('.wp-land');
+    if (wpLand) wpLand.onclick = () => landTodayPlan();
 
     // ===== 任务管理交互 =====
     // Tab 切换
@@ -5894,12 +6237,26 @@ body.cp-lock { overflow: hidden; }
     if (list.length === 0) rows = '<div class="empty">还没有错题记录。错题不可怕，重复错才可怕。</div>';
     list.forEach(m => {
       const t = DB.MISTAKE_TYPES[m.type] || DB.MISTAKE_TYPES.other;
+      // 复习计划进度（艾宾浩斯 1/3/7/15 天）
+      let rvHtml = '';
+      if (m.reviewPlan) {
+        const stages = [1, 3, 7, 15];
+        const diff = Math.floor((Date.parse(U.dkey()) - Date.parse(m.reviewPlan.start)) / U.DAY_MS);
+        rvHtml = '<div class="rvd-progress">' + stages.map(function (st) {
+          const done = m.reviewPlan.done && m.reviewPlan.done['d' + st];
+          const due = !done && diff >= st;
+          return '<span class="rvd-stage' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
+        }).join(' ') + '</div>';
+      }
       rows += '<div class="mis-row" style="border-left-color:' + t.color + '">'
         + '<div class="mis-head"><span class="tag" style="background:' + t.color + '">' + t.name + '</span>'
         + '<span class="mis-subj">' + ((DB.SUBJECTS[m.subject] || {}).name || m.subject) + '</span>'
         + '<span class="mis-date">' + U.esc(m.date || '') + '</span></div>'
         + '<div class="mis-desc">' + U.esc(m.desc) + '</div>'
-        + '<div class="mis-actions"><button class="btn btn-sm btn-ghost mis-variant" data-id="' + m.id + '">🔄 重练变式题</button></div>'
+        + rvHtml
+        + '<div class="mis-actions"><button class="btn btn-sm btn-ghost mis-variant" data-id="' + m.id + '">🔄 重练变式题</button>'
+        + (m.reviewPlan ? '' : '<button class="btn btn-sm btn-ghost mis-review" data-id="' + m.id + '">📅 复习计划</button>')
+        + '</div>'
         + '</div>';
     });
 
@@ -5917,7 +6274,7 @@ body.cp-lock { overflow: hidden; }
 
     el.innerHTML =
       '<div class="card"><div class="card-title-row"><span class="card-title">错题类型分布（全部 ' + s.mistakes.length + ' 条）</span>'
-      + '<button class="link-btn" id="ms-export">导出错题JSON</button></div>'
+      + '<span><button class="link-btn" id="ms-ai">🤖 AI 模式分析</button> <button class="link-btn" id="ms-export">导出错题JSON</button></span></div>'
       + Charts.donut(pie, { height: 200 })
       + '</div>'
 
@@ -5939,12 +6296,42 @@ body.cp-lock { overflow: hidden; }
       + drillHtml
       + '</div>'
 
-      + '<div class="card"><div class="card-title">错题列表（最近50条）</div>' + rows + '</div>';
+      + '<div class="card"><div class="card-title-row"><span class="card-title">错题列表（最近50条）</span>'
+      + '<button class="link-btn" id="ms-review-all">📅 全部加入复习计划</button></div>' + rows + '</div>';
 
     bind(el);
   }
 
   function bind(el) {
+    // AI 错题模式分析（流式，注入长期记忆）
+    var aiBtn = el.querySelector('#ms-ai');
+    if (aiBtn) aiBtn.onclick = () => {
+      if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+      const recent = U.clone(Store.get().mistakes).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).slice(0, 20);
+      if (recent.length < 3) { Toast.warn('错题还不够 3 条，再攒攒'); return; }
+      Modal.open({
+        title: '🤖 AI 错题模式分析', wide: true,
+        html: '<div class="muted-sm">正在通读你最近 ' + recent.length + ' 条错题，寻找反复出现的模式…</div>'
+          + '<div id="ms-ai-out" class="pm-ai-body" style="margin-top:8px;min-height:100px"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w80"></div><div class="skl-line skl-w60"></div></div>',
+        actions: [{ label: '关闭' }]
+      });
+      const lines = recent.map(m => '[' + (m.date || '') + '] ' + ((DB.MISTAKE_TYPES[m.type] || {}).name || m.type) + '：' + m.desc).join('\n');
+      const mem = AI.memoryDigest ? AI.memoryDigest(300) : '';
+      const sys = '你是考研学情分析师。下面是考生最近的错题记录（日期+类型+描述）。'
+        + (mem ? '\n' + mem + '\n' : '')
+        + '请分析：1) 反复出现的 2-3 个错误模式（引用具体记录说话）；2) 每个模式背后的真正根因（习惯流程/概念漏洞/心态节奏）；'
+        + '3) 每个模式配一个今天就能执行的防呆动作。直接犀利、分点、150-250字、简体中文。';
+      const out = document.getElementById('ms-ai-out');
+      AI.chatStream(sys, '最近错题记录：\n' + lines, function (full) {
+        if (out) out.innerHTML = (full || '').replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>';
+      }).then(function (full) {
+        if (out) out.innerHTML = (full || '（无分析结果）').replace(/\n/g, '<br>');
+        if (window.AiMemory && full) AiMemory.recordEvent('完成错题模式分析', full.slice(0, 80));
+      }).catch(function (e) {
+        if (out) out.textContent = '分析失败：' + e.message;
+      });
+    };
+
     // 导出错题
     el.querySelector('#ms-export').onclick = () => {
       const s = Store.get();
@@ -5964,7 +6351,8 @@ body.cp-lock { overflow: hidden; }
       Store.update(s => {
         s.mistakes.push({
           id: U.uid(), subject: el.querySelector('#ms-subj').value, type, desc,
-          date: U.shortDate(), createdAt: new Date().toISOString()
+          date: U.shortDate(), createdAt: new Date().toISOString(),
+          reviewPlan: { start: U.dkey(), done: {} }   // 手动记录即承诺复习：自动上艾宾浩斯曲线
         });
       });
       Toast.success('已记录。同类错误再犯时，系统会加重干预。');
@@ -6018,6 +6406,32 @@ body.cp-lock { overflow: hidden; }
       };
     });
 
+    // 单条错题加入复习计划
+    el.querySelectorAll('.mis-review').forEach(b => {
+      b.onclick = () => {
+        const id = b.getAttribute('data-id');
+        Store.update(s => {
+          const m = s.mistakes.find(x => x.id === id);
+          if (m && !m.reviewPlan) m.reviewPlan = { start: U.dkey(), done: {} };
+        });
+        Toast.success('已加入复习计划：1/3/7/15 天后作战台提醒你重做');
+        App.refresh();
+      };
+    });
+
+    // 旧错题一键全部加入复习计划
+    const rvAllBtn = el.querySelector('#ms-review-all');
+    if (rvAllBtn) rvAllBtn.onclick = () => {
+      let n = 0;
+      Store.update(s => {
+        s.mistakes.forEach(m => {
+          if (!m.reviewPlan) { m.reviewPlan = { start: U.dkey(), done: {} }; n++; }
+        });
+      });
+      Toast.show(n > 0 ? '已为 ' + n + ' 条旧错题补上复习计划' : '全部错题都已在复习计划中', n > 0 ? 'success' : 'info');
+      App.refresh();
+    };
+
     // 闭环：一键把全部待重练转成任务中心正式任务（打卡才算数）
     const genBtn = el.querySelector('#ms-to-tasks');
     if (genBtn) genBtn.onclick = () => {
@@ -6030,7 +6444,7 @@ body.cp-lock { overflow: hidden; }
         });
       });
       Toast.success('已转入任务中心，去打卡吧');
-      App.go('tasks');
+      App.go('scheduler');
     };
   }
 
@@ -7213,21 +7627,50 @@ body.cp-lock { overflow: hidden; }
       App.refresh();
     } else {
       Notify.send('专注完成', '强制5分钟防呆复盘开始');
-      Modal.open({
-        title: '🧘 强制防呆复盘（5分钟）',
-        dismissable: false,
-        html: '<p>闭眼回忆刚才的练习，逐条确认：</p>'
-          + '<ol style="padding-left:18px;line-height:2">'
-          + '<li>有没有出现<b>负号后置</b>？翻草稿检查最后3题</li>'
-          + '<li>分式合并是否走了<b>分母→分子→计算</b>三步？</li>'
-          + '<li>草稿是否保持<b>左乱草/右正稿</b>分区？</li>'
-          + '<li>卡壳题是否已标记"?"，没有死磕超过3分钟？</li></ol>'
-          + '<p class="muted-sm">发现违规 → 立即去错题画像记录一条，类型选对应项。</p>',
-        actions: [
-          { label: '发现违规，去记错题', kind: 'btn-ghost', onClick: close => { close(); App.go('mistakes'); } },
-          { label: '复盘完毕，无违规', kind: 'btn-primary', onClick: close => { close(); App.refresh(); } }
-        ]
-      });
+      var defaultChecklist = '<p>闭眼回忆刚才的练习，逐条确认：</p>'
+        + '<ol style="padding-left:18px;line-height:2">'
+        + '<li>有没有出现<b>负号后置</b>？翻草稿检查最后3题</li>'
+        + '<li>分式合并是否走了<b>分母→分子→计算</b>三步？</li>'
+        + '<li>草稿是否保持<b>左乱草/右正稿</b>分区？</li>'
+        + '<li>卡壳题是否已标记"?"，没有死磕超过3分钟？</li></ol>'
+        + '<p class="muted-sm">发现违规 → 立即去错题画像记录一条，类型选对应项。</p>';
+      var modalActions = [
+        { label: '发现违规，去记错题', kind: 'btn-ghost', onClick: function (close) { close(); App.go('mistakes'); } },
+        { label: '复盘完毕，无违规', kind: 'btn-primary', onClick: function (close) { close(); App.refresh(); } }
+      ];
+      // AI 可用 → 生成针对性复盘问题（科目 + 长期记忆）；失败回落默认清单
+      if (typeof AI !== 'undefined' && AI.configured()) {
+        Modal.open({
+          title: '🧘 AI 针对性复盘（5分钟）',
+          dismissable: false,
+          html: '<div class="muted-sm">教练正在根据你刚才的专注内容出复盘问题…</div>'
+            + '<div id="fc-ai-review" class="pm-ai-body" style="margin-top:8px;min-height:80px"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w60"></div></div>',
+          actions: modalActions
+        });
+        var subjName = DB.SUBJECTS[rec.subject].name;
+        var mem = AI.memoryDigest ? AI.memoryDigest(300) : '';
+        var sys = '你是考研教练。考生刚完成一段 ' + doneMins + ' 分钟的「' + subjName + '」深度专注。'
+          + (mem ? '\n' + mem + '\n' : '')
+          + '请出 3 个针对性的复盘问题，引导他闭眼回忆刚才的练习并自我检查。'
+          + '要求：1) 问题必须结合该科目特点与他的已知弱点（尤其符号/分式/跳步）；2) 每个问题一句话，具体可检查（如"最后三道积分题，负号是否都提到了最前？"）；'
+          + '3) 先给一句 15 字内的开场（肯定时长但不吹捧）；4) 用简体中文，直接列 1/2/3，不要其他废话。';
+        var out = document.getElementById('fc-ai-review');
+        AI.chatStream(sys, '请出复盘问题。', function (full) {
+          if (out) out.innerHTML = (full || '').replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>';
+        }).then(function (full) {
+          if (out) out.innerHTML = (full || defaultChecklist).replace(/\n/g, '<br>');
+          if (window.AiMemory && full) AiMemory.recordEvent('完成' + doneMins + '分钟' + subjName + '专注', 'AI复盘问题已给出');
+        }).catch(function () {
+          if (out) out.innerHTML = defaultChecklist;
+        });
+      } else {
+        Modal.open({
+          title: '🧘 强制防呆复盘（5分钟）',
+          dismissable: false,
+          html: defaultChecklist,
+          actions: modalActions
+        });
+      }
     }
   }
 
@@ -8212,6 +8655,273 @@ body.cp-lock { overflow: hidden; }
   }
 
   window.ReadingModule = { render };
+})();
+
+
+/* ===== js/modules/essay.js ===== */
+/* ============================================================
+ * essay.js — 英语作文 AI 批改（拍照/文本双通道）
+ * 按英一/英二自动适配分值档；AI 按考研评分档批改：分数+逐句问题+高级替换+范文句。
+ * 历史 s.essays（≤20，含压缩图，tomb 删除同步）；成绩趋势见证进步。
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  // ---------- 作文类型（随英一/英二配置自适应） ----------
+  var ESSAY_TYPES = {
+    y1_big: { name: '大作文（图画）', max: 20, full: '英一·大作文（图画作文，满分20）' },
+    y1_small: { name: '小作文（应用文）', max: 10, full: '英一·小作文（应用文，满分10）' },
+    y2_big: { name: '大作文（图表）', max: 15, full: '英二·大作文（图表作文，满分15）' },
+    y2_small: { name: '小作文（应用文）', max: 10, full: '英二·小作文（应用文，满分10）' }
+  };
+  function typeKeys() {
+    var eng = 'yingyi';
+    try { eng = Store.get().settings.examConfig.engType || 'yingyi'; } catch (e) { }
+    return eng === 'yinger' ? ['y2_big', 'y2_small'] : ['y1_big', 'y1_small'];
+  }
+
+  // ---------- 模块内运行态 ----------
+  var imgData = null;        // 待批改图片 dataUrl
+  var grading = false;       // 批改中
+  var streamBuf = '';        // 流式缓冲
+  var curType = null;        // 当前选择的作文类型
+
+  function history() {
+    return (Store.get().essays || []).slice().sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
+  }
+
+  // ---------- 批改提示词 ----------
+  function gradeSystem(tk) {
+    var t = ESSAY_TYPES[tk];
+    var mem = AI.memoryDigest ? AI.memoryDigest(300) : '';
+    return '你是考研英语阅卷组组长，按全国硕士研究生统考评分标准批改' + t.full + '。'
+      + (mem ? '\n' + mem + '\n' : '')
+      + '只输出 JSON，不要多余文字、不要 markdown 代码块。格式：'
+      + '{"score":0-' + t.max + '整数,"band":"第X档","summary":"总体评价(≤70字)",'
+      + '"issues":[{"quote":"原文摘句","problem":"问题(语法/用词/逻辑/结构)","fix":"修改后句子"}],'
+      + '"upgrades":[{"from":"原文普通表达","to":"高级替换表达"}],'
+      + '"modelSentence":"一个可直接背诵的高分句型","advice":"一句话备考建议"}。'
+      + '评分纪律：1) 严格按考研标准，第五档（满分档）极罕见；2) issues 给3-5个，quote 必须从原文摘抄；'
+      + '3) 若图片字迹无法辨认，score 填 -1 并在 summary 说明；4) 用简体中文。';
+  }
+
+  // ---------- 渲染 ----------
+  function render(el) {
+    var s = Store.get();
+    var keys = typeKeys();
+    if (!curType || keys.indexOf(curType) < 0) curType = keys[0];
+    var hist = history();
+
+    el.innerHTML =
+      '<div class="card"><div class="card-title">📝 英语作文 AI 批改</div>'
+      + '<div class="muted-sm">按考研统考评分档批改：给分、逐句问题、高级替换、范文句。拍照（手写）或粘贴文本均可。</div>'
+      + '<div class="seg-row" style="margin-top:10px">'
+      + keys.map(function (k) {
+        return '<button class="seg' + (curType === k ? ' seg-on' : '') + '" data-tk="' + k + '">' + ESSAY_TYPES[k].name + '·' + ESSAY_TYPES[k].max + '分</button>';
+      }).join('')
+      + '</div>'
+      + '<input id="es-topic" class="input" style="margin-top:8px" placeholder="作文题目（可选，填入后评分更准）">'
+      + '<div class="essay-input-row">'
+      + '<button class="btn btn-ghost" id="es-photo">📷 ' + (imgData ? '重选图片' : '拍照 / 选图') + '</button>'
+      + '<input type="file" id="es-file" accept="image/*" style="display:none">'
+      + (imgData ? '<img class="essay-thumb" src="' + imgData + '" alt="作文"><button class="cp-img-del" id="es-img-del">×</button>' : '')
+      + '</div>'
+      + '<textarea id="es-text" class="input essay-text" rows="4" placeholder="或直接粘贴/输入作文文本（与图片二选一，都有时以图片为准）"></textarea>'
+      + '<button class="btn btn-primary btn-block" id="es-go"' + (grading ? ' disabled' : '') + '>' + (grading ? '批改中…' : '🤖 开始批改') + '</button>'
+      + (typeof AI === 'undefined' || !AI.configured() ? '<div class="alert alert-warn" style="margin-top:8px">未配置 AI。请先在「设置 → 云端AI配置」填写 API。</div>' : '')
+      + '</div>'
+
+      + '<div id="es-result-slot">' + resultSlotHtml() + '</div>'
+
+      + (hist.length >= 2 ? '<div class="card"><div class="card-title">成绩趋势（百分制折算）</div>'
+        + Charts.line(hist.slice(0, 12).reverse().filter(function (h) { return h.score >= 0; }).map(function (h) {
+          return { label: (h.date || '').slice(5), value: Math.round(h.score / h.max * 100) };
+        }), { height: 140, min: 0, max: 100 }) + '</div>' : '')
+
+      + (hist.length ? '<div class="card"><div class="card-title">批改历史（' + hist.length + '/20）</div>'
+        + hist.map(function (h) {
+          return '<div class="mis-row essay-row" data-id="' + h.id + '" style="border-left-color:' + (h.score < 0 ? '#8c8c8c' : h.score / h.max >= 0.7 ? '#237804' : h.score / h.max >= 0.5 ? '#d48806' : '#cf1322') + '">'
+            + '<div class="mis-head"><span class="tag" style="background:#722ed1">' + U.esc(ESSAY_TYPES[h.essayType] ? ESSAY_TYPES[h.essayType].name : h.essayType) + '</span>'
+            + '<span class="mis-subj">' + (h.score >= 0 ? '<b>' + h.score + '</b>/' + h.max + ' · ' + U.esc(h.band || '') : '无法辨认') + '</span>'
+            + '<span class="mis-date">' + (h.date || '').slice(5) + '</span></div>'
+            + '<div class="mis-desc">' + U.esc((h.summary || '').slice(0, 60)) + '</div>'
+            + '<div class="mis-actions"><button class="btn btn-sm btn-ghost essay-view" data-id="' + h.id + '">查看详情</button>'
+            + '<button class="btn btn-sm btn-ghost essay-del" data-id="' + h.id + '">删除</button></div>'
+            + '</div>';
+        }).join('') + '</div>' : '');
+
+    bind(el);
+  }
+
+  function resultSlotHtml() {
+    if (grading) {
+      return '<div class="card brief-card"><div class="card-title">🤖 阅卷组长批改中…</div>'
+        + '<div class="pm-ai-body" id="es-stream">' + (streamBuf ? U.esc(streamBuf.slice(-800)).replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>' : '<div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w60"></div>') + '</div></div>';
+    }
+    return '';
+  }
+
+  function resultHtml(r, tk) {
+    var t = ESSAY_TYPES[tk];
+    if (r.score === -1) {
+      return '<div class="alert alert-warn">⚠️ ' + U.esc(r.summary || '图片字迹无法辨认，请重新拍摄（光线充足、正对纸面）或改用文本输入。') + '</div>';
+    }
+    var pct = r.score / t.max;
+    var color = pct >= 0.7 ? 'var(--ok)' : pct >= 0.5 ? 'var(--warn)' : 'var(--danger)';
+    var html = '<div class="essay-score-row"><div class="essay-score" style="color:' + color + '">' + r.score + '<span class="essay-max">/' + t.max + '</span></div>'
+      + '<div class="essay-band" style="color:' + color + '">' + U.esc(r.band || '') + '</div></div>'
+      + '<div class="pm-ai-section"><b>📋 总评：</b><div class="pm-ai-body">' + U.esc(r.summary || '') + '</div></div>';
+    if (r.issues && r.issues.length) {
+      html += '<div class="pm-ai-section"><b>🔍 逐句问题（' + r.issues.length + '）：</b>'
+        + r.issues.map(function (i, n) {
+          return '<div class="essay-issue"><div class="essay-q">' + (n + 1) + '. 原文：<i>' + U.esc(i.quote || '') + '</i></div>'
+            + '<div class="essay-p">⚠️ ' + U.esc(i.problem || '') + '</div>'
+            + '<div class="essay-f">✏️ 改为：' + U.esc(i.fix || '') + '</div></div>';
+        }).join('') + '</div>';
+    }
+    if (r.upgrades && r.upgrades.length) {
+      html += '<div class="pm-ai-section"><b>⬆️ 表达升级：</b><div class="pm-ai-body">'
+        + r.upgrades.map(function (u) { return '<div class="essay-up"><s>' + U.esc(u.from || '') + '</s> → <b>' + U.esc(u.to || '') + '</b></div>'; }).join('')
+        + '</div></div>';
+    }
+    if (r.modelSentence) html += '<div class="pm-ai-section"><b>💎 背诵句型：</b><div class="pm-ai-body">' + U.esc(r.modelSentence) + '</div></div>';
+    if (r.advice) html += '<div class="pm-ai-section"><b>🎯 备考建议：</b><div class="pm-ai-body">' + U.esc(r.advice) + '</div></div>';
+    return html;
+  }
+
+  // ---------- 批改主流程 ----------
+  function startGrade(el) {
+    if (grading) return;
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var text = el.querySelector('#es-text').value.trim();
+    var topic = el.querySelector('#es-topic').value.trim();
+    if (!imgData && !text) { Toast.warn('先拍照或输入作文'); return; }
+    grading = true;
+    streamBuf = '';
+    var tk = curType;
+    var slot = document.getElementById('es-result-slot');
+    var rerenderBtn = el.querySelector('#es-go');
+    if (rerenderBtn) { rerenderBtn.disabled = true; rerenderBtn.textContent = '批改中…'; }
+    if (slot) slot.innerHTML = resultSlotHtml();
+
+    var usr = (topic ? '作文题目：' + topic + '\n' : '')
+      + (imgData ? '请批改图片中的手写作文。' : '请批改以下作文：\n' + text);
+    var lastWrite = 0;
+    AI.chatStream(gradeSystem(tk), usr, function (full) {
+      streamBuf = full || '';
+      var now = Date.now();
+      if (now - lastWrite > 400) {
+        lastWrite = now;
+        var st = document.getElementById('es-stream');
+        if (st) st.innerHTML = U.esc(streamBuf.slice(-800)).replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>';
+      }
+    }, imgData).then(function (full) {
+      grading = false;
+      var r;
+      try { r = AI.extractRobustJSON(full || ''); }
+      catch (e) {
+        grading = false;
+        if (slot) slot.innerHTML = '<div class="card"><div class="alert alert-warn">批改结果解析失败，请重试。原文前200字：<br>' + U.esc((full || '').slice(0, 200)) + '</div></div>';
+        App.refresh();
+        return;
+      }
+      // 保存记录（图片≤1000px压缩，最多20条）
+      var rec = {
+        id: U.uid(), essayType: tk, score: typeof r.score === 'number' ? r.score : -1,
+        band: r.band || '', max: ESSAY_TYPES[tk].max, summary: r.summary || '',
+        result: r, topic: topic, textSnippet: text ? text.slice(0, 200) : '',
+        imageBase64: imgData || '', date: U.dkey(), createdAt: new Date().toISOString()
+      };
+      Store.update(function (s) {
+        if (!s.essays) s.essays = [];
+        s.essays.push(rec);
+        while (s.essays.length > 20) {
+          var dropped = s.essays.shift();
+          // 被淘汰的也打墓碑，避免云同步复活
+          if (dropped && dropped.id) {
+            if (!s.tomb) s.tomb = {};
+            if (!s.tomb.essays) s.tomb.essays = {};
+            s.tomb.essays[dropped.id] = Date.now();
+          }
+        }
+      });
+      if (window.AiMemory) {
+        var firstIssue = (r.issues && r.issues[0]) ? (r.issues[0].problem || '') : '';
+        AiMemory.recordEvent('完成作文批改', ESSAY_TYPES[tk].name + ' ' + rec.score + '/' + rec.max + ' ' + (rec.band || '') + (firstIssue ? '；主要问题：' + firstIssue.slice(0, 30) : ''));
+      }
+      imgData = null;
+      Toast.show(rec.score >= 0 ? '批改完成：' + rec.score + '/' + rec.max + ' ' + rec.band : '无法辨认字迹', rec.score >= 0 ? 'success' : 'warn', 4000);
+      App.refresh();
+    }).catch(function (e) {
+      grading = false;
+      if (slot) slot.innerHTML = '<div class="card"><div class="alert alert-danger">批改失败：' + U.esc(e.message) + '</div></div>';
+      var btn = document.getElementById('es-go');
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 开始批改'; }
+    });
+  }
+
+  // ---------- 图片压缩 ----------
+  function compressImage(file, cb) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var MAX = 1000;
+        var w = img.width, h = img.height;
+        if (w > MAX || h > MAX) { var r = Math.min(MAX / w, MAX / h); w = Math.round(w * r); h = Math.round(h * r); }
+        var cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        cb(cv.toDataURL('image/jpeg', 0.65));
+      };
+      img.onerror = function () { Toast.show('图片读取失败', 'warn'); };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ---------- 事件 ----------
+  function bind(el) {
+    el.querySelectorAll('.seg[data-tk]').forEach(function (b) {
+      b.onclick = function () { curType = b.getAttribute('data-tk'); App.refresh(); };
+    });
+    el.querySelector('#es-photo').onclick = function () { el.querySelector('#es-file').click(); };
+    el.querySelector('#es-file').onchange = function (e) {
+      var f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      compressImage(f, function (d) { imgData = d; App.refresh(); });
+    };
+    var imgDel = el.querySelector('#es-img-del');
+    if (imgDel) imgDel.onclick = function () { imgData = null; App.refresh(); };
+    el.querySelector('#es-go').onclick = function () { startGrade(el); };
+
+    el.querySelectorAll('.essay-view').forEach(function (b) {
+      b.onclick = function () {
+        var h = (Store.get().essays || []).find(function (x) { return x.id === b.getAttribute('data-id'); });
+        if (!h) return;
+        Modal.open({
+          title: '📝 ' + (ESSAY_TYPES[h.essayType] ? ESSAY_TYPES[h.essayType].full : '作文批改') + ' · ' + (h.date || ''),
+          wide: true,
+          html: (h.imageBase64 ? '<div style="text-align:center;margin-bottom:10px"><img src="' + h.imageBase64 + '" style="max-width:100%;max-height:240px;border-radius:8px;border:1px solid var(--line)"></div>' : '')
+            + (h.textSnippet ? '<div class="muted-sm" style="margin-bottom:8px">原文：' + U.esc(h.textSnippet) + (h.textSnippet.length >= 200 ? '…' : '') + '</div>' : '')
+            + resultHtml(h.result || {}, h.essayType),
+          actions: [{ label: '关闭' }]
+        });
+      };
+    });
+    el.querySelectorAll('.essay-del').forEach(function (b) {
+      b.onclick = function () {
+        Modal.confirm('删除批改记录', '<p>确认删除这条作文批改记录？</p>', '删除', function () {
+          Store.removeFromColl('essays', b.getAttribute('data-id'));
+          Toast.success('已删除');
+          App.refresh();
+        }, true);
+      };
+    });
+  }
+
+  window.EssayModule = { render };
 })();
 
 
@@ -9391,9 +10101,24 @@ body.cp-lock { overflow: hidden; }
         if (typeof AI !== 'undefined' && AI.configured()) {
           cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="similar">🔄 举一反三</button>';
         }
-        cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="editnote">✏️ 编辑备注</button>'
+        cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="review">📅 ' + (p.reviewPlan ? '复习中' : '复习计划') + '</button>'
+          + '<button class="btn btn-ghost pm-ai-btn" data-act="editnote">✏️ 编辑备注</button>'
           + '<button class="btn btn-ghost pm-del-btn" data-act="del">删除</button>'
-          + '</div></div>';
+          + '</div>';
+        // 复习计划进度（艾宾浩斯 1/3/7/15 天）
+        if (p.reviewPlan) {
+          var stages = [1, 3, 7, 15];
+          var rp = p.reviewPlan;
+          var diff = Math.floor((Date.parse(U.dkey()) - Date.parse(rp.start)) / U.DAY_MS);
+          cardsHtml += '<div class="rvd-progress muted-sm">复习进度：'
+            + stages.map(function (st) {
+              var done = rp.done && rp.done['d' + st];
+              var due = !done && diff >= st;
+              return '<span class="rvd-stage' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
+            }).join(' ')
+            + '</div>';
+        }
+        cardsHtml += '</div>';
       });
     }
 
@@ -9487,6 +10212,23 @@ body.cp-lock { overflow: hidden; }
       // 举一反三
       var simBtn = card.querySelector('[data-act="similar"]');
       if (simBtn) simBtn.onclick = function () { generateSimilar(id, el); };
+
+      // 复习计划（艾宾浩斯 1/3/7/15 天）
+      var rvBtn = card.querySelector('[data-act="review"]');
+      if (rvBtn) rvBtn.onclick = function () {
+        var p0 = (Store.get().mistakePhotos || []).find(function (x) { return x.id === id; });
+        if (p0 && p0.reviewPlan) {
+          Toast.show('已在复习计划中，到期的复习会出现在作战台', 'info');
+          return;
+        }
+        Store.update(function (st) {
+          var p = (st.mistakePhotos || []).find(function (x) { return x.id === id; });
+          if (p) p.reviewPlan = { start: U.dkey(), done: {} };
+        });
+        if (window.AiMemory) AiMemory.recordEvent('为拍题错题制定复习计划', ((p0 && (p0.painPoint || p0.note)) || '一道错题').slice(0, 30));
+        Toast.success('已加入复习计划：第1/3/7/15天将在作战台提醒你重做');
+        App.refresh();
+      };
 
       // 编辑备注
       var editBtn = card.querySelector('[data-act="editnote"]');
@@ -9933,7 +10675,8 @@ body.cp-lock { overflow: hidden; }
     dashboard: '作战台', scheduler: '排程', review: '复盘', photomistake: '拍题错题本',
     quiz: 'AI测验', mistakes: '错题画像', heatmap: '考点热力', inspector: '步骤审查',
     focus: '深度专注', concept: '概念图谱', decision: '院校决策', mental: '心理状态',
-    reading: '英语阅读', redline: '红线禁令', progress: '进度追踪', settings: '设置'
+    reading: '英语阅读', redline: '红线禁令', progress: '进度追踪', settings: '设置',
+    essay: '作文批改'
   };
 
   var QUICK = {
@@ -9944,6 +10687,7 @@ body.cp-lock { overflow: hidden; }
     quiz: ['怎么提高数学正确率', '我总在什么题型上翻车'],
     mental: ['我很焦虑，学不进去', '最近总想玩手机', '感觉来不及了好慌'],
     reading: ['阅读正确率怎么突破', '给我讲讲定位法的精髓'],
+    essay: ['英语作文怎么上第四档', '给我5个考研作文万能高级句型', '分析我最近作文的主要问题'],
     focus: ['我总是学20分钟就走神', '帮我设计今天下午的专注节奏'],
     default: ['今天该怎么学', '检查我的进度风险', '给我一句狠话骂醒我']
   };
@@ -9953,6 +10697,8 @@ body.cp-lock { overflow: hidden; }
   var sending = false;
   var userMsgSinceReflect = 0;
   var hasGreeted = false;
+  var pendingImage = null;   // 待发送图片 dataUrl（不持久化，随下条消息发出）
+  var GREET_KEY = 'kaoyan2026_copilot_greet'; // 主动开场按天一次（本地标记，不进云同步）
 
   // ---------- 上下文快照（注入系统提示词，让 AI 看得见你的当下） ----------
   function snapshot() {
@@ -10072,7 +10818,10 @@ body.cp-lock { overflow: hidden; }
       + '</div>'
       + '<div class="cp-msgs" id="cp-msgs"></div>'
       + '<div class="cp-quick" id="cp-quick"></div>'
+      + '<div class="cp-imgbar" id="cp-imgbar"><img id="cp-img-thumb" alt="待发送图片"><span class="muted-sm" style="flex:1">已附图，随下一条消息发送</span><button class="cp-img-del" id="cp-img-del" aria-label="移除图片">×</button></div>'
       + '<div class="cp-input">'
+      + '<button class="cp-attach" id="cp-attach" title="拍题/传图问 AI">📷</button>'
+      + '<input type="file" id="cp-file" accept="image/*" style="display:none">'
       + '<textarea id="cp-text" rows="1" placeholder="和教练聊聊…（Enter 发送）"></textarea>'
       + '<button id="cp-send" class="btn btn-primary">发送</button>'
       + '</div>';
@@ -10080,6 +10829,21 @@ body.cp-lock { overflow: hidden; }
 
     document.getElementById('cp-close').onclick = function () { close(); };
     document.getElementById('cp-send').onclick = function () { doSend(); };
+    document.getElementById('cp-attach').onclick = function () { document.getElementById('cp-file').click(); };
+    document.getElementById('cp-file').onchange = function (e) {
+      var f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      compressImage(f, function (dataUrl) {
+        pendingImage = dataUrl;
+        document.getElementById('cp-img-thumb').src = dataUrl;
+        document.getElementById('cp-imgbar').classList.add('cp-has');
+      });
+    };
+    document.getElementById('cp-img-del').onclick = function () {
+      pendingImage = null;
+      document.getElementById('cp-imgbar').classList.remove('cp-has');
+    };
     var ta = document.getElementById('cp-text');
     ta.onkeydown = function (e) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
@@ -10088,6 +10852,26 @@ body.cp-lock { overflow: hidden; }
       ta.style.height = 'auto';
       ta.style.height = Math.min(96, ta.scrollHeight) + 'px';
     };
+  }
+
+  // 图片压缩（≤1200px JPEG 0.7，与拍题一致）
+  function compressImage(file, cb) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var MAX = 1200;
+        var w = img.width, h = img.height;
+        if (w > MAX || h > MAX) { var r = Math.min(MAX / w, MAX / h); w = Math.round(w * r); h = Math.round(h * r); }
+        var cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        cb(cv.toDataURL('image/jpeg', 0.7));
+      };
+      img.onerror = function () { Toast.show('图片读取失败', 'warn'); };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
   }
 
   function memBadge() {
@@ -10121,7 +10905,11 @@ body.cp-lock { overflow: hidden; }
       return;
     }
     box.innerHTML = msgs.map(function (m) {
-      if (m.role === 'user') return '<div class="cp-row cp-user"><div class="cp-bubble">' + U.esc(m.content) + '</div></div>';
+      if (m.role === 'user') {
+        var hasImg = m.content.indexOf('[图片] ') === 0;
+        var txt = hasImg ? m.content.slice(5) : m.content;
+        return '<div class="cp-row cp-user"><div class="cp-bubble">' + (hasImg ? '<span class="cp-img-ph">📷 图片</span>' : '') + U.esc(txt) + '</div></div>';
+      }
       var acts = parseActions(m.content);
       return '<div class="cp-row cp-ai"><div class="cp-bubble">' + renderContent(m.content)
         + (acts.length ? '<div class="cp-actions">' + acts.map(function (a, i) { return '<button class="cp-act" data-ai="' + i + '">' + U.esc(actionLabel(a)) + '</button>'; }).join('') + '</div>' : '')
@@ -10152,6 +10940,39 @@ body.cp-lock { overflow: hidden; }
     renderMessages();
     setTimeout(function () { document.getElementById('cp-text').focus(); }, 250);
     if (opts && opts.send) setTimeout(function () { sendText(opts.send); }, 300);
+    else maybeProactiveGreet();
+  }
+
+  // 主动开场：每天首次打开且无历史时，AI 主动说一句（不存 user 消息）
+  function maybeProactiveGreet() {
+    if (!AI.configured() || sending) return;
+    if (history().length > 0) return;
+    if (localStorage.getItem(GREET_KEY) === U.dkey()) return;
+    localStorage.setItem(GREET_KEY, U.dkey());
+    sending = true;
+    var box = document.getElementById('cp-msgs');
+    var row = document.createElement('div');
+    row.className = 'cp-row cp-ai';
+    row.innerHTML = '<div class="cp-bubble"><span class="cp-thinking">正在看你今天的数据</span><span class="ai-cursor"></span></div>';
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+    var bubble = row.querySelector('.cp-bubble');
+    var payload = '（系统指令：考生刚打开对话面板还没说话。根据他的当前页面与实时数据主动开场：点出一个今天最值得关注的事实或风险，给一句具体可执行的建议。≤70字，像教练路过拍了他肩膀一下，不要自我介绍，不要问"有什么可以帮你"。）';
+    AI.chatStream(systemPrompt(), payload, function (full) {
+      bubble.innerHTML = renderContent(full || '') + '<span class="ai-cursor"></span>';
+      box.scrollTop = box.scrollHeight;
+    }).then(function (full) {
+      sending = false;
+      if (full && full.trim()) {
+        pushHistory('assistant', full);
+        renderMessages();
+      } else {
+        row.remove();
+      }
+    }).catch(function () {
+      sending = false;
+      row.remove();
+    });
   }
 
   function close() {
@@ -10178,7 +10999,12 @@ body.cp-lock { overflow: hidden; }
     if (sending) return;
     if (!AI.configured()) { Toast.show('请先在设置中配置 AI', 'warn'); close(); App.go('settings'); return; }
     sending = true;
-    pushHistory('user', text);
+    var img = pendingImage;
+    if (img) {
+      pendingImage = null;
+      document.getElementById('cp-imgbar').classList.remove('cp-has');
+    }
+    pushHistory('user', (img ? '[图片] ' : '') + text);
     userMsgSinceReflect++;
     renderMessages();
 
@@ -10194,12 +11020,12 @@ body.cp-lock { overflow: hidden; }
     var convoText = sysMsgs.slice(0, -1).map(function (m) {
       return (m.role === 'user' ? '考生' : '教练') + '：' + m.content;
     }).join('\n');
-    var userPayload = (convoText ? '【近期对话】\n' + convoText + '\n\n' : '') + '考生：' + text;
+    var userPayload = (convoText ? '【近期对话】\n' + convoText + '\n\n' : '') + '考生：' + (img ? '（发来一张题目图片）' : '') + text;
 
     AI.chatStream(systemPrompt(), userPayload, function (full) {
       bubble.innerHTML = renderContent(full || '') + '<span class="ai-cursor"></span>';
       box.scrollTop = box.scrollHeight;
-    }).then(function (full) {
+    }, img).then(function (full) {
       sending = false;
       pushHistory('assistant', full || '（无回复）');
       renderMessages();
@@ -10259,6 +11085,7 @@ body.cp-lock { overflow: hidden; }
   ];
   const TOOL_TABS = [
     ['quiz', 'AI测验', '🤖', QuizModule],
+    ['essay', '作文批改', '📝', EssayModule],
     ['mistakes', '错题画像', '🎯', MistakesModule],
     ['heatmap', '考点热力', '🗺', HeatmapModule],
     ['inspector', '步骤审查', '✍️', InspectorModule],
@@ -10289,17 +11116,19 @@ body.cp-lock { overflow: hidden; }
     Store.update(x => { x.meta.lastOpenDate = today; });
   }
 
-  // 顶部状态条：倒计时 + 今日时长 + 今日任务完成度
+  // 顶部状态条：倒计时 + 今日时长 + 今日任务完成度 + 连续作战
   function renderStatusBar() {
     const el = document.getElementById('statusbar');
     const left = U.daysTo(Store.get().settings.examDate);
     const st = Store.todayTaskStats();
     let done = 0, total = 0;
     Object.keys(st).forEach(k => { done += st[k][0]; total += st[k][1]; });
+    const streak = Store.studyStreak();
     el.innerHTML =
       '<span class="sb-item">⏳ <b>' + left + '</b>天</span>'
       + '<span class="sb-item">🕐 <b>' + Store.todayHours() + '</b>h</span>'
       + '<span class="sb-item">✅ <b>' + done + '/' + total + '</b></span>'
+      + (streak >= 2 ? '<span class="sb-item sb-streak">🔥 <b>' + streak + '</b>天</span>' : '')
       + (Store.mistakeCountToday('sign') > 0 ? '<span class="sb-item sb-warn">⚠️符号' + Store.mistakeCountToday('sign') + '</span>' : '');
   }
 
@@ -10383,6 +11212,14 @@ body.cp-lock { overflow: hidden; }
     render(true);
     // 全局 AI 教练悬浮入口
     try { if (window.Copilot) Copilot.mount(); } catch (e) { }
+    // 桌面端快捷键：「/」唤起 AI 教练，Esc 关闭
+    document.addEventListener('keydown', function (e) {
+      if (!window.Copilot) return;
+      var tag = (e.target && e.target.tagName) || '';
+      var typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable);
+      if (e.key === '/' && !typing) { e.preventDefault(); Copilot.open(); }
+      else if (e.key === 'Escape' && Copilot.isOpen) Copilot.close();
+    });
     cloudReady.then(function () {
       if (Onboarding.needed()) Onboarding.show();
     }).catch(function () {
