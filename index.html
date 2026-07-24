@@ -1065,6 +1065,8 @@ body.cp-lock { overflow: hidden; }
         if (cmd === 'end') { const eg = readGroup(s, i + m[0].length); i += m[0].length + eg[1]; continue; } // 跳过 \end{...}
         if (cmd === 'text' || cmd === 'mathrm' || cmd === 'mathbf') { const g = readGroup(s, i + m[0].length); out += '<span>' + esc(g[0]) + '</span>'; i += m[0].length + g[1]; continue; }
         if (cmd === 'overline' || cmd === 'bar' || cmd === 'vec' || cmd === 'hat' || cmd === 'dot') { const g = readGroup(s, i + m[0].length); out += '<span class="tx-over">' + seg(normalizeShorthand(g[0])) + '</span>'; i += m[0].length + g[1]; continue; }
+        // \displaystyle / \textstyle / \scriptstyle / \scriptscriptstyle —— 样式切换，静默消费
+        if (cmd === 'displaystyle' || cmd === 'textstyle' || cmd === 'scriptstyle' || cmd === 'scriptscriptstyle') { i += m[0].length; continue; }
         // 未知命令：原样输出名字
         out += esc(cmd); i += m[0].length; continue;
       }
@@ -1338,7 +1340,51 @@ body.cp-lock { overflow: hidden; }
     return r;
   }
 
+  // ---------- LaTeX 转义修复（单一事实来源） ----------
+  // JSON.parse 会把 LaTeX 命令里的 \f \r \b \t \n 吃掉（变成控制字符），
+  // 这里遍历对象所有字符串值，恢复被吞的反斜杠。合并自 dashboard/data/photomistake 三处，
+  // 取三者规则并集并剔除非法映射（\x0Dot→\rot 无意义；\x08eta 重复映射 \beta 为 bug）。
+  function repairMangledStr(s) {
+    if (typeof s !== 'string') return s;
+    return s
+      .replace(/\x0Cfrac/g, '\\frac').replace(/\x0Cfrom/g, '\\from')
+      .replace(/\x0DRightarrow/g, '\\Rightarrow').replace(/\x0Drightarrow/g, '\\rightarrow')
+      .replace(/\x0Dlefteqn/g, '\\lefteqn').replace(/\x0Dright/g, '\\right').replace(/\x0Dleft/g, '\\left')
+      .replace(/\x0Drceil/g, '\\rceil').replace(/\x0Drfloor/g, '\\rfloor').replace(/\x0Drangle/g, '\\rangle').replace(/\x0Drbrace/g, '\\rbrace')
+      .replace(/\x0Dmathrm/g, '\\mathrm').replace(/\x0Drm/g, '\\rm')
+      .replace(/\x0Draise/g, '\\raise').replace(/\x0Droot/g, '\\root').replace(/\x0Drule/g, '\\rule')
+      .replace(/\x0Dlimits/g, '\\limits').replace(/\x0Dnolimits/g, '\\nolimits')
+      .replace(/\x08begin/g, '\\begin')
+      .replace(/\x08bigg/g, '\\bigg').replace(/\x08Bigg/g, '\\Bigg')
+      .replace(/\x08bigl/g, '\\bigl').replace(/\x08Bigl/g, '\\Bigl')
+      .replace(/\x08bigr/g, '\\bigr').replace(/\x08Bigr/g, '\\Bigr')
+      .replace(/\x08biggl/g, '\\biggl').replace(/\x08Biggl/g, '\\Biggl')
+      .replace(/\x08biggr/g, '\\biggr').replace(/\x08Biggr/g, '\\Biggr')
+      .replace(/\x08big/g, '\\big').replace(/\x08Big/g, '\\Big')
+      .replace(/\x08eta/g, '\\eta').replace(/\x08in/g, '\\bin').replace(/\x08ar/g, '\\bar')
+      .replace(/\x08f/g, '\\bf').replace(/\x08old/g, '\\bold').replace(/\x08ot/g, '\\bot')
+      .replace(/\x08race/g, '\\brace').replace(/\x08rack/g, '\\brack')
+      .replace(/\x08ullet/g, '\\bullet').replace(/\x08ackslash/g, '\\backslash').replace(/\x08reve/g, '\\breve')
+      .replace(/\x09ext/g, '\\text').replace(/\x09extrm/g, '\\textrm').replace(/\x09extbf/g, '\\textbf')
+      .replace(/\x09extit/g, '\\textit').replace(/\x09exttt/g, '\\texttt')
+      .replace(/\x09an/g, '\\tan').replace(/\x09imes/g, '\\times').replace(/\x09o/g, '\\to')
+      .replace(/\x09op/g, '\\top').replace(/\x09au/g, '\\tau').replace(/\x09heta/g, '\\theta')
+      .replace(/\x09ilde/g, '\\tilde').replace(/\x09iny/g, '\\tiny')
+      .replace(/\x0Aeq/g, '\\neq').replace(/\x0Aearrow/g, '\\nearrow')
+      .replace(/\x0Awarrow/g, '\\nwarrow').replace(/\x0Aatural/g, '\\natural').replace(/\x0Aeg/g, '\\neg');
+  }
+  function repairMangledLatex(obj) {
+    if (!obj) return obj;
+    if (typeof obj === 'string') return repairMangledStr(obj);
+    if (typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) obj[i] = repairMangledLatex(obj[i]); return obj; }
+    var keys = Object.keys(obj);
+    for (var k = 0; k < keys.length; k++) obj[keys[k]] = repairMangledLatex(obj[keys[k]]);
+    return obj;
+  }
+
   const Tex = {
+    repairMangledLatex: repairMangledLatex,
     // 整段都是公式（可能带 $ 包裹）
     render(str) {
       if (str == null) return '';
@@ -1457,6 +1503,32 @@ body.cp-lock { overflow: hidden; }
 
   let cache = null;
 
+  // ---------- 存储配额保护 ----------
+  function isQuotaError(e) {
+    if (!e) return false;
+    if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) return true;
+    const msg = (e.message || '') + ' ' + (e.name || '');
+    return /quota|exceeded|空间|storage/i.test(msg);
+  }
+  // 自动裁剪最旧图片以释放空间（直接改 cache，避免递归 save）。返回是否清理了内容。
+  function autoTrimImages() {
+    const s = cache;
+    if (!s) return false;
+    const items = [];
+    (s.essays || []).forEach(x => { if (x && x.imageBase64) items.push({ coll: 'essays', id: x.id, t: x.createdAt || '' }); });
+    (s.mistakePhotos || []).forEach(x => { if (x && x.imageBase64) items.push({ coll: 'mistakePhotos', id: x.id, t: x.createdAt || '' }); });
+    if (!items.length) return false;
+    items.sort((a, b) => (a.t || '').localeCompare(b.t || ''));
+    let cleared = 0;
+    for (let i = 0; i < Math.min(3, items.length); i++) {
+      const it = items[i];
+      const arr = it.coll === 'essays' ? s.essays : s.mistakePhotos;
+      const rec = arr.find(x => x.id === it.id);
+      if (rec) { rec.imageBase64 = ''; cleared++; }
+    }
+    return cleared > 0;
+  }
+
   const Store = {
     KEY,
     // 读取整个状态（带缓存）。首次或损坏时回退到初始结构
@@ -1499,7 +1571,24 @@ body.cp-lock { overflow: hidden; }
       s.tasks.forEach(t => { if (t && !t.updatedAt) t.updatedAt = t.createdAt || new Date().toISOString(); });
       return s;
     },
-    save() { try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) { console.error('[Store] 保存失败', e); if (window.Toast) Toast.show('存储失败：空间不足，请导出备份后清理', 'danger'); } if (window.Cloud) Cloud.schedulePush(); },
+    save() {
+      try {
+        localStorage.setItem(KEY, JSON.stringify(cache));
+      } catch (e) {
+        // 配额超限：自动裁剪最旧图片后重试，保住关键数据不丢
+        if (isQuotaError(e) && autoTrimImages()) {
+          try {
+            localStorage.setItem(KEY, JSON.stringify(cache));
+            if (window.Toast) Toast.show('存储空间不足，已自动清理最旧的图片以保数据安全', 'warn', 4000);
+            if (window.Cloud) Cloud.schedulePush();
+            return;
+          } catch (e2) { /* 仍失败，走下方提示 */ }
+        }
+        console.error('[Store] 保存失败', e);
+        if (window.Toast) Toast.show('存储失败：空间不足，请导出备份后清理', 'danger');
+      }
+      if (window.Cloud) Cloud.schedulePush();
+    },
     // 函数式更新：Store.update(s => { s.xxx = ... })
     update(fn) { const s = Store.get(); fn(s); Store.save(); U.emit('store:change'); return s; },
     replace(data) { cache = Store.migrate(data); Store.save(); U.emit('store:change'); },
@@ -1613,6 +1702,17 @@ body.cp-lock { overflow: hidden; }
     resetAll() { cache = initialState(); Store.save(); U.emit('store:change'); },
     exportJSON() { return JSON.stringify(Store.get(), null, 2); },
     usageBytes() { const raw = localStorage.getItem(KEY) || ''; return raw.length * 2; }, // UTF-16 粗算
+    // 真实占用（优先 navigator.storage.estimate，否则回退粗算）。cb({used,quota,approx})
+    usageEstimate(cb) {
+      try {
+        if (navigator.storage && navigator.storage.estimate) {
+          navigator.storage.estimate().then(est => cb({ used: est.usage || 0, quota: est.quota || 0, approx: false }))
+            .catch(() => cb({ used: Store.usageBytes(), quota: 0, approx: true }));
+        } else {
+          cb({ used: Store.usageBytes(), quota: 0, approx: true });
+        }
+      } catch (e) { cb({ used: Store.usageBytes(), quota: 0, approx: true }); }
+    },
 
     // ---------- 跨模块查询助手 ----------
     // 今日完成的任务数/总数（按科目）
@@ -2395,7 +2495,36 @@ body.cp-lock { overflow: hidden; }
       { id: 'm-est', name: '参数估计', tier: 2, group: '概率' },
       { id: 'm-hypo', name: '假设检验', tier: 3, group: '概率' }
     ],
-    ctrl: MAJOR_REGISTRY['自控原理'].topics
+    ctrl: MAJOR_REGISTRY['自控原理'].topics,
+    eng: [
+      { id: 'e-read-detail', name: '阅读·细节题', tier: 1, group: '阅读' },
+      { id: 'e-read-main', name: '阅读·主旨题', tier: 1, group: '阅读' },
+      { id: 'e-read-vocab', name: '阅读·词义猜测', tier: 1, group: '阅读' },
+      { id: 'e-read-infer', name: '阅读·推断题', tier: 2, group: '阅读' },
+      { id: 'e-read-attitude', name: '阅读·态度题', tier: 2, group: '阅读' },
+      { id: 'e-cloze', name: '完形·逻辑衔接', tier: 2, group: '完形' },
+      { id: 'e-new', name: '新题型·七选五/排序', tier: 2, group: '新题型' },
+      { id: 'e-trans', name: '翻译·长难句', tier: 2, group: '翻译' },
+      { id: 'e-big-desc', name: '大作文·图画描述', tier: 1, group: '作文' },
+      { id: 'e-big-argue', name: '大作文·论证展开', tier: 2, group: '作文' },
+      { id: 'e-big-lang', name: '大作文·语言升级', tier: 3, group: '作文' },
+      { id: 'e-small', name: '小作文·书信格式', tier: 1, group: '作文' }
+    ],
+    pol: [
+      { id: 'p-my-wz', name: '马原·唯物论', tier: 1, group: '马原' },
+      { id: 'p-my-bz', name: '马原·辩证法', tier: 1, group: '马原' },
+      { id: 'p-my-rsh', name: '马原·认识论', tier: 2, group: '马原' },
+      { id: 'p-my-lsw', name: '马原·历史唯物', tier: 2, group: '马原' },
+      { id: 'p-my-zj', name: '马原·政经', tier: 3, group: '马原' },
+      { id: 'p-mzt-thought', name: '毛中特·思想理论', tier: 1, group: '毛中特' },
+      { id: 'p-mzt-new', name: '毛中特·新时代', tier: 1, group: '毛中特' },
+      { id: 'p-mzt-eco', name: '毛中特·经济建设', tier: 2, group: '毛中特' },
+      { id: 'p-sg-newdemo', name: '史纲·新民主主义革命', tier: 1, group: '史纲' },
+      { id: 'p-sg-explore', name: '史纲·社会主义探索', tier: 2, group: '史纲' },
+      { id: 'p-sx-value', name: '思修·价值观与道德', tier: 1, group: '思修' },
+      { id: 'p-sx-law', name: '思修·法治素养', tier: 2, group: '思修' },
+      { id: 'p-sz-hot', name: '时政·年度热点', tier: 2, group: '时政' }
+    ]
   };
 
   // 拷贝一份，避免 _applyMajor 就地修改污染注册表默认模板
@@ -3008,32 +3137,7 @@ body.cp-lock { overflow: hidden; }
       var obj = r1 || r2;
       if (!obj) return null;
       // 修复 JSON 转义吞掉的 LaTeX 命令（\f→换页 \r→回车 \b→退格 等）
-      return repairMangledLatex(obj);
-    }
-
-    // 递归修复对象中所有字符串值里被 JSON 转义吞掉的 LaTeX 命令
-    function repairMangledLatex(obj) {
-      if (!obj) return obj;
-      if (typeof obj === 'string') return _repairMangledStr(obj);
-      if (typeof obj !== 'object') return obj;
-      if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) obj[i] = repairMangledLatex(obj[i]); return obj; }
-      var keys = Object.keys(obj);
-      for (var k = 0; k < keys.length; k++) obj[keys[k]] = repairMangledLatex(obj[keys[k]]);
-      return obj;
-    }
-    function _repairMangledStr(s) {
-      if (typeof s !== 'string') return s;
-      return s
-        .replace(/\x0Cfrac/g, '\\frac').replace(/\x0Cfrom/g, '\\from')
-        .replace(/\x0DRightarrow/g, '\\Rightarrow').replace(/\x0Drightarrow/g, '\\rightarrow')
-        .replace(/\x0Dright/g, '\\right').replace(/\x0Dleft/g, '\\left')
-        .replace(/\x08begin/g, '\\begin').replace(/\x08bigg/g, '\\bigg').replace(/\x08Bigg/g, '\\Bigg')
-        .replace(/\x08bigl/g, '\\bigl').replace(/\x08Bigl/g, '\\Bigl')
-        .replace(/\x08bigr/g, '\\bigr').replace(/\x08Bigr/g, '\\Bigr')
-        .replace(/\x08big/g, '\\big').replace(/\x08Big/g, '\\Big')
-        .replace(/\x09ext/g, '\\text').replace(/\x09an/g, '\\tan')
-        .replace(/\x09imes/g, '\\times').replace(/\x09o/g, '\\to')
-        .replace(/\x0Aeq/g, '\\neq').replace(/\x0Aeg/g, '\\neg');
+      return Tex.repairMangledLatex(obj);
     }
 
     var MAX_RETRIES = 1;
@@ -3058,7 +3162,6 @@ body.cp-lock { overflow: hidden; }
       var promptToSend = (attempt === 1) ? prompt :
         prompt + '\n\n【重要】上次返回的内容无法解析为有效 JSON。请务必：只输出一个标准 JSON 对象，不要任何解释文字、不要 markdown 标记、不要注释、不要尾逗号。直接以 { 开头、以 } 结尾。';
 
-      // 更新进度弹窗状态
       if (attempt > 1) {
         try {
           var stEl = document.getElementById('gm-status');
@@ -4616,7 +4719,21 @@ body.cp-lock { overflow: hidden; }
     if (wp && wp.weakAreas && wp.weakAreas.length) ctxParts.push('考生薄弱点画像关键词：' + wp.weakAreas.join('、'));
     if (painPoints.length) ctxParts.push('近期疑难点标签：' + painPoints.join('、'));
     if (qSamples.length) ctxParts.push('部分错题题干样例：\n- ' + qSamples.join('\n- '));
-    var ctx = ctxParts.length ? ctxParts.join('\n') : '（暂无错题记录，请基于该考生专业课「' + profName + '」常见易错点出题）';
+    // 接入热力图薄弱考点（Store.heat 中 level<=1 的红/黄格，让 AI 聚焦这些考点出题）
+    var heat = s.heat || {};
+    var heatSubjs = chosenSubject ? [chosenSubject] : ['math', 'ctrl', 'eng', 'pol'];
+    var weakTopics = [];
+    heatSubjs.forEach(function (subj) {
+      var topics = DB.TOPICS[subj] || [];
+      topics.forEach(function (t) {
+        var h = heat[t.id];
+        if (h && h.level !== undefined && h.level <= 1) {
+          weakTopics.push((DB.SUBJECTS[subj] ? DB.SUBJECTS[subj].name : subj) + '·' + t.name + (h.level === 0 ? '(🔴未掌握)' : '(🟡薄弱)'));
+        }
+      });
+    });
+    if (weakTopics.length) ctxParts.push('热力图薄弱考点（需重点突破）：\n- ' + weakTopics.join('\n- '));
+    var ctx = ctxParts.length ? ctxParts.join('\n') : '（暂无错题/热力图记录，请基于该考生专业课「' + profName + '」常见易错点出题）';
 
     var subjectHint = chosenSubject
       ? '本题必须属于科目「' + ((DB.SUBJECTS[chosenSubject] && DB.SUBJECTS[chosenSubject].name) || chosenSubject) + '」，输出 JSON 时 "subject" 字段固定填 "' + chosenSubject + '"。'
@@ -4683,7 +4800,7 @@ body.cp-lock { overflow: hidden; }
 
     // 先试 markdown 代码块
     var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (m) { try { return repairFields(JSON.parse(m[1].trim())); } catch (e) {} }
+    if (m) { try { return Tex.repairMangledLatex(JSON.parse(m[1].trim())); } catch (e) {} }
 
     // 找最外层 { ... }
     var start = str.indexOf('{');
@@ -4702,7 +4819,7 @@ body.cp-lock { overflow: hidden; }
     var jsonStr = str.slice(start, end);
 
     // 直接解析
-    try { return repairFields(JSON.parse(jsonStr)); } catch (e) {}
+    try { return Tex.repairMangledLatex(JSON.parse(jsonStr)); } catch (e) {}
 
     // 修复常见问题后重试
     var repaired = jsonStr
@@ -4710,7 +4827,7 @@ body.cp-lock { overflow: hidden; }
       .replace(/\/\*[\s\S]*?\*\//g, '') // 去块注释
       .replace(/,\s*([}\]])/g, '$1')     // 去尾逗号
       .replace(/'/g, '"');               // 单引号→双引号
-    try { return repairFields(JSON.parse(repaired)); } catch (e) {}
+    try { return Tex.repairMangledLatex(JSON.parse(repaired)); } catch (e) {}
 
     // 最后兜底：用正则从原始文本中捞各字段值
     var fields = {};
@@ -4727,102 +4844,12 @@ body.cp-lock { overflow: hidden; }
       if (mm) fields[p[0]] = mm[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     });
     // 兜底提取的字段也需要修复 LaTeX 转义
-    return fields.question ? repairFields(fields) : null;
+    return fields.question ? Tex.repairMangledLatex(fields) : null;
   }
-
-  // ★ 关键修复：JSON 解析会把 LaTeX 命令中的 \f \r \b \t 吞掉（变成控制字符）
-  // 例如 "\frac" → JSON.parse 后变成 <formfeed>rac
-  // 此函数遍历对象所有字符串值，恢复被吞的 LaTeX 反斜杠
-  function repairFields(obj) {
-    if (!obj) return obj;
-    if (typeof obj === 'string') return repairMangled(obj);
-    if (typeof obj !== 'object') return obj;
-    // 数组
-    if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) obj[i] = repairFields(obj[i]); return obj; }
-    // 对象
-    var keys = Object.keys(obj);
-    for (var k = 0; k < keys.length; k++) obj[keys[k]] = repairFields(obj[keys[k]]);
-    return obj;
-  }
-  // 修复单个字符串中被 JSON 转义吞掉的 LaTeX 命令
-  function repairMangled(s) {
-    if (typeof s !== 'string') return s;
-    // 按长度降序排列（先匹配长的前缀，避免 \bigg 被 \big 先匹配掉）
-    return s
-      // ===== \f (form feed U+000C) 冲突 =====
-      .replace(/\x0Cfrac/g, '\\frac')
-      .replace(/\x0Cfrom/g, '\\from')
-      // ===== \r (CR U+000D) 冲突 —— 大量命令以 r 开头 =====
-      .replace(/\x0DRightarrow/g, '\\Rightarrow')
-      .replace(/\x0Drightarrow/g, '\\rightarrow')
-      .replace(/\x0Dlefteqn/g, '\\lefteqn')
-      .replace(/\x0Dright/g, '\\right')
-      .replace(/\x0Dleft/g, '\\left')
-      .replace(/\x0Drceil/g, '\\rceil')
-      .replace(/\x0Drfloor/g, '\\rfloor')
-      .replace(/\x0Drangle/g, '\\rangle')
-      .replace(/\x0Drbrace/g, '\\rbrace')
-      .replace(/\x0Dmathrm/g, '\\mathrm')
-      .replace(/\x0Drm/g, '\\rm')
-      .replace(/\x0Draise/g, '\\raise')
-      .replace(/\x0Droot/g, '\\root')
-      .replace(/\x0Drule/g, '\\rule')
-      .replace(/\x0Dlimits/g, '\\limits')
-      .replace(/\x0Dnolimits/g, '\\nolimits')
-      .replace(/\x0Dot/g, '\\rot')   // 少见但可能
-      // ===== \b (BS U+0008) 冲突 =====
-      .replace(/\x08begin/g, '\\begin')
-      .replace(/\x08bigg/g, '\\bigg')
-      .replace(/\x08Bigg/g, '\\Bigg')
-      .replace(/\x08bigl/g, '\\bigl')
-      .replace(/\x08Bigl/g, '\\Bigl')
-      .replace(/\x08bigr/g, '\\bigr')
-      .replace(/\x08Bigr/g, '\\Bigr')
-      .replace(/\x08biggl/g, '\\biggl')
-      .replace(/\x08Biggl/g, '\\Biggl')
-      .replace(/\x08biggr/g, '\\biggr')
-      .replace(/\x08Biggr/g, '\\Biggr')
-      .replace(/\x08big/g, '\\big')
-      .replace(/\x08Big/g, '\\Big')
-      .replace(/\x08eta/g, '\\eta')
-      .replace(/\x08in/g, '\\bin')   // \binom 可能
-      .replace(/\x08eta/g, '\\beta')
-      .replace(/\x08ar/g, '\\bar')
-      .replace(/\x08f/g, '\\bf')
-      .replace(/\x08old/g, '\\bold')
-      .replace(/\x08ot/g, '\\bot')
-      .replace(/\x08race/g, '\\brace')
-      .replace(/\x08rack/g, '\\brack')
-      .replace(/\x08ullet/g, '\\bullet')
-      .replace(/\x08ackslash/g, '\\backslash')
-      .replace(/\x08reve/g, '\\breve')
-      // ===== \t (TAB U+0009) 冲突 =====
-      .replace(/\x09ext/g, '\\text')
-      .replace(/\x09extrm/g, '\\textrm')
-      .replace(/\x09extbf/g, '\\textbf')
-      .replace(/\x09extit/g, '\\textit')
-      .replace(/\x09exttt/g, '\\texttt')
-      .replace(/\x09an/g, '\\tan')
-      .replace(/\x09imes/g, '\\times')
-      .replace(/\x09o/g, '\\to')
-      .replace(/\x09op/g, '\\top')
-      .replace(/\x09au/g, '\\tau')
-      .replace(/\x09heta/g, '\\theta')
-      .replace(/\x09ilde/g, '\\tilde')
-      .replace(/\x09iny/g, '\\tiny')
-      // ===== \n (LF U+000A) 冲突（较少但可能） =====
-      .replace(/\x0Aeq/g, '\\neq')
-      .replace(/\x0Aearrow/g, '\\nearrow')
-      .replace(/\x0Awarrow/g, '\\nwarrow')
-      .replace(/\x0Aatural/g, '\\natural')
-      .replace(/\x0Aeg/g, '\\neg')
-      ; // 末尾分号空语句
-  }
-
-  function bind(el, next) {
+function bind(el, next) {
     // NOW 卡动作
     const doneBtn = el.querySelector('#now-done');
-    if (doneBtn && next) doneBtn.onclick = () => toggleTask(next.id, true);
+    if (doneBtn && next) doneBtn.onclick = () => TasksModule.toggleTask(next.id, true);
     const focBtn = el.querySelector('#now-focus');
     if (focBtn && next) focBtn.onclick = () => { App.go('focus'); };
     const addBtn = el.querySelector('#now-add');
@@ -4832,7 +4859,7 @@ body.cp-lock { overflow: hidden; }
     el.querySelectorAll('.seq-row input[type=checkbox]').forEach(cb => {
       cb.onchange = () => {
         const id = cb.closest('.seq-row').getAttribute('data-id');
-        toggleTask(id, cb.checked);
+        TasksModule.toggleTask(id, cb.checked);
       };
     });
 
@@ -4895,18 +4922,37 @@ body.cp-lock { overflow: hidden; }
     };
     var dqKnown = el.querySelector('#dq-known');
     if (dqKnown) dqKnown.onclick = () => {
-      Store.update(s => { if (s.dailyQuiz) s.dailyQuiz.selfEval = 'known'; });
+      var dq = Store.get().dailyQuiz;
+      Store.update(s => {
+        if (s.dailyQuiz) s.dailyQuiz.selfEval = 'known';
+        // 回写热力图：会了 → 该科目必拿层考点标记为已掌握（绿）
+        if (dq && dq.subject && DB.TOPICS[dq.subject]) {
+          var now = new Date().toISOString();
+          (DB.TOPICS[dq.subject] || []).forEach(function (t) {
+            if (t.tier === 1) { s.heat = s.heat || {}; s.heat[t.id] = { level: 2, score: 85, updatedAt: now }; }
+          });
+        }
+      });
       Toast.success('✓ 拿下。明天继续。');
       App.refresh();
     };
     var dqUnknown = el.querySelector('#dq-unknown');
     if (dqUnknown) dqUnknown.onclick = () => {
       var q = (Store.get().dailyQuiz || {}).question || '';
+      var dq = Store.get().dailyQuiz;
       Store.update(s => {
         if (s.dailyQuiz) s.dailyQuiz.selfEval = 'unknown';
         s.mistakes.push({ id: U.uid(), subject: s.dailyQuiz.subject || 'math', type: 'concept', desc: '【每日一题】未掌握：' + q.slice(0, 40), date: U.shortDate(), createdAt: new Date().toISOString() });
+        // 回写热力图：还不会 → 该科目必拿层考点标记为薄弱（红）
+        if (dq && dq.subject && DB.TOPICS[dq.subject]) {
+          var now = new Date().toISOString();
+          (DB.TOPICS[dq.subject] || []).forEach(function (t) {
+            if (t.tier === 1) { s.heat = s.heat || {}; var prev = s.heat[t.id]; s.heat[t.id] = { level: 0, score: (prev && prev.score !== undefined ? Math.min(prev.score, 30) : 30), updatedAt: now }; }
+          });
+        }
       });
       if (window.AiMemory) AiMemory.recordEvent('每日一题自评「还不会」', q.slice(0, 40));
+      if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant('这题还不会，已帮你记下。周末集中清账，别让它过夜。');
       Toast.show('已记入错题本。周末清账，别攒着。', 'warn');
       App.refresh();
     };
@@ -4930,53 +4976,8 @@ body.cp-lock { overflow: hidden; }
 
   function renderStatusOnly() { App.refresh(); }
 
-  function toggleTask(id, done) {
-    let subject = null, count = 0;
-    Store.update(s => {
-      const t = s.tasks.find(x => x.id === id);
-      if (!t) return;
-      t.done = done; subject = t.subject;
-      const k = U.dkey();
-      s.completions[k] = s.completions[k] || [];
-      const i = s.completions[k].indexOf(id);
-      if (done && i < 0) s.completions[k].push(id);
-      if (!done && i >= 0) s.completions[k].splice(i, 1);
-      count = s.completions[k].length;
-    });
-    if (done) {
-      // 连击反馈
-      Toast.show(['✓ 打卡', '✓ 拿下', '✓ 干净利落', '✓ 继续推进'][count % 4] + '（今日第' + count + '个）', 'success', 1800);
-      confettiBurst();
-      if (window.AiMemory && subject) AiMemory.recordEvent('完成任务', DB.SUBJECTS[subject].short + '任务（今日第' + count + '个）');
-      if (subject === 'math' && Store.mistakeCountToday('sign') > 0) {
-        Modal.open({
-          title: '⚠️ 数学防呆提醒',
-          html: '<p>今日已记 <b>' + Store.mistakeCountToday('sign') + '</b> 次符号错误。下一题前默念：</p>'
-            + '<ol style="padding-left:18px;line-height:1.9"><li>符号前置</li><li>分式三步法</li><li>草稿分区</li></ol>',
-          actions: [{ label: '收到', kind: 'btn-primary' }]
-        });
-      }
-    }
-    App.refresh();
-  }
-
-  // 轻量庆祝动效（纯CSS，无库）
-  function confettiBurst() {
-    const c = document.createElement('div');
-    c.className = 'burst';
-    for (let i = 0; i < 10; i++) {
-      const p = document.createElement('i');
-      p.style.setProperty('--a', (i * 36) + 'deg');
-      p.style.setProperty('--d', (34 + (i % 3) * 14) + 'px');
-      c.appendChild(p);
-    }
-    document.body.appendChild(c);
-    setTimeout(() => c.remove(), 700);
-  }
-
   window.DashboardModule = { render };
 })();
-
 
 /* ===== js/modules/scheduler.js ===== */
 /* ============================================================
@@ -5499,28 +5500,8 @@ body.cp-lock { overflow: hidden; }
       cb.onchange = () => {
         const id = cb.closest('.seq-row').getAttribute('data-id');
         if (id.indexOf('__') === 0) return; // 强制项不走任务存储
-        let subject = null;
-        Store.update(s => {
-          const t = s.tasks.find(x => x.id === id);
-          if (!t) return;
-          t.done = cb.checked; subject = t.subject;
-          const k = U.dkey();
-          s.completions[k] = s.completions[k] || [];
-          const i = s.completions[k].indexOf(id);
-          if (cb.checked && i < 0) s.completions[k].push(id);
-          if (!cb.checked && i >= 0) s.completions[k].splice(i, 1);
-        });
-        if (cb.checked) {
-          Toast.success('✓ 打卡完成');
-          if (subject === 'math' && Store.mistakeCountToday('sign') > 0) {
-            Modal.open({
-              title: '⚠️ 数学防呆提醒',
-              html: '<p>今日已记 <b>' + Store.mistakeCountToday('sign') + '</b> 次符号错误。下一题前默念：符号前置 / 分式三步法 / 草稿分区。</p>',
-              actions: [{ label: '收到', kind: 'btn-primary' }]
-            });
-          }
-        }
-        App.refresh();
+        // 统一走 TasksModule.toggleTask（状态更新 + 连击反馈 + 数学防呆，单一事实来源）
+        TasksModule.toggleTask(id, cb.checked);
       };
     });
     // 手动重新 AI 编排（忽略今日缓存，强制再调一次）
@@ -5546,25 +5527,10 @@ body.cp-lock { overflow: hidden; }
         var subj = el.querySelector('#sc-add-subj').value;
         var text = addText.value.trim();
         if (!text) { Toast.warn('任务内容不能为空'); return; }
-        // 分心源拦截
-        var hitKw;
-        try { hitKw = DB.redlineKeywords().find(function (k) { return text.indexOf(k) >= 0; }); } catch (e) {}
-        if (hitKw) {
-          var dist = '';
-          try { dist = DB.coachProfile().distractions || '分心源'; } catch (e) {}
-          Toast.danger('🚫 红线拦截：检测到「' + hitKw + '」。初试前请暂停「' + dist + '」！');
-          Modal.open({
-            title: '🚫 红线警告',
-            html: '<p>你试图添加包含 <b>「' + U.esc(hitKw) + '」</b> 的任务。</p>'
-              + '<p>这触犯了绝对禁令第1条：<b>初试前绝对禁止 ' + U.esc(dist) + '</b>。</p>',
-            actions: [{ label: '我明白，回去学数学', kind: 'btn-primary' }]
-          });
-          return;
-        }
-        if (subj === 'pol') {
-          var polN = Store.get().tasks.filter(function (t) { return t.subject === 'pol' && !t.done; }).length;
-          if (polN >= 2) Toast.warn('⚠️ 政治任务已超标，请优先保证数学/专业课。');
-        }
+        // 分心源拦截（统一走 TasksModule.guardRedline）
+        if (TasksModule.guardRedline(text)) return;
+        // 政治任务超额预警（统一走 TasksModule.polWarn）
+        TasksModule.polWarn(subj);
         Store.update(function (st) {
           var maxO = -1;
           st.tasks.forEach(function (t) { if (typeof t.order === 'number' && t.order > maxO) maxO = t.order; });
@@ -5595,32 +5561,9 @@ body.cp-lock { overflow: hidden; }
     // 任务行：打卡 / 编辑 / 删除
     el.querySelectorAll('.sc-task-row').forEach(function (row) {
       var tid = row.getAttribute('data-id');
-      // 打卡
+      // 打卡（统一走 TasksModule.toggleTask）
       row.querySelector('[data-act="stoggle"]').onchange = function (e) {
-        var done = e.target.checked;
-        var subj = null;
-        Store.update(function (st) {
-          var t = st.tasks.find(function (x) { return x.id === tid; });
-          if (!t) return;
-          t.done = done; t.updatedAt = new Date().toISOString(); subj = t.subject;
-          var k = U.dkey();
-          st.completions[k] = st.completions[k] || [];
-          var idx = st.completions[k].indexOf(tid);
-          if (done && idx < 0) st.completions[k].push(tid);
-          if (!done && idx >= 0) st.completions[k].splice(idx, 1);
-        });
-        if (done) {
-          Toast.success('✓ 打卡完成');
-          if (subj === 'math' && Store.mistakeCountToday('sign') > 0) {
-            Modal.open({
-              title: '⚠️ 数学防呆提醒',
-              html: '<p>今日已记 <b>' + Store.mistakeCountToday('sign') + '</b> 次符号错误。下一题开始前请默念：</p>'
-                + '<ol style="padding-left:18px;line-height:1.9"><li>符号前置，负号立即提到最前面</li><li>分式合并三步法（分母→分子→计算）</li><li>草稿分区：左侧乱草，右侧正稿</li></ol>',
-              actions: [{ label: '收到，继续', kind: 'btn-primary' }]
-            });
-          }
-        }
-        App.refresh();
+        TasksModule.toggleTask(tid, e.target.checked, { updatedAt: true });
       };
       // 删除（写入墓碑 taskTomb，使删除能跨设备同步，而不被另一方旧副本"复活"）
       row.querySelector('[data-act="sdel"]').onclick = function () {
@@ -5648,9 +5591,8 @@ body.cp-lock { overflow: hidden; }
         var commitFn = function (save) {
           if (save) {
             var v = inp.value.trim();
-            var hitV;
-            try { hitV = DB.redlineKeywords().find(function (k) { return v.indexOf(k) >= 0; }); } catch (e) {}
-            if (hitV) { Toast.danger('🚫 红线拦截：文本包含「' + hitV + '」，修改被拒绝'); }
+            // 红线拦截（统一走 TasksModule.guardRedline，与添加一致）
+            if (TasksModule.guardRedline(v)) { /* 命中：拦截，不保存 */ }
             else if (v) Store.update(function (st) { var tt = st.tasks.find(function (x) { return x.id === tid; }); if (tt) { tt.text = v; tt.updatedAt = new Date().toISOString(); } });
           }
           App.refresh();
@@ -5662,6 +5604,130 @@ body.cp-lock { overflow: hidden; }
   }
 
   window.SchedulerModule = { render, generate, currentPlan };
+})();
+
+
+/* ===== js/modules/tasks.js ===== */
+/* ============================================================
+ * tasks.js — 任务共享工具模块（单一事实来源）
+ * ------------------------------------------------------------
+ * 任务管理的 UI 已并入「排程」页(scheduler.js)，本模块不再负责渲染，
+ * 只提供被多入口复用的纯逻辑，避免「打卡防呆弹窗 / 红线拦截」在各处
+ * 各自实现、随版本漂移造成数据/体验不一致：
+ *
+ *   - toggleTask(id, done, opts)   统一打卡：状态更新 + 连击反馈 + 撒花
+ *                                   + AI记忆 + 数学符号防呆
+ *   - checkRedline(text)           红线关键词命中检测（返回命中的词或 null）
+ *   - guardRedline(text)           红线拦截（命中则 Toast + 弹窗，返回 true）
+ *   - foolproofMathModal()         数学符号防呆弹窗（今日符号错误 > 0 才弹）
+ *   - polWarn(subj)                政治任务超额预警（不阻止，仅提醒）
+ *
+ * 暴露：window.TasksModule
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  // 红线关键词命中（统一自 DB.redlineKeywords，默认硬件词 + 用户追加分心源）
+  function checkRedline(text) {
+    try {
+      return (DB.redlineKeywords().find(function (k) { return (text || '').indexOf(k) >= 0; }) || null);
+    } catch (e) { return null; }
+  }
+
+  // 红线拦截：命中返回 true（已 Toast + 弹窗），调用方应 return 终止添加/保存
+  function guardRedline(text) {
+    const hit = checkRedline(text);
+    if (!hit) return false;
+    let dist = '分心源';
+    try { dist = DB.coachProfile().distractions || '分心源'; } catch (e) {}
+    Toast.danger('🚫 红线拦截：检测到「' + hit + '」。初试前请暂停「' + dist + '」！');
+    Modal.open({
+      title: '🚫 红线警告',
+      html: '<p>你试图添加包含 <b>「' + U.esc(hit) + '」</b> 的任务。</p>'
+        + '<p>这触犯了绝对禁令第1条：<b>初试前绝对禁止 ' + U.esc(dist) + '</b>。</p>'
+        + '<p class="muted-sm">你的 ' + U.esc(dist) + ' 经历已经够用了。现在每一小时分心时间，都是在从 ' + DB.SUBJECTS.math.name + ' 的分数里偷分。任务已被拒绝。</p>',
+      actions: [{ label: '我明白，回去学数学', kind: 'btn-primary' }]
+    });
+    return true;
+  }
+
+  // 数学符号防呆弹窗：仅在今日符号错误 > 0 时弹出（集中所有数学打卡入口）
+  function foolproofMathModal() {
+    const n = Store.mistakeCountToday('sign');
+    if (n <= 0) return;
+    Modal.open({
+      title: '⚠️ 数学防呆提醒',
+      html: '<p>今日已记 <b>' + n + '</b> 次符号错误。下一题开始前请默念：</p>'
+        + '<ol style="padding-left:18px;line-height:1.9"><li>符号前置，负号立即提到最前面</li>'
+        + '<li>分式合并三步法（分母→分子→计算）</li>'
+        + '<li>草稿分区：左侧乱草，右侧正稿</li></ol>',
+      actions: [{ label: '收到，继续', kind: 'btn-primary' }]
+    });
+  }
+
+  // 政治任务超额预警（不阻止，仅提醒，沿用 PRD 阈值 schedulerConfig.polCap）
+  function polWarn(subj) {
+    if (subj !== 'pol') return;
+    let cap = 2;
+    try { cap = DB.schedulerConfig().polCap || 2; } catch (e) {}
+    const polCount = Store.get().tasks.filter(function (t) { return t.subject === 'pol' && !t.done; }).length;
+    if (polCount >= cap) {
+      Toast.warn('⚠️ 政治任务已超标，请优先保证数学/专业课。');
+    }
+  }
+
+  // 轻量庆祝动效（纯 CSS，无库）
+  function confettiBurst() {
+    const c = document.createElement('div');
+    c.className = 'burst';
+    for (let i = 0; i < 10; i++) {
+      const p = document.createElement('i');
+      p.style.setProperty('--a', (i * 36) + 'deg');
+      p.style.setProperty('--d', (34 + (i % 3) * 14) + 'px');
+      c.appendChild(p);
+    }
+    document.body.appendChild(c);
+    setTimeout(function () { c.remove(); }, 700);
+  }
+
+  // 统一打卡：多入口（作战台 NOW/序列、排程序列/任务行）都走这里
+  function toggleTask(id, done, opts) {
+    opts = opts || {};
+    let subject = null, count = 0;
+    Store.update(function (s) {
+      const t = s.tasks.find(function (x) { return x.id === id; });
+      if (!t) return;
+      t.done = done;
+      subject = t.subject;
+      if (opts.updatedAt) t.updatedAt = new Date().toISOString();
+      const k = U.dkey();
+      s.completions[k] = s.completions[k] || [];
+      const i = s.completions[k].indexOf(id);
+      if (done && i < 0) s.completions[k].push(id);
+      if (!done && i >= 0) s.completions[k].splice(i, 1);
+      count = s.completions[k].length;
+    });
+    if (done) {
+      Toast.show(['✓ 打卡', '✓ 拿下', '✓ 干净利落', '✓ 继续推进'][count % 4] + '（今日第' + count + '个）', 'success', 1800);
+      confettiBurst();
+      try {
+        if (window.AiMemory && subject) {
+          const short = (DB.SUBJECTS[subject] && DB.SUBJECTS[subject].short) || subject;
+          AiMemory.recordEvent('完成任务', short + '任务（今日第' + count + '个）');
+        }
+      } catch (e) {}
+      if (subject === 'math') foolproofMathModal();
+    }
+    App.refresh();
+  }
+
+  window.TasksModule = {
+    toggleTask: toggleTask,
+    checkRedline: checkRedline,
+    guardRedline: guardRedline,
+    foolproofMathModal: foolproofMathModal,
+    polWarn: polWarn
+  };
 })();
 
 
@@ -6172,8 +6238,9 @@ body.cp-lock { overflow: hidden; }
       if (btn) { btn.disabled = false; btn.textContent = '🧠 重新深度复盘'; }
       // 终态持久化（确保最后的完整结论被保存）
       saveDeep({ status: '完成', running: false, generatedAt: new Date().toISOString() });
-      // 把最终 output 从 DOM 同步回 Store（节流可能漏掉最后几字）
+      // 把最终输出从 DOM 同步回 Store（节流可能漏掉最后几字）
       if (outEl) saveDeep({ output: outEl.textContent, reasoning: (thinkEl ? thinkEl.textContent : '') });
+      if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant('本周深度复盘已完成。重点看「最致命问题」那一段，明天就改它，别只是收藏。');
     }).catch(function (e) {
       if (outEl) outEl.textContent = '生成失败：' + (e && e.message ? e.message : e);
       if (statusEl) statusEl.textContent = '⚠ 生成失败，请检查 AI 配置后重试。';
@@ -6637,8 +6704,9 @@ body.cp-lock { overflow: hidden; }
     el.innerHTML =
       '<div class="card"><div class="card-title">🎯 考点热力图与真题切片追踪</div>'
       + '<div class="tab-row">'
-      + '<button class="tab' + (subjTab === 'math' ? ' tab-on' : '') + '" data-t="math">' + DB.SUBJECTS.math.name + '（' + (DB.TOPICS.math ? DB.TOPICS.math.length : 0) + '考点）</button>'
-      + '<button class="tab' + (subjTab === 'ctrl' ? ' tab-on' : '') + '" data-t="ctrl">' + DB.SUBJECTS.ctrl.short + '（' + (DB.TOPICS.ctrl ? DB.TOPICS.ctrl.length : 0) + '考点）</button>'
+      + ['math', 'ctrl', 'eng', 'pol'].map(function (k) {
+          return '<button class="tab' + (subjTab === k ? ' tab-on' : '') + '" data-t="' + k + '">' + (DB.SUBJECTS[k].short || DB.SUBJECTS[k].name) + '（' + (DB.TOPICS[k] ? DB.TOPICS[k].length : 0) + '考点）</button>';
+        }).join('')
       + '</div>'
       + '<div class="legend"><span class="lg lg-green"></span>掌握(≥80%) <span class="lg lg-yellow"></span>薄弱(50-79%) <span class="lg lg-red"></span>危险(&lt;50%或未测) <span class="muted-sm">点击格子录入/更新掌握度</span></div>'
       + '</div>'
@@ -6655,7 +6723,7 @@ body.cp-lock { overflow: hidden; }
     const weekAgo = Date.now() - 7 * U.DAY_MS;
     const updated = Object.keys(heat).filter(id => heat[id].updatedAt && new Date(heat[id].updatedAt).getTime() > weekAgo);
     document.getElementById('hm-week').textContent = updated.length
-      ? '本周更新了 ' + updated.length + ' 个考点的掌握度：' + updated.map(id => { const t = (DB.TOPICS.math.concat(DB.TOPICS.ctrl)).find(x => x.id === id); return t ? t.name : id; }).join('、')
+      ? '本周更新了 ' + updated.length + ' 个考点的掌握度：' + updated.map(id => { const t = (DB.TOPICS.math.concat(DB.TOPICS.ctrl, DB.TOPICS.eng, DB.TOPICS.pol)).find(x => x.id === id); return t ? t.name : id; }).join('、')
       : '本周尚未更新任何考点。做题后记得回来点格子。';
 
     bind(el);
@@ -6667,7 +6735,7 @@ body.cp-lock { overflow: hidden; }
     el.querySelectorAll('.hm-cell').forEach(c => {
       c.onclick = () => {
         const id = c.getAttribute('data-id');
-        const topic = (DB.TOPICS.math.concat(DB.TOPICS.ctrl)).find(t => t.id === id);
+        const topic = (DB.TOPICS.math.concat(DB.TOPICS.ctrl, DB.TOPICS.eng, DB.TOPICS.pol)).find(t => t.id === id);
         const heat = Store.get().heat;
         const h = heat[id] || {};
         const meta = DB.TIERS[topic.tier];
@@ -6687,7 +6755,7 @@ body.cp-lock { overflow: hidden; }
             {
               label: '生成针对训练任务', kind: 'btn-ghost', onClick: close => {
                 Store.update(s => {
-                  s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: id, title: '【' + topic.name + '】针对训练3题（热力图生成）', subject: subjTab === 'math' ? 'math' : 'ctrl', status: 'pending', createdAt: new Date().toISOString() });
+                  s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: id, title: '【' + topic.name + '】针对训练3题（热力图生成）', subject: subjTab, status: 'pending', createdAt: new Date().toISOString() });
                 });
                 close(); Toast.success('已加入错题重练队列'); App.refresh();
               }
@@ -6702,7 +6770,7 @@ body.cp-lock { overflow: hidden; }
                   // 必拿层惩罚规则：必拿层考点录入<90 → 生成罚练
                   if (topic.tier === 1 && !isNaN(score) && score < 90) {
                     for (let i = 0; i < 5; i++) {
-                      s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: id, title: '【罚练】' + topic.name + ' 同类题 ' + (i + 1) + '/5', subject: subjTab === 'math' ? 'math' : 'ctrl', status: 'pending', penaltyOf: id, createdAt: new Date().toISOString() });
+                      s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: id, title: '【罚练】' + topic.name + ' 同类题 ' + (i + 1) + '/5', subject: subjTab, status: 'pending', penaltyOf: id, createdAt: new Date().toISOString() });
                     }
                     Toast.warn('必拿层正确率<90%：按规则罚5道同类题，已加入重练队列');
                   }
@@ -6814,7 +6882,18 @@ body.cp-lock { overflow: hidden; }
     return 'hard';
   }
 
-  function allTopics() { return DB.TOPICS.math.concat(DB.TOPICS.ctrl); }
+  function allTopics() { return DB.TOPICS.math.concat(DB.TOPICS.ctrl, DB.TOPICS.eng, DB.TOPICS.pol); }
+
+  // 根据考点 ID 前缀推断科目（四科统一）
+  function topicIdToSubj(id) {
+    if (!id) return 'math';
+    const p = id[0];
+    if (p === 'm') return 'math';
+    if (p === 'c') return 'ctrl';
+    if (p === 'e') return 'eng';
+    if (p === 'p') return 'pol';
+    return 'math';
+  }
 
   // ==================== 出题 ====================
   function makeQuiz() {
@@ -7020,14 +7099,14 @@ body.cp-lock { overflow: hidden; }
       s.heat[topicId] = { level, score, updatedAt: new Date().toISOString() };
       if (score < 80 && judge.errorType && judge.errorType !== 'none') {
         s.mistakes.push({
-          id: U.uid(), subject: topic.id[0] === 'm' ? 'math' : 'ctrl', type: judge.errorType,
+          id: U.uid(), subject: topicIdToSubj(topicId), type: judge.errorType,
           desc: '【AI测验】' + topic.name + '：' + (judge.comment || '作答有误'),
           date: U.shortDate(), createdAt: new Date().toISOString()
         });
       }
       if (topic.tier === 1 && score < 90) {
         for (let i = 0; i < 5; i++) {
-          s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: topicId, title: '【罚练】' + topic.name + ' 同类题 ' + (i + 1) + '/5', subject: topic.id[0] === 'm' ? 'math' : 'ctrl', status: 'pending', penaltyOf: topicId, createdAt: new Date().toISOString() });
+          s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: topicId, title: '【罚练】' + topic.name + ' 同类题 ' + (i + 1) + '/5', subject: topicIdToSubj(topicId), status: 'pending', penaltyOf: topicId, createdAt: new Date().toISOString() });
         }
       }
       s.quizHistory = s.quizHistory || [];
@@ -7039,6 +7118,13 @@ body.cp-lock { overflow: hidden; }
     if (window.AiMemory) {
       AiMemory.recordEvent('AI测验「' + topic.name + '」得' + score + '分',
         (judge.errorType && judge.errorType !== 'none' ? '错误类型:' + judge.errorType + '；' : '') + (judge.comment || '').slice(0, 50));
+    }
+    // 主动教练：面板开着时即时给一句小结（无打扰，仅展示）
+    if (window.Copilot && Copilot.isOpen) {
+      var qmsg = score >= 80
+        ? ('「' + topic.name + '」拿下了（' + score + '分）。保持手感，下一题。')
+        : ('「' + topic.name + '」只 ' + score + '分' + (judge.errorType && judge.errorType !== 'none' ? '，卡在' + judge.errorType : '') + '。先去错题本把这题吃透。');
+      Copilot.pushAssistant(qmsg);
     }
 
     if (judge.errorType === 'sign') {
@@ -7342,9 +7428,9 @@ body.cp-lock { overflow: hidden; }
       originDesc: mistake.desc || '（原题描述缺失）'
     };
     // 找一个与错误类型最相关的考点作为默认（符号/分式→定积分换元，概念→对应科目首考点）
-    const guessTopic = mistake.subject === 'ctrl' ? DB.TOPICS.ctrl[0].id
-      : mistake.type === 'sign' || mistake.type === 'fraction' ? 'm-subst'
-      : mistake.type === 'integral' ? 'm-ode' : DB.TOPICS.math[0].id;
+    var subjTopics = DB.TOPICS[mistake.subject] || DB.TOPICS.math;
+    const guessTopic = mistake.type === 'sign' || mistake.type === 'fraction' ? 'm-subst'
+      : mistake.type === 'integral' ? 'm-ode' : (subjTopics[0] || DB.TOPICS.math[0]).id;
     topicId = guessTopic;
     phase = 'pick';
     // 直接进入出题（用变式）
@@ -7506,6 +7592,13 @@ body.cp-lock { overflow: hidden; }
 
   function render(el) {
     const s = Store.get();
+    // 防御：专注进行中（如切页/刷新后）确保浮层存在并同步时间，避免"看不见会话又启动不了新专注"
+    if (session) {
+      if (!document.getElementById('focus-overlay')) renderOverlay();
+      const t = document.getElementById('fo-time');
+      if (t) t.textContent = fmt(session.remainSec);
+      if (!document.body.classList.contains('focus-lock')) document.body.classList.add('focus-lock');
+    }
     const count = todayCount();
     const mins = todayMins();
     const weekMins = U.sum(s.focus.sessions.filter(x => U.inThisWeek(x.date)).map(x => x.mins));
@@ -7547,7 +7640,7 @@ body.cp-lock { overflow: hidden; }
 
   // ---------- 专注会话 ----------
   function startFocus(mins, subject) {
-    if (session) return;
+    if (session) { Toast.show('专注进行中，请先点「中断专注」结束', 'warn', 3000); return; }
     session = { mins, subject, startAt: Date.now(), remainSec: mins * 60, lastFatigueMark: mins * 60 };
     fatigueShownAt = 0;
     document.body.classList.add('focus-lock');
@@ -7660,6 +7753,7 @@ body.cp-lock { overflow: hidden; }
         }).then(function (full) {
           if (out) out.innerHTML = (full || defaultChecklist).replace(/\n/g, '<br>');
           if (window.AiMemory && full) AiMemory.recordEvent('完成' + doneMins + '分钟' + subjName + '专注', 'AI复盘问题已给出');
+          if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant(doneMins + '分钟' + subjName + '专注结束。刚才的复盘问题过一遍，明天同科目别再犯。');
         }).catch(function () {
           if (out) out.innerHTML = defaultChecklist;
         });
@@ -7674,7 +7768,7 @@ body.cp-lock { overflow: hidden; }
     }
   }
 
-  window.FocusModule = { render, get active() { return !!session; } };
+  window.FocusModule = { render, get active() { return !!session; }, abort() { if (session) finishFocus(true); } };
 })();
 
 
@@ -7691,12 +7785,12 @@ body.cp-lock { overflow: hidden; }
     const h = heat[n.id] || {};
     const score = h.score;
     const mastered = (score != null ? score : (h.level === 2 ? 80 : h.level === 1 ? 55 : 0));
-    // 锁定判定：任一前置<60
+    // 锁定判定：仅「已测评且<60」才锁死后继；从未测评（score 为 null）的前置不锁，避免首屏整片灰
     const deps = n.deps || [];
     const lockBy = deps.filter(d => {
       const dh = heat[d] || {};
-      const ds = dh.score != null ? dh.score : (dh.level === 2 ? 80 : dh.level === 1 ? 55 : 0);
-      return ds < 60;
+      if (dh.score == null) return false;
+      return dh.score < 60;
     });
     return { score, mastered, locked: lockBy.length > 0, lockBy };
   }
@@ -7718,11 +7812,12 @@ body.cp-lock { overflow: hidden; }
     let svgNodes = '';
     nodes.forEach(n => {
       const st = nodeState(n);
-      const color = st.locked ? '#bfbfbf' : st.mastered >= 80 ? '#237804' : st.mastered >= 50 ? '#d48806' : '#cf1322';
+      const untested = (st.score == null && st.level === 0);
+      const color = st.locked ? '#bfbfbf' : untested ? '#8c8c8c' : st.mastered >= 80 ? '#237804' : st.mastered >= 50 ? '#d48806' : '#cf1322';
       svgNodes += '<g class="cm-node" data-id="' + n.id + '" style="cursor:pointer">'
         + '<rect x="' + n.x + '" y="' + n.y + '" width="150" height="44" rx="8" fill="#fff" stroke="' + color + '" stroke-width="2"/>'
         + '<text x="' + (n.x + 75) + '" y="' + (n.y + 20) + '" text-anchor="middle" font-size="12" fill="#262626">' + (st.locked ? '🔒 ' : '') + U.esc(n.name) + '</text>'
-        + '<text x="' + (n.x + 75) + '" y="' + (n.y + 36) + '" text-anchor="middle" font-size="11" fill="' + color + '">' + (st.locked ? '未解锁' : st.mastered + '%') + '</text>'
+        + '<text x="' + (n.x + 75) + '" y="' + (n.y + 36) + '" text-anchor="middle" font-size="11" fill="' + color + '">' + (st.locked ? '未解锁' : untested ? '未测' : st.mastered + '%') + '</text>'
         + '</g>';
     });
 
@@ -7759,10 +7854,12 @@ body.cp-lock { overflow: hidden; }
         ).join('') || '<div class="muted-sm">暂无术语桥</div>';
 
         document.getElementById('cm-detail').innerHTML =
-          '<div class="card-title">' + (st.locked ? '🔒 ' : '') + U.esc(n.name) + ' <span class="muted-sm">掌握度 ' + st.mastered + '%</span></div>'
+          '<div class="card-title">' + (st.locked ? '🔒 ' : '') + U.esc(n.name) + ' <span class="muted-sm">掌握度 ' + (st.score == null ? '未测' : st.mastered + '%') + '</span></div>'
           + (st.locked
             ? '<div class="alert alert-danger">🔒 未解锁：需先完成 <b>' + U.esc(lockNames) + '</b>（掌握度≥60%）<br>推荐任务：' + U.esc(n.book || '查阅' + (DB.getActiveMajor().textbook || '专业课教材') + '对应章节') + '</div>'
-            : '<div class="alert alert-ok">已解锁。推荐任务：' + U.esc(n.book || '查阅' + (DB.getActiveMajor().textbook || '专业课教材') + '对应章节') + '</div>')
+            : (st.score == null
+              ? '<div class="alert alert-ok">尚未测评。可直接添加任务开练，或先录入掌握度评估优先级。</div>'
+              : '<div class="alert alert-ok">已解锁。推荐任务：' + U.esc(n.book || '查阅' + (DB.getActiveMajor().textbook || '专业课教材') + '对应章节') + '</div>'))
           + '<div class="card-title-sm">复试术语桥（工程 ↔ 学术）</div>' + gloss
           + '<div class="btn-row" style="margin-top:10px">'
           + (st.locked
@@ -8237,6 +8334,17 @@ body.cp-lock { overflow: hidden; }
       } else {
         Toast.success('已记录。诚实面对自己，是防呆的第一步。');
       }
+      // 主动教练：情绪/冲动预警时沉淀记忆并轻提示（不弹窗打扰）
+      try {
+        const s2 = Store.get();
+        const r3 = U.lastNDays(3).map(k => { const m = s2.mental.find(x => x.date === k); return m ? m.mood : null; });
+        const low = r3.every(v => v != null && v < 5);
+        if (low || urge) {
+          if (window.AiMemory) AiMemory.recordEvent(urge ? '检出「' + distractions() + '」冲动' : '连续3天心情<5分', urge ? '已拦截并提醒禁止' : '状态偏低需关注');
+          Toast.show('状态预警已记录，累了就去和 AI 教练聊聊', 'info', 4000);
+          if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant(low ? '看你最近状态有点耗，别硬扛。今天能专注学进去多少算多少，休息也是备考。' : '冲动刚被拦下了。把这一小时还给数学，别给分心留缝。');
+        }
+      } catch (e) {}
       App.refresh();
     };
   }
@@ -9123,7 +9231,7 @@ body.cp-lock { overflow: hidden; }
 
       // 数据
       + '<div class="card"><div class="card-title">数据管理</div>'
-      + '<div class="muted-sm">本地存储占用：' + usageKB + ' KB / 约 5MB 上限（' + usagePct + '%）。数据仅存于本浏览器，换设备/清缓存前务必导出备份。</div>'
+      + '<div class="muted-sm">本地存储占用：<span id="st-usage">' + usageKB + ' KB / 约 5MB 上限（' + usagePct + '%）</span>。数据仅存于本浏览器，换设备/清缓存前务必导出备份。</div>'
       + '<div class="btn-row" style="margin-top:10px">'
       + '<button class="btn btn-primary" id="st-export">导出JSON备份</button>'
       + '<button class="btn btn-ghost" id="st-import">导入JSON恢复</button>'
@@ -9159,6 +9267,22 @@ body.cp-lock { overflow: hidden; }
       + '<button class="btn btn-danger" id="st-reset">清空全部数据并重置</button>'
       + '</div>';
 
+    // 异步回填真实存储占用（优先 navigator.storage.estimate，否则估算），接近上限预警
+    try {
+      Store.usageEstimate(function (info) {
+        var box = document.getElementById('st-usage');
+        if (!box) return;
+        if (!info.approx && info.quota) {
+          var pct = Math.round(info.used / info.quota * 100);
+          var color = pct > 80 ? '#cf1322' : pct > 60 ? '#d48806' : '#237804';
+          box.innerHTML = (Math.round(info.used / 1048576 * 10) / 10) + ' MB / ' + (Math.round(info.quota / 1048576)) + ' MB（' + pct + '%）'
+            + '<div style="margin-top:6px;height:6px;background:#f0f0f0;border-radius:3px;overflow:hidden"><div style="height:100%;width:' + Math.min(100, pct) + '%;background:' + color + '"></div></div>'
+            + (pct > 80 ? '<div style="margin-top:6px;color:#cf1322">⚠️ 接近上限：拍题/作文图片会自动裁剪最旧张数保数据，也可在此导出备份。</div>' : '');
+        } else {
+          box.textContent = Math.round(info.used / 1024 * 10) / 10 + ' KB（估算）';
+        }
+      });
+    } catch (e) { }
     bind(el);
   }
 
@@ -10318,51 +10442,17 @@ body.cp-lock { overflow: hidden; }
   // 尝试 JSON.parse 并修复 LaTeX 转义吞字符问题
   function tryParseRepair(jsonStr) {
     // 直接解析
-    try { return repairMangledLatexObj(JSON.parse(jsonStr)); } catch (e) {}
+    try { return Tex.repairMangledLatex(JSON.parse(jsonStr)); } catch (e) {}
     // 去注释/尾逗号/单引号后重试
     var fixed = jsonStr
       .replace(/\/\/[^\n]*/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/,\s*([}\]])/g, '$1')
       .replace(/'/g, '"');
-    try { return repairMangledLatexObj(JSON.parse(fixed)); } catch (e) {}
+    try { return Tex.repairMangledLatex(JSON.parse(fixed)); } catch (e) {}
     return null;
   }
 
-  // 递归修复对象中所有字符串值里被 JSON 转义吞掉的 LaTeX 命令
-  function repairMangledLatexObj(obj) {
-    if (!obj) return obj;
-    if (typeof obj === 'string') return repairMangled(obj);
-    if (typeof obj !== 'object') return obj;
-    if (Array.isArray(obj)) { for (var i = 0; i < obj.length; i++) obj[i] = repairMangledLatexObj(obj[i]); return obj; }
-    var keys = Object.keys(obj);
-    for (var k = 0; k < keys.length; k++) obj[keys[k]] = repairMangledLatexObj(obj[keys[k]]);
-    return obj;
-  }
-
-  // 修复单个字符串：JSON 把 \f→换页 \r→回车 \b→退格 \t→TAB \n→换行 吞掉了 LaTeX 命令首字母
-  function repairMangled(s) {
-    if (typeof s !== 'string') return s;
-    return s
-      .replace(/\x0Cfrac/g, '\\frac').replace(/\x0Cfrom/g, '\\from')
-      .replace(/\x0DRightarrow/g, '\\Rightarrow').replace(/\x0Drightarrow/g, '\\rightarrow')
-      .replace(/\x0Dright/g, '\\right').replace(/\x0Dleft/g, '\\left')
-      .replace(/\x0Drceil/g, '\\rceil').replace(/\x0Drfloor/g, '\\rfloor')
-      .replace(/\x0Drangle/g, '\\rangle').replace(/\x0Drbrace/g, '\\rbrace')
-      .replace(/\x0Dmathrm/g, '\\mathrm').replace(/\x0Drm/g, '\\rm')
-      .replace(/\x08begin/g, '\\begin').replace(/\x08bigg/g, '\\bigg').replace(/\x08Bigg/g, '\\Bigg')
-      .replace(/\x08bigl/g, '\\bigl').replace(/\x08Bigl/g, '\\Bigl')
-      .replace(/\x08bigr/g, '\\bigr').replace(/\x08Bigr/g, '\\Bigr')
-      .replace(/\x08biggl/g, '\\biggl').replace(/\x08Biggl/g, '\\Biggl')
-      .replace(/\x08biggr/g, '\\biggr').replace(/\x08Biggr/g, '\\Biggr')
-      .replace(/\x08big/g, '\\big').replace(/\x08Big/g, '\\Big')
-      .replace(/\x09ext/g, '\\text').replace(/\x09extrm/g, '\\textrm')
-      .replace(/\x09extbf/g, '\\textbf').replace(/\x09an/g, '\\tan')
-      .replace(/\x09imes/g, '\\times').replace(/\x09o/g, '\\to')
-      .replace(/\x0Aeq/g, '\\neq').replace(/\x0Aeg/g, '\\neg');
-  }
-
-  // ---------- AI 解析（提取题目 + 解题关键 + 易错原因） ----------
   function analyzePhoto(id, el) {
     var s = Store.get();
     var photo = (s.mistakePhotos || []).find(function (p) { return p.id === id; });
@@ -10393,6 +10483,7 @@ body.cp-lock { overflow: hidden; }
 
     var out = document.getElementById('pm-ai-out');
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
+
       if (out) {
         out.innerHTML = (reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
           + (text ? renderMath(text).replace(/\n/g, '<br>') : '');
@@ -10985,6 +11076,23 @@ body.cp-lock { overflow: hidden; }
     reflectIfWorthy(true);
   }
 
+  // 轻量主动：把一段教练预设文字追加到会话（不触发 AI 调用、不自动弹窗、不打扰）。
+  // 面板已开时即时显示气泡；无论开否都沉淀进历史，用户下次打开即可见。用于关键事件后的主动关怀/总结。
+  function pushAssistant(text) {
+    if (!text) return;
+    pushHistory('assistant', text);
+    if (isOpen) {
+      var box = document.getElementById('cp-msgs');
+      if (box) {
+        var row = document.createElement('div');
+        row.className = 'cp-row cp-ai';
+        row.innerHTML = '<div class="cp-bubble">' + renderContent(text) + '</div>';
+        box.appendChild(row);
+        box.scrollTop = box.scrollHeight;
+      }
+    }
+  }
+
   // ---------- 发送与流式回复 ----------
   function doSend() {
     var ta = document.getElementById('cp-text');
@@ -11060,6 +11168,7 @@ body.cp-lock { overflow: hidden; }
     open: open,
     close: close,
     mount: mount,
+    pushAssistant: pushAssistant,
     get isOpen() { return isOpen; }
   };
 })();
@@ -11189,7 +11298,14 @@ body.cp-lock { overflow: hidden; }
   }
 
   const App = {
-    go(tab) { current = tab; render(true); scrollToTop(); },
+    go(tab) {
+      // 深度专注进行中：拦截切页，避免计时器在后台空跑、状态错乱
+      if (tab !== current && window.FocusModule && FocusModule.active) {
+        Toast.show('深度专注进行中，请先点「中断专注」结束再切换', 'warn', 3500);
+        return;
+      }
+      current = tab; render(true); scrollToTop();
+    },
     // 原地刷新：保留当前滚动位置（避免云同步/打卡等操作把页面滚回顶部）
     refresh() {
       const view = document.getElementById('view');
