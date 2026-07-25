@@ -1063,22 +1063,42 @@ body.cp-lock { overflow: hidden; }
           out += esc(cmd); i += m[0].length; continue;
         }
         if (cmd === 'end') { const eg = readGroup(s, i + m[0].length); i += m[0].length + eg[1]; continue; } // 跳过 \end{...}
-        if (cmd === 'text' || cmd === 'mathrm' || cmd === 'mathbf') { const g = readGroup(s, i + m[0].length); out += '<span>' + esc(g[0]) + '</span>'; i += m[0].length + g[1]; continue; }
+        // 字体命令（带 {group}）：\mathrm / \text / \mathbf / \mathit / \mathcal / \mathbb
+        if (cmd === 'text' || cmd === 'mathrm' || cmd === 'mathbf' || cmd === 'mathit' || cmd === 'mathcal' || cmd === 'mathbb') {
+          const g = readGroup(s, i + m[0].length);
+          const cls = cmd === 'mathbf' ? ' style="font-weight:bold"' : cmd === 'mathit' ? ' style="font-style:italic"' : cmd === 'mathcal' ? ' style="font-family:cursive"' : cmd === 'mathbb' ? ' style="font-family:serif;font-weight:bold"' : '';
+          out += '<span class="tx-fn"' + cls + '>' + seg(normalizeShorthand(g[0])) + '</span>';
+          i += m[0].length + g[1]; continue;
+        }
+        // \mathrmd（正体微分 d，考研常用简写：\oint_\Gamma f(x)\mathrmd x）
+        if (cmd === 'mathrmd') { out += '<span class="tx-fn">d</span>'; i += m[0].length; continue; }
+        // \mathrms / \mathrm（无花括号简写，取后一字符作为正体内容）
+        if (cmd === 'mathrms' || cmd === 'mathrm') {
+          const nxt = s[i + m[0].length] || '';
+          if (nxt && /[a-zA-Z]/.test(nxt)) { out += '<span class="tx-fn">' + nxt + '</span>'; i += m[0].length + 1; continue; }
+          out += '<span class="tx-fn">'; i += m[0].length; continue;
+        }
         if (cmd === 'overline' || cmd === 'bar' || cmd === 'vec' || cmd === 'hat' || cmd === 'dot') { const g = readGroup(s, i + m[0].length); out += '<span class="tx-over">' + seg(normalizeShorthand(g[0])) + '</span>'; i += m[0].length + g[1]; continue; }
         // \displaystyle / \textstyle / \scriptstyle / \scriptscriptstyle —— 样式切换，静默消费
         if (cmd === 'displaystyle' || cmd === 'textstyle' || cmd === 'scriptstyle' || cmd === 'scriptscriptstyle') { i += m[0].length; continue; }
         // 未知命令：原样输出名字
         out += esc(cmd); i += m[0].length; continue;
       }
-      // 上标 ^ 或 ^{..}
+      // 上标 ^ / ^{..} / ^\cmd（如 x^\alpha）
       if (c === '^') {
-        const g = readGroup(s, i + 1);
+        const j = i + 1;
+        const cm = s[j] === '\\' ? s.slice(j).match(/^\\[a-zA-Z]+/) : null;
+        if (cm) { out += '<sup>' + seg(cm[0]) + '</sup>'; i = j + cm[0].length; continue; }
+        const g = readGroup(s, j);
         out += '<sup>' + seg(normalizeShorthand(g[0])) + '</sup>';
         i += 1 + g[1]; continue;
       }
-      // 下标 _ 或 _{..}
+      // 下标 _ / _{..} / _\cmd（如 \oint_\Gamma）
       if (c === '_') {
-        const g = readGroup(s, i + 1);
+        const j = i + 1;
+        const cm = s[j] === '\\' ? s.slice(j).match(/^\\[a-zA-Z]+/) : null;
+        if (cm) { out += '<sub>' + seg(cm[0]) + '</sub>'; i = j + cm[0].length; continue; }
+        const g = readGroup(s, j);
         out += '<sub>' + seg(normalizeShorthand(g[0])) + '</sub>';
         i += 1 + g[1]; continue;
       }
@@ -1430,20 +1450,14 @@ body.cp-lock { overflow: hidden; }
   'use strict';
   const KEY = 'kaoyan2026_data';
 
-  // ---------- 默认任务模板（PRD 4.2） ----------
-  function defaultTasks() {
-    const now = new Date().toISOString();
-    let _order = 0;
-    const t = (subject, text) => ({ id: U.uid() + Math.random().toString(36).slice(2, 4), subject, text, done: false, createdAt: now, updatedAt: now, order: _order++ });
-    return [
-      t('math', '高数强化第X章（按当前进度替换章节号）'),
-      t('math', '线代：二次型标准化 + 正定判定'),
-      t('math', '概率论：参数估计（矩估计/极大似然）'),
-      t('ctrl', '专业课第X节 + 课后题（按当前进度替换）'),
-      t('eng', '阅读真题2篇 + 定位法复盘'),
-      t('pol', '马原视频1节 + 肖1000对应章节')
-    ];
-  }
+  // ---------- 默认任务模板（已停用） ----------
+  // 2026-07-25 起不再往任务池塞占位默认任务：它们会在离线首次初始化时生成，
+  // 随 Gist 同步被另一台设备拉回，污染用户当前任务池。任务改由用户自建。
+  // 原模板（仅供恢复参考，勿再调用）：
+  //   '高数强化第X章（按当前进度替换章节号）' / '线代：二次型标准化 + 正定判定' /
+  //   '概率论：参数估计（矩估计/极大似然）' / '专业课第X节 + 课后题（按当前进度替换）' /
+  //   '阅读真题2篇 + 定位法复盘' / '马原视频1节 + 肖1000对应章节'
+  function defaultTasks() { return []; }
 
   // ---------- 初始数据结构（PRD 4.7） ----------
   function initialState() {
@@ -1569,6 +1583,20 @@ body.cp-lock { overflow: hidden; }
       if (!s || !s.tasks) return s;
       if (!s.taskTomb) s.taskTomb = {};
       s.tasks.forEach(t => { if (t && !t.updatedAt) t.updatedAt = t.createdAt || new Date().toISOString(); });
+      // 一次性清理：移除离线初始化遗留的占位默认任务（按精确文案匹配，不会误删用户自建任务）
+      // 标记 defaultTasksCleaned 后不再重复跑（虽幂等，省一次数组过滤）
+      if (s.meta && !s.meta.defaultTasksCleaned) {
+        const DEF = [
+          '高数强化第X章（按当前进度替换章节号）',
+          '线代：二次型标准化 + 正定判定',
+          '概率论：参数估计（矩估计/极大似然）',
+          '专业课第X节 + 课后题（按当前进度替换）',
+          '阅读真题2篇 + 定位法复盘',
+          '马原视频1节 + 肖1000对应章节'
+        ];
+        s.tasks = s.tasks.filter(t => !(t && DEF.indexOf(t.text) >= 0));
+        s.meta.defaultTasksCleaned = true;
+      }
       return s;
     },
     save() {
@@ -1774,6 +1802,35 @@ body.cp-lock { overflow: hidden; }
       const wk = Store.weekKey();
       const w = s.weeklyStats[wk];
       return w && typeof w.mathAccuracy === 'number' ? w.mathAccuracy : null;
+    },
+    // 重算并写回本周数学正确率（闭环：模块测验 / 每日一题自评 → weekStats → 排程加权 / 难模块预警 / AI记忆信号）
+    // 幂等：每次从原始记录重新聚合，调用时机为「提交测验结果」与「每日一题自评」之后。
+    recomputeMathAccuracy() {
+      const s = Store.get();
+      const wk = Store.weekKey();
+      const subjOf = id => !id ? '' : (id[0] === 'm' ? 'math' : id[0] === 'c' ? 'ctrl' : id[0] === 'e' ? 'eng' : 'pol');
+      const scores = [];
+      // 1) 模块测验（AI 判卷，0-100 分）；用 createdAt 的 YYYY-MM-DD 判断本周
+      (s.quizHistory || []).forEach(h => {
+        if (subjOf(h.topicId) === 'math' && h.createdAt && U.inThisWeek((h.createdAt || '').slice(0, 10)) && typeof h.score === 'number') scores.push(h.score);
+      });
+      // 2) 每日一题（数学科，自评：会了=100 / 还不会=0）；date 为 YYYY-MM-DD
+      const isMathDq = x => x && x.subject === 'math' && x.selfEval && U.inThisWeek(x.date) && (x.selfEval === 'known' || x.selfEval === 'unknown');
+      [s.dailyQuiz].concat(s.dailyQuizHistory || []).forEach(d => { if (isMathDq(d)) scores.push(d.selfEval === 'known' ? 100 : 0); });
+      if (!scores.length) return; // 本周无数学作答 → 不写（保留既有值 / null，符合消费端约定）
+      const acc = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+      Store.update(x => {
+        x.weeklyStats[wk] = x.weeklyStats[wk] || {};
+        if (x.weeklyStats[wk].mathAccuracy == null) {
+          // 本周首次计算：用上一周真实正确率作为环比基准
+          const keys = Object.keys(x.weeklyStats)
+            .filter(k => k < wk && x.weeklyStats[k] && typeof x.weeklyStats[k].mathAccuracy === 'number')
+            .sort();
+          const prevWk = keys[keys.length - 1];
+          if (prevWk) x.weeklyStats[wk].prevAccuracy = x.weeklyStats[prevWk].mathAccuracy;
+        }
+        x.weeklyStats[wk].mathAccuracy = acc;
+      });
     },
     weekKey(d) {
       d = d || new Date();
@@ -4933,6 +4990,7 @@ function bind(el, next) {
           });
         }
       });
+      Store.recomputeMathAccuracy(); // 闭环：数学每日一题自评 → 本周正确率 → 排程/预警/AI信号
       Toast.success('✓ 拿下。明天继续。');
       App.refresh();
     };
@@ -4951,6 +5009,7 @@ function bind(el, next) {
           });
         }
       });
+      Store.recomputeMathAccuracy(); // 闭环：数学每日一题自评 → 本周正确率 → 排程/预警/AI信号
       if (window.AiMemory) AiMemory.recordEvent('每日一题自评「还不会」', q.slice(0, 40));
       if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant('这题还不会，已帮你记下。周末集中清账，别让它过夜。');
       Toast.show('已记入错题本。周末清账，别攒着。', 'warn');
@@ -7113,6 +7172,8 @@ function bind(el, next) {
       s.quizHistory.push({ id: U.uid(), topicId, topicName: topic.name, score, verdict: judge.verdict, date: U.shortDate(), createdAt: new Date().toISOString(), source: judge.source });
       if (s.quizHistory.length > 100) s.quizHistory = s.quizHistory.slice(-100);
     });
+    // 闭环：本次测验结果汇入本周数学正确率 → 激活排程数学加权 / 难模块预警 / AI记忆信号
+    Store.recomputeMathAccuracy();
 
     // 记忆事件：测验结果汇入 AI 反思队列（攒够批量沉淀，成本可控）
     if (window.AiMemory) {
@@ -7431,7 +7492,8 @@ function bind(el, next) {
     var subjTopics = DB.TOPICS[mistake.subject] || DB.TOPICS.math;
     const guessTopic = mistake.type === 'sign' || mistake.type === 'fraction' ? 'm-subst'
       : mistake.type === 'integral' ? 'm-ode' : (subjTopics[0] || DB.TOPICS.math[0]).id;
-    topicId = guessTopic;
+    // 精准深链：若调用方显式指定 refId（如冲刺清单"去练这题"），优先命中该考点
+    topicId = (mistake.refId && allTopics().some(t => t.id === mistake.refId)) ? mistake.refId : guessTopic;
     phase = 'pick';
     // 直接进入出题（用变式）
     makeQuiz();
@@ -7898,6 +7960,142 @@ function bind(el, next) {
   }
 
   window.ConceptMapModule = { render };
+})();
+
+
+/* ===== js/modules/sprint.js ===== */
+/* ============================================================
+ * sprint.js — 智能押题 · 冲刺清单
+ * 算法：冲刺分 = 考频(必拿层tier/概念图谱杠杆度) × 薄弱度(热力图level)
+ *   只有「既可能考、又薄弱」的考点才会冲到顶部；已掌握(level2)自动出列。
+ * 复用：DB.TOPICS(四科考点+tier) × Store.heat(掌握度) × DB.CONCEPT_GRAPH(专业课概念杠杆度)
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  // 概念图谱杠杆度：被多少其他节点依赖（专业课自控专属，数据在 DB.CONCEPT_GRAPH）
+  function leverageMap() {
+    const cg = (window.DB && DB.CONCEPT_GRAPH) || [];
+    const dep = {};
+    cg.forEach(n => (n.deps || []).forEach(d => { dep[d] = (dep[d] || 0) + 1; }));
+    return dep;
+  }
+
+  // 单考点冲刺分
+  function scoreOf(t, heat, dep) {
+    const h = heat[t.id] || {};
+    const lvl = (h.level != null) ? h.level
+      : (h.score != null ? (h.score >= 80 ? 2 : h.score >= 50 ? 1 : 0) : 0);
+    // 考频：必拿层(tier1)几乎必考=3，tier2=2，tier3=1；专业课概念杠杆再 +min(2,依赖数)
+    let exam = t.tier === 1 ? 3 : t.tier === 2 ? 2 : 1;
+    if (dep[t.id]) exam += Math.min(2, dep[t.id]);
+    // 薄弱度：红(未测=2/已测差=3) > 黄(1)=2 > 绿(2)=0
+    let weak;
+    if (lvl === 0) weak = (h.score == null ? 2 : 3);
+    else if (lvl === 1) weak = 2;
+    else weak = 0;
+    return { lvl, exam, weak, score: exam * weak, dep: dep[t.id] || 0 };
+  }
+
+  function priority(score) {
+    if (score >= 9) return { label: '🔴 紧急', cls: 'sp-p0' };
+    if (score >= 5) return { label: '🟠 重点', cls: 'sp-p1' };
+    return { label: '🟢 可选', cls: 'sp-p2' };
+  }
+
+  function tierText(t, dep) {
+    const base = t.tier === 1 ? '高频·必拿' : t.tier === 2 ? '中频' : '低频';
+    return dep ? base + '·杠杆+' + dep : base;
+  }
+  function weakText(lvl, h) {
+    if (lvl === 0) return h.score == null ? '🟡 未测(风险)' : '🔴 薄弱';
+    if (lvl === 1) return '🟡 薄弱';
+    return '🟢 已掌握';
+  }
+
+  function render(el) {
+    const heat = Store.get().heat || {};
+    const dep = leverageMap();
+    const subjOrder = ['math', 'ctrl', 'eng', 'pol'];
+    const rows = [];
+    subjOrder.forEach(subj => {
+      (DB.TOPICS[subj] || []).forEach(t => {
+        const s = scoreOf(t, heat, dep);
+        rows.push({
+          subj, id: t.id, name: t.name, group: t.group || '',
+          tier: t.tier, lvl: s.lvl, exam: s.exam, weak: s.weak,
+          score: s.score, dep: s.dep
+        });
+      });
+    });
+    rows.sort((a, b) => (b.score - a.score) || (b.weak - a.weak));
+    const top = rows.filter(r => r.score > 0).slice(0, 12);
+    const urgent = top.filter(r => r.score >= 9).length;
+    const scanned = rows.length;
+
+    const subjName = s => (DB.SUBJECTS[s] && DB.SUBJECTS[s].short) || s;
+    const subjColor = s => (DB.SUBJECTS[s] && DB.SUBJECTS[s].color) || '#595959';
+
+    let html = ''
+      + '<div class="card">'
+      + '<div class="card-title">🎯 智能押题 · 冲刺清单</div>'
+      + '<div class="muted-sm" style="margin-bottom:8px">考频（必拿层 / 概念图谱杠杆度） × 你的薄弱度（热力图），算出最该冲的 Top 12。已掌握的考点自动出列。</div>'
+      + '<div class="sp-chips">'
+      + '<span class="tag">扫描 ' + scanned + ' 考点</span>'
+      + '<span class="tag">命中 ' + top.length + ' 个</span>'
+      + (urgent ? '<span class="tag" style="background:#cf1322;color:#fff">🔴 紧急 ' + urgent + '</span>' : '')
+      + '</div>';
+
+    if (!top.length) {
+      html += '<div class="empty" style="padding:18px 4px">🎉 当前没有紧急冲刺点——四科薄弱考点都清得差不多了，保持手感、查漏补缺即可。</div></div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    // 按科目分组
+    let cur = null;
+    top.forEach(r => {
+      if (r.subj !== cur) {
+        cur = r.subj;
+        html += '<div class="sp-group" style="margin-top:14px"><span class="sp-gname" style="color:' + subjColor(cur) + '">'
+          + subjName(cur) + '</span></div>';
+      }
+      const p = priority(r.score);
+      html += '<div class="sp-item" style="border-left:4px solid ' + subjColor(r.subj) + '">'
+        + '<div class="sp-top"><span class="sp-name">' + U.esc(r.name) + '</span>'
+        + '<span class="sp-badge ' + p.cls + '">' + p.label + '</span></div>'
+        + '<div class="sp-meta"><span>' + U.esc(r.group) + '</span>'
+        + '<span class="sp-bars">考频 ' + tierText(r, r.dep) + ' ｜ 薄弱 ' + weakText(r.lvl, heat[r.id] || {}) + '</span></div>'
+        + '<div class="btn-row" style="margin-top:8px">'
+        + '<button class="btn btn-primary sp-prac" data-id="' + r.id + '" data-subj="' + r.subj + '" data-name="' + U.esc(r.name) + '">去练这题</button>'
+        + '<button class="btn btn-ghost sp-master" data-id="' + r.id + '">标记已掌握</button>'
+        + '</div></div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+
+    // 去练这题 → 复用 quiz 出题流（精准命中该考点）
+    el.querySelectorAll('.sp-prac').forEach(b => b.onclick = () => {
+      const id = b.getAttribute('data-id'), subj = b.getAttribute('data-subj'), name = b.getAttribute('data-name');
+      if (window.QuizModule && QuizModule.startVariant) {
+        App.go('quiz');
+        setTimeout(() => QuizModule.startVariant({ subject: subj, type: 'concept', desc: name, refId: id }), 0);
+      } else { App.go('quiz'); }
+    });
+    // 标记已掌握 → 写 heat(level2) + 数学科顺带刷新正确率闭环
+    el.querySelectorAll('.sp-master').forEach(b => b.onclick = () => {
+      const id = b.getAttribute('data-id');
+      Store.update(s => {
+        s.heat = s.heat || {};
+        s.heat[id] = { level: 2, score: 90, updatedAt: new Date().toISOString() };
+      });
+      if (id[0] === 'm' && window.Store && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
+      Toast.success('✓ 已标记「' + b.getAttribute('data-name') + '」为掌握，清单自动重算');
+      App.refresh();
+    });
+  }
+
+  window.SprintModule = { render };
 })();
 
 
@@ -10091,6 +10289,7 @@ function bind(el, next) {
   // 对文本做 TeX 行内公式渲染（利用 Tex 模块）
   function renderMath(text) {
     if (!text || typeof Tex === 'undefined') return U.esc(text);
+    if (Array.isArray(text)) text = text.join('\n\n');
     try { return Tex.renderInline(text).replace(/\\n/g, '<br>'); } catch (e) { return U.esc(text); }
   }
 
@@ -11200,6 +11399,7 @@ function bind(el, next) {
     ['inspector', '步骤审查', '✍️', InspectorModule],
     ['focus', '深度专注', '🔒', FocusModule],
     ['concept', '概念图谱', '🧩', ConceptMapModule],
+    ['sprint', '智能押题', '🎯', SprintModule],
     ['decision', '院校决策', '⚖️', DecisionModule],
     ['mental', '心理状态', '🧘', MentalModule],
     ['reading', '英语阅读', '📖', ReadingModule],
