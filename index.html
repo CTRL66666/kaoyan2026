@@ -812,6 +812,115 @@ body.cp-lock { overflow: hidden; }
 .wp-items { margin-top: 6px; }
 .wp-item { font-size: 13px; line-height: 2; }
 
+/* ---------- 政治大题背诵/带背 (polrecite) ---------- */
+.pr-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.pr-topic { font-weight: 500; font-size: 14px; line-height: 1.5; }
+.pr-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.box-wrap { display: inline-flex; gap: 3px; align-items: center; }
+.box-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); display: inline-block; }
+.box-dot.on { background: var(--text-primary); }
+.box-dot.on:nth-child(n+4) { background: var(--ok); }
+.pr-card-line { font-size: 13px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 8px; }
+.pr-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 挖空自测 */
+.st-point { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; line-height: 2; }
+.st-idx { flex: 0 0 auto; width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+.st-text { font-size: 14px; }
+.st-blank { width: auto; min-width: 36px; padding: 1px 4px; border: none; border-bottom: 1px solid var(--text-primary); background: transparent; font-size: 14px; text-align: center; }
+.st-blank:focus { outline: none; border-bottom-width: 2px; }
+.st-ok { border-bottom-color: var(--ok) !important; color: var(--ok); }
+.st-bad { border-bottom-color: var(--danger) !important; color: var(--danger); text-decoration: line-through; }
+/* 记忆卡片翻面 */
+.flip-front, .flip-back { padding: 4px 0; }
+.flip-topic { font-size: 15px; font-weight: 500; line-height: 1.6; margin: 8px 0 12px; }
+.flip-pt { font-size: 14px; line-height: 2; padding-left: 14px; text-indent: -14px; }
+.flip-pt::before { content: "• "; color: var(--text-muted); }
+.flip-card { margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: var(--r-btn); font-size: 13px; color: var(--text-secondary); }
+.flip-grade { display: flex; gap: 8px; margin-top: 12px; }
+
+/* 政治大题背诵：分布条 / 筛选 / 待背清单 / 提示 / 挖空揭示 */
+.pr-boxes { display: flex; gap: 3px; height: 22px; margin-bottom: 4px; }
+.pr-boxseg { background: var(--surface); border: 1px solid var(--line); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-muted); min-width: 20px; overflow: hidden; }
+.pr-boxseg.lo { border-color: var(--text-muted); color: var(--text-secondary); }
+.pr-boxseg.mid { border-color: var(--text-primary); color: var(--text-primary); }
+.pr-boxseg.hi { background: var(--ok); border-color: var(--ok); color: #fff; }
+.pr-filter { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.input-sm { padding: 4px 8px; font-size: 13px; flex: 1; min-width: 88px; }
+.pr-duelist { margin-top: 8px; }
+.pr-dueitem { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-btn); margin-bottom: 6px; background: var(--surface); }
+.pr-duetext { flex: 1; font-size: 13px; line-height: 1.5; }
+.pr-hint { margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: var(--r-btn); font-size: 13px; color: var(--text-secondary); background: var(--surface); line-height: 1.7; }
+.st-reveal { border-bottom-style: dashed !important; color: var(--danger); }
+
+/* 政治大题背诵：分类/优先级/易错/默写/日历/趋势（第二批增强） */
+.tag-prio { background: var(--danger); color: #fff; }
+.tag-low { color: var(--text-muted); border: 1px solid var(--line); }
+.pr-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 4px; }
+.pr-cal-cell { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 6px 2px; text-align: center; background: var(--surface); }
+.pr-cal-cell.today { border-color: var(--text-primary); border-width: 2px; }
+.pr-cal-wd { font-size: 11px; color: var(--text-muted); }
+.pr-cal-n { font-size: 16px; font-weight: 600; margin-top: 2px; }
+.pr-trend { display: flex; align-items: flex-end; gap: 3px; height: 52px; padding: 4px 0; }
+.pr-trend-bar { flex: 1; background: var(--text-primary); border-radius: 2px 2px 0 0; min-height: 3px; opacity: .82; }
+
+/* 智能押题 · 冲刺清单（优化：可解释分数 / 筛选 / 复制 / 已掌握循环） */
+.sp-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.sp-filter { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.sp-toggle { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.sp-group { margin-bottom: 4px; }
+.sp-gname { font-size: 13px; font-weight: 600; }
+.sp-item { border: 1px solid var(--line); border-radius: var(--r-card); padding: 10px 12px; margin-bottom: 8px; background: var(--surface); }
+.sp-item.mastered { opacity: .6; }
+.sp-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sp-name { font-size: 14px; font-weight: 600; line-height: 1.4; }
+.sp-badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.sp-p0 { background: var(--danger); color: #fff; }
+.sp-p1 { background: #d46b08; color: #fff; }
+.sp-p2 { background: var(--line); color: var(--text-secondary); }
+.sp-meta { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+.sp-bars { color: var(--text-muted); }
+.sp-scorerow { display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.sp-score b { font-size: 15px; color: var(--text-primary); margin-right: 2px; }
+.sp-formula { font-size: 11px; }
+
+/* 进度追踪模块优化（2026-07-26）：总览/信号/模块条/建议 */
+.prog-overview { margin-bottom: 12px; }
+.po-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 8px 0; }
+.po-stat { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 10px 6px; text-align: center; background: var(--surface); }
+.po-num { font-size: 20px; font-weight: 600; line-height: 1.2; }
+.po-lbl { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.po-trend { margin-top: 6px; }
+.prog-sig { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.prog-sig .ps { font-size: 11px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-tag); padding: 1px 7px; }
+.prog-mods { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 4px; }
+.prog-mod { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.prog-mod-name { font-size: 12px; color: var(--text-secondary); min-width: 56px; }
+.prog-mod-v { font-size: 12px; color: var(--text-muted); min-width: 34px; text-align: right; }
+.prog-trend-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.prog-spark { flex: 0 0 auto; }
+.prog-trend-row .muted-sm { min-width: 28px; }
+.prog-sug { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+.prog-sug:first-of-type { border-top: none; }
+.prog-sug .ps-ico { flex: 0 0 auto; }
+.prog-sug .ps-txt { flex: 1; font-size: 13px; line-height: 1.5; }
+.prog-sug.warn .ps-txt { color: #ad6800; }
+.prog-sug.danger .ps-txt { color: var(--danger); }
+
+/* 错题本 + 拍题：统计 chips / 搜索 / 可点击复习节点 */
+.pm-stats, .mis-stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.stat-chip { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 12px; background: var(--surface); text-align: center; min-width: 64px; }
+.stat-chip-n { font-size: 18px; font-weight: 600; line-height: 1.2; }
+.stat-chip-l { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.stat-chip-danger .stat-chip-n { color: var(--danger); }
+.stat-chip-danger { border-color: var(--danger); }
+.pm-search, .mis-search { display: flex; gap: 6px; margin: 8px 0; align-items: center; }
+.pm-search .input-sm, .mis-search .input-sm { flex: 1; }
+.mis-count, .pm-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.rvd-click { cursor: pointer; }
+.rvd-click:hover { outline: 1px solid var(--text-primary); }
+.rvd-stage-done { background: var(--ok); color: #fff; border-radius: 99px; padding: 1px 7px; }
+.rvd-stage-due { background: #fff1f0; color: var(--danger); border: 1px solid var(--danger); border-radius: 99px; padding: 0 6px; }
+
 </style>
 </head>
 <body>
@@ -1479,6 +1588,7 @@ body.cp-lock { overflow: hidden; }
         eng: { percent: 0, stage: '真题阶段', modules: { '阅读': 0, '作文': 0 } },
         pol: { percent: 0, stage: '基础阶段', modules: { '马原': 0, '思修': 0, '史纲': 0, '毛中特': 0 } }
       },
+      progressHistory: [],        // 进度自动留痕 [{d:'M.D', math, ctrl, eng, pol, overall}]，每天至多一条，上限120，用于追踪曲线
       heat: {},                   // topicId -> {level:0|1|2, score:0-100|null, updatedAt}
       mistakeDrills: [],          // 错题重练队列 {id, source:'mistake'|'topic', refId, title, subject, status:'pending'|'done', createdAt, penaltyOf}
       mental: [],                 // {id, date, mood:1-10, fatigue:'fresh'|'tired'|'exhausted'|'giveup', jumpy:bool, hwUrge:bool, stuck}
@@ -1487,7 +1597,9 @@ body.cp-lock { overflow: hidden; }
       inspector: { runs: [] },    // {id,date,type,risk,flags:[]}
       quizBank: [],               // 收藏的题目 {id, topicId, topicName, stem, type, options, answer, solution, trap, diff, savedAt, note}
       mistakePhotos: [],          // 拍题错题本 {id, subject, imageBase64(压缩), note, painPoint, extractedQuestion, aiAnalysis:{keySteps,errorCause}, similarProblem, reviewPlan{start,done{d1,d3,d7,d15}}, createdAt, analyzedAt}
-      essays: [],                 // 作文批改 {id, essayType, score, band, max, summary, result{issues,upgrades,...}, topic, textSnippet, imageBase64(压缩), date, createdAt}（≤20）
+      essays: [],
+      polRecite: [],            // 政治大题背诵 {id, topic, points:[], keywords:[], source, subject, year, priority, card, box:1-5, due:'YYYY-MM-DD', createdAt, lastReview, wrongCount, hint}（Leitner间隔重复）
+      polReciteLog: [],          // 政治大题背诵复习日志 {date:'YYYY-MM-DD', ok:1/0, id}（近14天趋势/本周复习统计用）
       weaknessProfile: null,      // 弱点画像 {generatedAt, basedOn:[painPoint...], summary, weakAreas:[...], advice} —— 由拍题疑难点汇聚分析得出
       dailyQuiz: null,            // 每日一题 {date:'YYYY-MM-DD', question, solution, trap, subject, generatedAt}
       dailyQuizHistory: [],       // 历史每日一题 [{date,question,solution,trap,subject,generatedAt}]（"再来一题"时归档）
@@ -4617,6 +4729,12 @@ body.cp-lock { overflow: hidden; }
     }
     scan(s.mistakes, 'mistake');
     scan(s.mistakePhotos, 'photo');
+    // 政治大题背诵（Leitner 到期：box<5 且 due<=今日）
+    (s.polRecite || []).forEach(function (p) {
+      if ((p.box || 1) < 5 && (!p.due || p.due <= U.dkey())) {
+        due.push({ id: p.id, kind: 'pol', stage: 0, text: (p.topic || '一道政治大题').slice(0, 18) });
+      }
+    });
     return due;
   }
 
@@ -4625,8 +4743,8 @@ body.cp-lock { overflow: hidden; }
     if (!due.length) return '';
     return '<div class="rvd-wrap"><div class="muted-sm" style="margin-bottom:6px">📅 今日到期复习（重做原题，勿看解析）</div>'
       + due.slice(0, 5).map(function (d) {
-        return '<div class="rvd-item"><span class="rvd-stage">D' + d.stage + '</span>'
-          + '<span class="rvd-text">' + (d.kind === 'photo' ? '📸 ' : '✍️ ') + U.esc(d.text) + '</span>'
+        return '<div class="rvd-item" data-kind="' + d.kind + '" data-pid="' + d.id + '"><span class="rvd-stage">D' + d.stage + '</span>'
+          + '<span class="rvd-text">' + (d.kind === 'photo' ? '📸 ' : (d.kind === 'pol' ? '📕 ' : '✍️ ')) + U.esc(d.text) + '</span>'
           + '<button class="btn btn-ghost btn-sm rvd-done" data-kind="' + d.kind + '" data-pid="' + d.id + '" data-stage="' + d.stage + '">✓ 重做完成</button></div>';
       }).join('') + '</div>';
   }
@@ -4926,6 +5044,13 @@ function bind(el, next) {
         var kind = b.getAttribute('data-kind');
         var pid = b.getAttribute('data-pid');
         var stage = b.getAttribute('data-stage');
+        if (kind === 'pol') {
+          if (window.PolReciteModule) PolReciteModule.grade(pid, true);
+          if (window.AiMemory) AiMemory.recordEvent('完成政治大题复习', (pid || '').slice(0, 8));
+          Toast.success('✓ 政治大题复习完成，记忆又牢了一层');
+          App.refresh();
+          return;
+        }
         var coll = kind === 'photo' ? 'mistakePhotos' : 'mistakes';
         Store.update(s => {
           var p = (s[coll] || []).find(x => x.id === pid);
@@ -4937,6 +5062,15 @@ function bind(el, next) {
         if (window.AiMemory) AiMemory.recordEvent('完成到期复习', 'D' + stage + '阶段' + (kind === 'photo' ? '拍题' : '错题') + '重做');
         Toast.success('✓ 复习完成，记忆又牢了一层');
         App.refresh();
+      };
+    });
+
+    // 到期复习：政治大题点整行直接开翻面背（不打勾）
+    el.querySelectorAll('.rvd-item[data-kind="pol"]').forEach(function (it) {
+      it.style.cursor = 'pointer';
+      it.onclick = function (e) {
+        if (e.target.closest('.rvd-done')) return;
+        if (window.PolReciteModule) PolReciteModule.openReview(it.getAttribute('data-pid'));
       };
     });
 
@@ -5792,83 +5926,269 @@ function bind(el, next) {
 
 /* ===== js/modules/progress.js ===== */
 /* ============================================================
- * progress.js — 进度追踪：四科进度卡片 + 里程碑时间线
- * 特殊预警：现控<40%黄警 / 政治红色警告（PRD 4.3）
+ * progress.js — 进度追踪：总体总览 + 自动追踪曲线 + 四科进度卡 + 智能建议
+ * 核心升级（2026-07-26）：
+ *   1) 总览卡：加权总进度 / 距考研天数 / 本周打卡 / 本周专注
+ *   2) 追踪：progressHistory 每天自动留痕，画总进度随时间曲线（真正的"追踪"）
+ *   3) 每科"实学信号"：从热力图掌握度 / 任务打卡率 / 出题正确率 反推真实学习量，与手填进度对照
+ *   4) 模块进度条可视化（阈值红黄绿）+ 近况迷你曲线
+ *   5) 智能建议：薄弱模块/信号漂移/临考保数学，深链冲刺或出题
+ *   6) 一键复制进度报告
+ * 特殊预警：现控<40%黄警 / 政治 9 月前红色警告（PRD 4.3）
  * ============================================================ */
 (function () {
   'use strict';
+
+  const SUBJ_ORDER = ['math', 'ctrl', 'eng', 'pol'];
+
+  // ---- 基础计算 ----
+  function examDaysLeft() {
+    let d = '2026-12-26';
+    try { const s = Store.get().settings; if (s && s.examDate) d = s.examDate; } catch (e) {}
+    const t = new Date(d + 'T00:00:00');
+    const ms = t.getTime() - new Date().getTime();
+    const days = Math.ceil(ms / 86400000);
+    return days > 0 ? days : 0;
+  }
+  function pct(key) { return ((Store.get().progress[key] || {}).percent) || 0; }
+  // 目标加权总进度：按各科目标分加权，更贴近"离总分目标还有多远"
+  function overall() {
+    const s = Store.get().progress; let num = 0, den = 0;
+    SUBJ_ORDER.forEach(k => { const t = (DB.SUBJECTS[k] || {}).target || 1; num += ((s[k] || {}).percent || 0) * t; den += t; });
+    return den ? Math.round(num / den) : 0;
+  }
+
+  function subjKeyOf(topicId) {
+    if (!topicId) return null;
+    const c = topicId[0];
+    return c === 'm' ? 'math' : c === 'c' ? 'ctrl' : c === 'e' ? 'eng' : c === 'p' ? 'pol' : null;
+  }
+
+  // ---- 实学信号：用真实学习行为反推，而非只看手填百分比 ----
+  function signals(key) {
+    const st = Store.get();
+    const heat = st.heat || {};
+    const topics = (DB.TOPICS && DB.TOPICS[key]) || [];
+    let mastered = 0;
+    topics.forEach(t => { const h = heat[t.id]; if (h && (h.level >= 1 || (h.score != null && h.score >= 50))) mastered++; });
+    const mastery = topics.length ? Math.round(mastered / topics.length * 100) : 0;
+    const tasks = (st.tasks || []).filter(t => t.subject === key);
+    const done = tasks.filter(t => t.done).length;
+    const taskRate = tasks.length ? Math.round(done / tasks.length * 100) : 0;
+    const q = (st.quizHistory || []).filter(h => subjKeyOf(h.topicId) === key);
+    const quiz = q.length ? Math.round(q.reduce((a, b) => a + (b.score || 0), 0) / q.length) : null;
+    return { mastery, taskRate, quiz };
+  }
+  function sigAvg(sig) {
+    const a = [];
+    if (sig.mastery) a.push(sig.mastery);
+    if (sig.taskRate) a.push(sig.taskRate);
+    if (sig.quiz != null) a.push(sig.quiz);
+    return a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null;
+  }
+
+  // ---- 自动留痕：每天至多一条快照，当天多次更新则覆盖 ----
+  function ensureSnapshot() {
+    const cur = Store.get();
+    const ph = cur.progressHistory || [];
+    const d = U.shortDate();
+    const row = { d: d, math: pct('math'), ctrl: pct('ctrl'), eng: pct('eng'), pol: pct('pol'), overall: overall() };
+    const L = ph[ph.length - 1];
+    if (L && L.d === d && L.overall === row.overall && L.math === row.math && L.ctrl === row.ctrl && L.eng === row.eng && L.pol === row.pol) return;
+    Store.update(s => {
+      s.progressHistory = s.progressHistory || [];
+      const arr = s.progressHistory;
+      const last = arr[arr.length - 1];
+      if (last && last.d === d) Object.assign(last, row);
+      else { arr.push(row); if (arr.length > 120) s.progressHistory = arr.slice(-120); }
+    });
+  }
+
+  // ---- 迷你曲线（近况 sparkline） ----
+  function sparkline(vals, color) {
+    if (!vals || !vals.length) return '<span class="muted-sm">暂无记录</span>';
+    const W = 120, H = 34, pad = 3;
+    const X = i => pad + i * (W - 2 * pad) / (Math.max(1, vals.length - 1));
+    const Y = v => H - pad - (v / 100) * (H - 2 * pad);
+    const pts = vals.map((v, i) => X(i).toFixed(1) + ' ' + Y(v).toFixed(1)).join(' ');
+    const lv = vals[vals.length - 1];
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" class="prog-spark">'
+      + '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2"/>'
+      + '<circle cx="' + X(vals.length - 1).toFixed(1) + '" cy="' + Y(lv).toFixed(1) + '" r="2.5" fill="' + color + '"/></svg>';
+  }
+
+  // ---- 本周活跃度 ----
+  function weekly() {
+    const st = Store.get();
+    const now = new Date();
+    const keys = new Set();
+    for (let i = 0; i < 7; i++) { const dt = new Date(now.getTime() - i * 86400000); keys.add(U.dkey(dt)); }
+    let activeDays = 0;
+    keys.forEach(k => { if ((st.completions || {})[k] && st.completions[k].length) activeDays++; });
+    let focusMin = 0;
+    (st.focus && st.focus.sessions || []).forEach(s => { if (keys.has(s.date)) focusMin += (s.mins || 0); });
+    return { activeDays, focusMin };
+  }
+
+  // ==================== 总览卡 ====================
+  function stat(num, lbl) {
+    return '<div class="po-stat"><div class="po-num">' + num + '</div><div class="po-lbl">' + lbl + '</div></div>';
+  }
+  function overviewHtml() {
+    const ov = overall();
+    const days = examDaysLeft();
+    const wk = weekly();
+    const hist = (Store.get().progressHistory || []).slice(-30).map(r => ({ label: r.d, value: r.overall }));
+    const trend = hist.length >= 2
+      ? Charts.line(hist, { height: 150, unit: '%' })
+      : '<div class="empty" style="padding:14px">开始记录进度后，这里会显示总进度的追踪曲线（每天自动留痕）。</div>';
+    return ''
+      + '<div class="card prog-overview">'
+      + '<div class="card-title">📊 总体进度 · 追踪</div>'
+      + '<div class="po-stats">'
+      + stat(ov + '%', '加权总进度')
+      + stat(days, '距考研(天)')
+      + stat(wk.activeDays + '/7', '本周打卡')
+      + stat(wk.focusMin + '′', '本周专注')
+      + '</div>'
+      + '<div class="po-trend">' + trend + '</div>'
+      + '<div class="btn-row" style="margin-top:4px"><button class="btn btn-ghost btn-sm" id="prog-copy">📋 复制进度报告</button></div>'
+      + '</div>';
+  }
+
+  // ==================== 四科进度卡 ====================
+  function moduleRows(key) {
+    const meta = DB.SUBJECTS[key];
+    const p = Store.get().progress[key];
+    return (meta.modules || []).map(m => {
+      const v = (p.modules && p.modules[m]) || 0;
+      const color = v >= 70 ? 'var(--ok)' : v >= 40 ? '#d46b08' : 'var(--danger)';
+      return '<div class="prog-mod" data-subj="' + key + '" data-mod="' + U.esc(m) + '" title="点击更新进度">'
+        + '<span class="prog-mod-name">' + U.esc(m) + '</span>'
+        + '<div class="pbar" style="height:6px"><div class="pbar-fill" style="width:0%;background:' + color + '" data-w="' + v + '"></div></div>'
+        + '<span class="prog-mod-v">' + v + '%</span></div>';
+    }).join('');
+  }
 
   function subjCard(key) {
     const meta = DB.SUBJECTS[key];
     const p = Store.get().progress[key];
     const now = new Date();
     const month = now.getMonth() + 1;
+    const sig = signals(key);
+    const avg = sigAvg(sig);
+    const hist = (Store.get().progressHistory || []).map(r => r[key]).filter(v => typeof v === 'number');
 
+    // 预警：保留原逻辑 + 新增"信号漂移"提示
     let warn = '';
     if (key === 'ctrl' && p.modules) {
-      var ctrlMods = Object.keys(p.modules);
-      var lowMods = ctrlMods.filter(function (m) { return (p.modules[m] || 0) < 40; });
-      if (lowMods.length > 0) {
-        warn = '<div class="alert alert-warn">⚠️ ' + DB.SUBJECTS.ctrl.short + '核心模块进度偏低（' + lowMods.join('、') + '），建议优先推进</div>';
-      }
+      const low = Object.keys(p.modules).filter(m => (p.modules[m] || 0) < 40);
+      if (low.length) warn = '<div class="alert alert-warn">⚠️ ' + meta.short + '核心模块进度偏低（' + low.join('、') + '），建议优先推进</div>';
     }
     if (key === 'pol' && month < 9) {
       warn = '<div class="alert alert-danger">⏰ 9月前每天≤45分钟，禁止挤占数学/专业课时间</div>';
     }
+    if (avg != null && p.percent - avg >= 20) {
+      warn += '<div class="alert alert-warn">📡 填写 ' + p.percent + '% 但实学信号仅 ' + avg + '%，建议用「每日一题 / 出题」补齐薄弱考点</div>';
+    }
 
-    let moduleChips = '';
-    meta.modules.forEach(m => {
-      const v = (p.modules && p.modules[m]) || 0;
-      moduleChips += '<span class="tag tag-mod" data-subj="' + key + '" data-mod="' + U.esc(m) + '" title="点击更新进度">' + U.esc(m) + ' ' + v + '%</span>';
-    });
+    const sigHtml = '<div class="prog-sig">'
+      + '<span class="ps">掌握 ' + sig.mastery + '%</span>'
+      + '<span class="ps">打卡 ' + sig.taskRate + '%</span>'
+      + '<span class="ps">测验 ' + (sig.quiz == null ? '—' : sig.quiz + '%') + '</span>'
+      + '</div>';
 
     return '<div class="card prog-card">'
       + '<div class="prog-head"><span class="prog-name" style="color:' + meta.color + '">' + meta.name + '</span>'
       + '<span class="prog-target">目标 ' + meta.target + ' 分</span></div>'
       + '<div class="prog-bar-row">' + Charts.progressBar(p.percent, meta.color) + '<span class="prog-pct" data-subj="' + key + '" title="点击更新总进度">' + p.percent + '%</span></div>'
       + '<div class="muted-sm">当前阶段：' + U.esc(p.stage) + ' <button class="link-btn" data-stage="' + key + '">修改</button></div>'
-      + '<div class="tag-row">' + moduleChips + '</div>'
+      + sigHtml
+      + '<div class="prog-mods">' + moduleRows(key) + '</div>'
+      + '<div class="prog-trend-row"><span class="muted-sm">近况</span>' + sparkline(hist, meta.color) + '</div>'
       + warn
       + '</div>';
   }
 
-  // 计算当前日期在里程碑时间线中的位置（0~1），以及应插入的索引
+  // ==================== 智能建议 ====================
+  function suggestionsHtml() {
+    const st = Store.get();
+    const out = [];
+    const days = examDaysLeft();
+    SUBJ_ORDER.forEach(k => {
+      const p = st.progress[k];
+      const meta = DB.SUBJECTS[k];
+      const mods = p.modules || {};
+      Object.keys(mods).forEach(m => {
+        if ((mods[m] || 0) < 40) out.push({ lvl: 'warn', text: meta.short + '·' + m + ' 仅 ' + (mods[m] || 0) + '%，建议优先推进', tab: 'sprint', lbl: '去冲刺' });
+      });
+      const avg = sigAvg(signals(k));
+      if (avg != null && p.percent - avg >= 20) out.push({ lvl: 'danger', text: meta.short + ' 填写 ' + p.percent + '% 但实学信号仅 ' + avg + '%：补齐薄弱考点', tab: 'quiz', lbl: '去出题' });
+    });
+    if (days <= 150 && st.progress.math.percent < 70) {
+      out.push({ lvl: 'warn', text: '距考研 ' + days + ' 天，数学 ' + st.progress.math.percent + '%：建议保数学', tab: 'sprint', lbl: '看冲刺' });
+    }
+    if (!out.length) {
+      return '<div class="card"><div class="card-title">💡 本周建议</div><div class="empty" style="padding:14px">各项进度信号良好，保持节奏即可。薄弱模块会自动出现在上方卡片预警中。</div></div>';
+    }
+    return '<div class="card"><div class="card-title">💡 本周建议</div>'
+      + out.slice(0, 5).map(o => '<div class="prog-sug ' + o.lvl + '"><span class="ps-ico">' + (o.lvl === 'danger' ? '🔴' : '🟠') + '</span>'
+        + '<span class="ps-txt">' + U.esc(o.text) + '</span>'
+        + '<button class="btn btn-ghost btn-sm" data-go="' + o.tab + '">' + o.lbl + '</button></div>').join('')
+      + '</div>';
+  }
+
+  // ==================== 复制进度报告 ====================
+  function copyReport() {
+    const st = Store.get();
+    let txt = '【考研进度报告】\n';
+    txt += '日期：' + U.shortDate() + '　距考研：' + examDaysLeft() + ' 天\n';
+    txt += '加权总进度：' + overall() + '%\n';
+    SUBJ_ORDER.forEach(k => {
+      const p = st.progress[k];
+      const s = signals(k);
+      txt += DB.SUBJECTS[k].short + '：填写 ' + p.percent + '% / 掌握 ' + s.mastery + '% / 打卡 ' + s.taskRate + '% / 测验 ' + (s.quiz == null ? '—' : s.quiz + '%') + '\n';
+    });
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(function () { Toast.success('已复制进度报告'); }, function () { fallbackCopy(txt); });
+        return;
+      }
+    } catch (e) { /* ignore */ }
+    fallbackCopy(txt);
+  }
+  function fallbackCopy(txt) {
+    Modal.open({ title: '📋 进度报告（请手动复制）', html: '<textarea class="input" rows="10" style="width:100%">' + U.esc(txt) + '</textarea>', actions: [{ label: '关闭' }] });
+  }
+
+  // ==================== 里程碑时间线（保持原逻辑） ====================
   function calcCurrentPosition() {
     var now = new Date();
     var ms = DB.MILESTONES;
     if (!ms || !ms.length) return { index: 0, ratio: 0, label: '' };
-
-    // 将每个里程碑 deadline 转为 Date 对象（用当年）
     var year = now.getFullYear();
     var dates = ms.map(function (m) {
       var parts = m.deadline.split('-');
       return new Date(year, parseInt(parts[0], 10) - 1, parseInt(parts[1], 10), 23, 59, 59);
     });
-
-    // 找到当前日期应该插入的位置
     var idx = 0;
     for (var i = 0; i < dates.length; i++) {
       if (now <= dates[i]) { idx = i; break; }
       else { idx = i + 1; }
     }
-
-    // 计算在区间内的比例位置
     var ratio = 0;
-    var prevDate = idx > 0 ? dates[idx - 1] : new Date(year, 5, 30); // 默认从7月初开始
+    var prevDate = idx > 0 ? dates[idx - 1] : new Date(year, 5, 30);
     var nextDate = idx < dates.length ? dates[idx] : dates[dates.length - 1];
     var range = nextDate.getTime() - prevDate.getTime();
     if (range > 0) {
       ratio = Math.min(1, Math.max(0, (now.getTime() - prevDate.getTime()) / range));
     } else if (now <= dates[0]) {
-      ratio = 0; // 在第一个里程碑之前
+      ratio = 0;
     } else {
-      ratio = 1; // 在最后一个里程碑之后
+      ratio = 1;
     }
-
-    // 生成标签文字
-    var monthNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+    var monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
     var label = '📍 当前：' + monthNames[now.getMonth()] + now.getDate() + '日';
-
     return { index: idx, ratio: ratio, label: label };
   }
 
@@ -5880,17 +6200,13 @@ function bind(el, next) {
       + '<div class="ms-title">' + U.esc(m.title) + '</div></div>'
       + '<label class="ms-check"><input type="checkbox"' + (done ? ' checked' : '') + '><span class="box"></span></label>'
       + '</div>';
-
-    // 在正确的节点前插入「当前位置」指示器
     if (currentInfo && nodeIndex === currentInfo.index) {
       html = renderCurrentIndicator(currentInfo) + html;
     }
     return html;
   }
 
-  // 渲染动态当前位置指示器
   function renderCurrentIndicator(info) {
-    // 如果 ratio 接近 0，显示在上方；否则根据比例微调
     var style = '';
     if (info.ratio > 0 && info.ratio < 1) {
       style = ' style="margin-top:' + Math.round(info.ratio * 40) + 'px"';
@@ -5901,22 +6217,24 @@ function bind(el, next) {
       + '</div>';
   }
 
+  // ==================== 渲染 ====================
   function render(el) {
     // 每次渲染时刷新里程碑（目标院校可能已变更，确保校名动态）
     if (typeof DB !== 'undefined' && DB.getMilestones) {
       var fresh = DB.getMilestones();
-      if (fresh) { DB.MILESTONES.length = 0; fresh.forEach(function(m) { DB.MILESTONES.push(m); }); }
+      if (fresh) { DB.MILESTONES.length = 0; fresh.forEach(function (m) { DB.MILESTONES.push(m); }); }
     }
+    ensureSnapshot();
     var currentInfo = calcCurrentPosition();
-    el.innerHTML =
-      '<div class="grid-2">'
+    el.innerHTML = overviewHtml()
+      + '<div class="grid-2">'
       + subjCard('math') + subjCard('ctrl') + subjCard('eng') + subjCard('pol')
       + '</div>'
+      + suggestionsHtml()
       + '<div class="card"><div class="card-title">里程碑时间线</div>'
       + '<div class="ms-line">' + DB.MILESTONES.map(function (m, i) { return milestoneNode(m, currentInfo, i); }).join('') + '</div>'
       + '<div class="muted-sm" style="margin-top:8px">勾选里程碑将触发系统通知；10月底节点未达成时，系统将在11月1日推送院校决策建议。</div>'
       + '</div>';
-
     bind(el);
   }
 
@@ -5960,7 +6278,7 @@ function bind(el, next) {
       };
     });
     // 子模块进度点击更新
-    el.querySelectorAll('.tag-mod').forEach(tag => {
+    el.querySelectorAll('.prog-mod').forEach(tag => {
       tag.onclick = () => {
         const key = tag.getAttribute('data-subj');
         const mod = tag.getAttribute('data-mod');
@@ -5991,6 +6309,13 @@ function bind(el, next) {
         if (cb.checked && window.Notify) Notify.send('里程碑达成', '🏁 里程碑达成：' + m.title);
         App.refresh();
       };
+    });
+    // 复制报告
+    const copy = el.querySelector('#prog-copy');
+    if (copy) copy.onclick = copyReport;
+    // 建议深链
+    el.querySelectorAll('[data-go]').forEach(b => {
+      b.onclick = () => { App.go(b.getAttribute('data-go')); };
     });
   }
 
@@ -6348,6 +6673,32 @@ function bind(el, next) {
 (function () {
   'use strict';
 
+  var q = '';
+  var subjF = 'all';
+  var composing = false;
+  var searchTimer = null;
+
+  // 轻量筛选：仅切换行显隐，不重建 DOM（搜索框与输入法会话始终存活，杜绝闪/失焦）
+  function applyFilterLight(el) {
+    var ql = (q || '').toLowerCase();
+    var rows = el.querySelectorAll('.mis-row');
+    var visible = 0;
+    rows.forEach(function (row) {
+      var match = !ql || (row.textContent || '').toLowerCase().indexOf(ql) >= 0;
+      row.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    var cnt = el.querySelector('#ms-count');
+    if (cnt) cnt.textContent = visible;
+  }
+  function debounceSearch(el) {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      if (composing) return;
+      applyFilterLight(el);
+    }, 280);
+  }
+
   function render(el) {
     const s = Store.get();
 
@@ -6357,8 +6708,10 @@ function bind(el, next) {
       label: DB.MISTAKE_TYPES[k].name, value: counts[k] || 0, color: DB.MISTAKE_TYPES[k].color
     }));
 
-    // 错题列表（时间倒序，最多50条）
-    const list = U.clone(s.mistakes).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).slice(0, 50);
+    // 错题列表（时间倒序，最多50条）；关键词筛选改为客户端轻量显隐（见 applyFilterLight），此处只按科目过滤+排序
+    let list = U.clone(s.mistakes);
+    if (subjF !== 'all') list = list.filter(m => m.subject === subjF);
+    list = list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).slice(0, 50);
     let rows = '';
     if (list.length === 0) rows = '<div class="empty">还没有错题记录。错题不可怕，重复错才可怕。</div>';
     list.forEach(m => {
@@ -6368,10 +6721,10 @@ function bind(el, next) {
       if (m.reviewPlan) {
         const stages = [1, 3, 7, 15];
         const diff = Math.floor((Date.parse(U.dkey()) - Date.parse(m.reviewPlan.start)) / U.DAY_MS);
-        rvHtml = '<div class="rvd-progress">' + stages.map(function (st) {
+        rvHtml = '<div class="rvd-progress">复习进度（点节点标记完成）：' + stages.map(function (st) {
           const done = m.reviewPlan.done && m.reviewPlan.done['d' + st];
           const due = !done && diff >= st;
-          return '<span class="rvd-stage' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
+          return '<span class="rvd-stage rvd-click' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '" data-rvd-id="' + m.id + '" data-rvd-stage="' + st + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
         }).join(' ') + '</div>';
       }
       rows += '<div class="mis-row" style="border-left-color:' + t.color + '">'
@@ -6423,9 +6776,16 @@ function bind(el, next) {
       + '</div>'
 
       + '<div class="card"><div class="card-title-row"><span class="card-title">错题列表（最近50条）</span>'
-      + '<button class="link-btn" id="ms-review-all">📅 全部加入复习计划</button></div>' + rows + '</div>';
+      + '<button class="link-btn" id="ms-review-all">📅 全部加入复习计划</button></div>'
+      + statChips(s)
+      + '<div class="mis-search"><input id="ms-search" class="input input-sm" placeholder="搜索描述 / 科目…" value="' + U.esc(q) + '">'
+      + '<span class="mis-count">显示 <span id="ms-count">' + list.length + '</span> 条</span>'
+      + '<select id="ms-subjf" class="input input-sm" style="max-width:120px"><option value="all">全部科目</option>' + ['math', 'ctrl', 'eng', 'pol'].map(function (k) { return '<option value="' + k + '"' + (subjF === k ? ' selected' : '') + '>' + ((DB.SUBJECTS[k] || {}).short || k) + '</option>'; }).join('') + '</select></div>'
+      + rows + '</div>';
 
     bind(el);
+    // 关键词轻量筛选：保证跨 re-render（如切科目）后搜索词仍生效，输入焦点不受影响
+    applyFilterLight(el);
   }
 
   function bind(el) {
@@ -6572,6 +6932,56 @@ function bind(el, next) {
       Toast.success('已转入任务中心，去打卡吧');
       App.go('scheduler');
     };
+
+    // 搜索 / 科目筛选（IME 感知 + 防抖）
+    const search = el.querySelector('#ms-search');
+    if (search) {
+      search.oninput = () => { q = search.value.trim(); debounceSearch(el); };
+      search.oncompositionstart = () => { composing = true; };
+      search.oncompositionend = () => { composing = false; q = search.value.trim(); debounceSearch(el); };
+    }
+    const subjf = el.querySelector('#ms-subjf');
+    if (subjf) subjf.onchange = () => { subjF = subjf.value; render(el); };
+    // 复习节点点击 → 标记/取消完成，闭环艾宾浩斯复习
+    el.querySelectorAll('.rvd-stage[data-rvd-id]').forEach(sp => {
+      sp.onclick = () => markReview(sp.getAttribute('data-rvd-id'), parseInt(sp.getAttribute('data-rvd-stage'), 10));
+    });
+  }
+
+  // ---------- 统计概览 chips ----------
+  function chip(label, n, cls) {
+    return '<div class="stat-chip' + (cls ? ' stat-chip-' + cls : '') + '"><div class="stat-chip-n">' + n + '</div><div class="stat-chip-l">' + label + '</div></div>';
+  }
+  function statChips(s) {
+    const ms = s.mistakes || [];
+    const total = ms.length;
+    const weekAgo = Date.now() - 7 * U.DAY_MS;
+    const weekNew = ms.filter(m => (Date.parse(m.createdAt) || 0) >= weekAgo).length;
+    const drills = (s.mistakeDrills || []).filter(d => d.status === 'pending').length;
+    const due = ms.filter(m => {
+      if (!m.reviewPlan) return false;
+      const diff = Math.floor((Date.parse(U.dkey()) - Date.parse(m.reviewPlan.start)) / U.DAY_MS);
+      return [1, 3, 7, 15].some(st => !(m.reviewPlan.done && m.reviewPlan.done['d' + st]) && diff >= st);
+    }).length;
+    return '<div class="mis-stats">'
+      + chip('错题总数', total)
+      + chip('本周新增', weekNew)
+      + chip('重练待办', drills)
+      + chip('复习到期', due, due > 0 ? 'danger' : '')
+      + '</div>';
+  }
+
+  // ---------- 复习节点：标记 / 取消完成 ----------
+  function markReview(id, stage) {
+    Store.update(s => {
+      const m = s.mistakes.find(x => x.id === id);
+      if (m && m.reviewPlan) {
+        m.reviewPlan.done = m.reviewPlan.done || {};
+        if (m.reviewPlan.done['d' + stage]) delete m.reviewPlan.done['d' + stage];
+        else m.reviewPlan.done['d' + stage] = true;
+      }
+    });
+    App.refresh();
   }
 
   window.MistakesModule = { render };
@@ -8013,6 +8423,10 @@ function bind(el, next) {
     return '🟢 已掌握';
   }
 
+  let fSubj = '', fPrio = '', fBalance = false, fShowMastered = false;
+
+  function prioLabel(p) { return p === 'urgent' ? '🔴 紧急' : p === 'key' ? '🟠 重点' : '🟢 可选'; }
+
   function render(el) {
     const heat = Store.get().heat || {};
     const dep = leverageMap();
@@ -8024,57 +8438,97 @@ function bind(el, next) {
         rows.push({
           subj, id: t.id, name: t.name, group: t.group || '',
           tier: t.tier, lvl: s.lvl, exam: s.exam, weak: s.weak,
-          score: s.score, dep: s.dep
+          score: s.score, dep: s.dep, mastered: s.lvl >= 2
         });
       });
     });
-    rows.sort((a, b) => (b.score - a.score) || (b.weak - a.weak));
-    const top = rows.filter(r => r.score > 0).slice(0, 12);
-    const urgent = top.filter(r => r.score >= 9).length;
-    const scanned = rows.length;
+
+    // 筛选（科目 / 优先级 / 是否显示已掌握）
+    let filtered = rows.filter(r => {
+      if (fSubj && r.subj !== fSubj) return false;
+      if (fPrio && priority(r.score).label !== prioLabel(fPrio)) return false;
+      if (!fShowMastered && (r.mastered || r.score <= 0)) return false;
+      return true;
+    });
+    filtered.sort((a, b) => (b.score - a.score) || (b.weak - a.weak));
+
+    // 取列表：均衡(每科前4) / 单科全列 / 全局Top12(或显示已掌握时Top24)
+    let list;
+    if (fBalance) {
+      const per = {}; const BAL = 4;
+      filtered.forEach(r => { per[r.subj] = per[r.subj] || []; if (per[r.subj].length < BAL) per[r.subj].push(r); });
+      list = []; Object.keys(per).forEach(k => { list = list.concat(per[k]); });
+      list.sort((a, b) => (b.score - a.score) || (b.weak - a.weak));
+    } else if (fSubj) {
+      list = filtered;
+    } else {
+      list = filtered.slice(0, fShowMastered ? 24 : 12);
+    }
 
     const subjName = s => (DB.SUBJECTS[s] && DB.SUBJECTS[s].short) || s;
     const subjColor = s => (DB.SUBJECTS[s] && DB.SUBJECTS[s].color) || '#595959';
+    const subjOpts = '<option value="">全部科目</option>' + subjOrder.map(s => '<option value="' + s + '"' + (fSubj === s ? ' selected' : '') + '>' + subjName(s) + '</option>').join('');
+    const prioOpts = '<option value="">全部优先级</option>' + ['urgent', 'key', 'optional'].map(p => '<option value="' + p + '"' + (fPrio === p ? ' selected' : '') + '>' + prioLabel(p) + '</option>').join('');
+    const urgent = list.filter(r => r.score >= 9).length;
+    const masteredTotal = rows.filter(r => r.mastered).length;
 
     let html = ''
       + '<div class="card">'
       + '<div class="card-title">🎯 智能押题 · 冲刺清单</div>'
-      + '<div class="muted-sm" style="margin-bottom:8px">考频（必拿层 / 概念图谱杠杆度） × 你的薄弱度（热力图），算出最该冲的 Top 12。已掌握的考点自动出列。</div>'
+      + '<div class="muted-sm" style="margin-bottom:8px">冲刺分 = 考频（必拿层/概念图谱杠杆）× 薄弱度（热力图）。既可能考、又薄弱的考点冲到顶部；已掌握自动出列。分数与公式逐题可解释。</div>'
       + '<div class="sp-chips">'
-      + '<span class="tag">扫描 ' + scanned + ' 考点</span>'
-      + '<span class="tag">命中 ' + top.length + ' 个</span>'
+      + '<span class="tag">扫描 ' + rows.length + ' 考点</span>'
+      + '<span class="tag">命中 ' + list.length + ' 个</span>'
       + (urgent ? '<span class="tag" style="background:#cf1322;color:#fff">🔴 紧急 ' + urgent + '</span>' : '')
+      + (masteredTotal ? '<span class="tag" style="background:#237804;color:#fff">✓ 已掌握 ' + masteredTotal + '</span>' : '')
+      + '</div>'
+      + '<div class="sp-filter">'
+      + '<select id="sp-subjf" class="input input-sm">' + subjOpts + '</select>'
+      + '<select id="sp-priof" class="input input-sm">' + prioOpts + '</select>'
+      + '<label class="sp-toggle"><input type="checkbox" id="sp-balance"' + (fBalance ? ' checked' : '') + '> 每科均衡</label>'
+      + '<label class="sp-toggle"><input type="checkbox" id="sp-showm"' + (fShowMastered ? ' checked' : '') + '> 显示已掌握</label>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-copy">📋 复制</button>'
       + '</div>';
 
-    if (!top.length) {
-      html += '<div class="empty" style="padding:18px 4px">🎉 当前没有紧急冲刺点——四科薄弱考点都清得差不多了，保持手感、查漏补缺即可。</div></div>';
+    if (!list.length) {
+      html += '<div class="empty" style="padding:18px 4px">🎉 当前筛选下没有冲刺点' + (fShowMastered ? '' : '——四科薄弱考点都清得差不多了，保持手感即可') + '。</div></div>';
       el.innerHTML = html;
+      bindControls(el, list, subjName);
       return;
     }
 
-    // 按科目分组
     let cur = null;
-    top.forEach(r => {
+    list.forEach(r => {
       if (r.subj !== cur) {
         cur = r.subj;
-        html += '<div class="sp-group" style="margin-top:14px"><span class="sp-gname" style="color:' + subjColor(cur) + '">'
-          + subjName(cur) + '</span></div>';
+        html += '<div class="sp-group" style="margin-top:14px"><span class="sp-gname" style="color:' + subjColor(cur) + '">' + subjName(cur) + '</span></div>';
       }
       const p = priority(r.score);
-      html += '<div class="sp-item" style="border-left:4px solid ' + subjColor(r.subj) + '">'
+      const isMastered = r.mastered;
+      html += '<div class="sp-item' + (isMastered ? ' mastered' : '') + '" style="border-left:4px solid ' + subjColor(r.subj) + '">'
         + '<div class="sp-top"><span class="sp-name">' + U.esc(r.name) + '</span>'
         + '<span class="sp-badge ' + p.cls + '">' + p.label + '</span></div>'
         + '<div class="sp-meta"><span>' + U.esc(r.group) + '</span>'
-        + '<span class="sp-bars">考频 ' + tierText(r, r.dep) + ' ｜ 薄弱 ' + weakText(r.lvl, heat[r.id] || {}) + '</span></div>'
+        + '<span class="sp-bars">' + tierText(r, r.dep) + ' ｜ ' + weakText(r.lvl, heat[r.id] || {}) + '</span></div>'
+        + '<div class="sp-scorerow"><span class="sp-score">冲刺分 <b>' + r.score + '</b></span><span class="sp-formula">考频' + r.exam + ' × 薄弱' + r.weak + '</span></div>'
         + '<div class="btn-row" style="margin-top:8px">'
         + '<button class="btn btn-primary sp-prac" data-id="' + r.id + '" data-subj="' + r.subj + '" data-name="' + U.esc(r.name) + '">去练这题</button>'
-        + '<button class="btn btn-ghost sp-master" data-id="' + r.id + '">标记已掌握</button>'
+        + (isMastered
+            ? '<button class="btn btn-ghost sp-recover" data-id="' + r.id + '">恢复薄弱</button>'
+            : '<button class="btn btn-ghost sp-master" data-id="' + r.id + '">标记已掌握</button>')
         + '</div></div>';
     });
     html += '</div>';
     el.innerHTML = html;
+    bindControls(el, list, subjName);
+  }
 
-    // 去练这题 → 复用 quiz 出题流（精准命中该考点）
+  function bindControls(el, list, subjName) {
+    const subjf = el.querySelector('#sp-subjf'); if (subjf) subjf.onchange = function () { fSubj = subjf.value; render(el); };
+    const priof = el.querySelector('#sp-priof'); if (priof) priof.onchange = function () { fPrio = priof.value; render(el); };
+    const bal = el.querySelector('#sp-balance'); if (bal) bal.onchange = function () { fBalance = bal.checked; render(el); };
+    const showm = el.querySelector('#sp-showm'); if (showm) showm.onchange = function () { fShowMastered = showm.checked; render(el); };
+    const copy = el.querySelector('#sp-copy'); if (copy) copy.onclick = function () { copyList(list, subjName); };
     el.querySelectorAll('.sp-prac').forEach(b => b.onclick = () => {
       const id = b.getAttribute('data-id'), subj = b.getAttribute('data-subj'), name = b.getAttribute('data-name');
       if (window.QuizModule && QuizModule.startVariant) {
@@ -8082,7 +8536,6 @@ function bind(el, next) {
         setTimeout(() => QuizModule.startVariant({ subject: subj, type: 'concept', desc: name, refId: id }), 0);
       } else { App.go('quiz'); }
     });
-    // 标记已掌握 → 写 heat(level2) + 数学科顺带刷新正确率闭环
     el.querySelectorAll('.sp-master').forEach(b => b.onclick = () => {
       const id = b.getAttribute('data-id');
       Store.update(s => {
@@ -8093,6 +8546,31 @@ function bind(el, next) {
       Toast.success('✓ 已标记「' + b.getAttribute('data-name') + '」为掌握，清单自动重算');
       App.refresh();
     });
+    el.querySelectorAll('.sp-recover').forEach(b => b.onclick = () => {
+      const id = b.getAttribute('data-id');
+      Store.update(s => {
+        s.heat = s.heat || {};
+        s.heat[id] = { level: 0, score: null, updatedAt: new Date().toISOString() };
+      });
+      if (id[0] === 'm' && window.Store && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
+      Toast.success('已恢复为薄弱，重新进入冲刺');
+      App.refresh();
+    });
+  }
+
+  function copyList(list, subjName) {
+    let txt = '【考研冲刺押题清单】\n';
+    list.forEach((r, i) => { txt += (i + 1) + '. [' + subjName(r.subj) + '] ' + r.name + ' — 冲刺分' + r.score + '（考频' + r.exam + '×薄弱' + r.weak + '）\n'; });
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(function () { Toast.success('已复制 ' + list.length + ' 条'); }, function () { fallbackCopy(txt); });
+        return;
+      }
+    } catch (e) { /* ignore */ }
+    fallbackCopy(txt);
+  }
+  function fallbackCopy(txt) {
+    Modal.open({ title: '📋 冲刺清单（请手动复制）', html: '<textarea class="input" rows="10" style="width:100%">' + U.esc(txt) + '</textarea>', actions: [{ label: '关闭' }] });
   }
 
   window.SprintModule = { render };
@@ -10261,6 +10739,30 @@ function bind(el, next) {
 (function () {
   'use strict';
   var filter = 'all';
+  var q = '';
+  var composing = false; // IME 组合输入中标记
+  var searchTimer = null;
+
+  // 轻量筛选：仅切换卡片显隐，不重建 DOM（搜索框与输入法会话始终存活，杜绝闪/失焦）
+  function applyFilterLight(el) {
+    var ql = (q || '').toLowerCase();
+    var cards = el.querySelectorAll('.pm-card');
+    var visible = 0;
+    cards.forEach(function (card) {
+      var match = !ql || (card.textContent || '').toLowerCase().indexOf(ql) >= 0;
+      card.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    var cnt = el.querySelector('#pm-count');
+    if (cnt) cnt.textContent = visible;
+  }
+  function debounceSearch(el) {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      if (composing) return;
+      applyFilterLight(el);
+    }, 280);
+  }
 
   // 图片压缩：canvas 缩放到最大边 ≤ MAX_PX，JPEG 0.7 质量，控制 localStorage 占用
   var MAX_PX = 1200;
@@ -10313,7 +10815,7 @@ function bind(el, next) {
     if (!wp) {
       var hint = painCnt > 0
         ? '已标记 <b>' + painCnt + '</b> 道错题的疑难点。点击「分析薄弱点」，AI 将主要依据这些疑难点标签（省 token、更精准）生成你的薄弱点画像与复习建议。'
-        : '还没有标记疑难点。建议给每道错题标一个 ≤10 字的疑难点（如「分部积分」「洛必达」），AI 即可据此分析你的薄弱模块并给出针对性建议。';
+        : '还没有标记疑难点。建议给每道错题标一个 ≤20 字的疑难点（如「定积分换元法负号处理」「含参变限积分求导漏项」），AI 即可据此分析你的薄弱模块并给出针对性建议。';
       return header
         + '<div class="muted-sm">' + hint + '</div>'
         + (typeof AI !== 'undefined' && !AI.configured() ? '<div class="alert alert-warn" style="margin-top:6px">未配置 AI，无法生成画像。请先在设置中填写 API。</div>' : '')
@@ -10377,12 +10879,12 @@ function bind(el, next) {
           cardsHtml += '<div class="pm-note"><b>📝 备注：</b>' + U.esc(p.note) + '</div>';
         }
 
-        // 疑难点标记（10字以内，用于汇聚弱点画像 / 省 token 分析）
+        // 疑难点标记（20字以内，用于汇聚弱点画像 / 省 token 分析）
         var painVal = p.painPoint || '';
         cardsHtml += '<div class="pm-pain">'
           + '<span class="pm-pain-label">🎯 疑难点</span>'
-          + '<input class="pm-pain-input" data-id="' + p.id + '" maxlength="10" value="' + U.esc(painVal) + '" placeholder="如：分部积分/洛必达...">'
-          + '<span class="pm-pain-count">' + painVal.length + '/10</span>'
+          + '<input class="pm-pain-input" data-id="' + p.id + '" maxlength="20" value="' + U.esc(painVal) + '" placeholder="如：定积分换元法负号处理...">'
+          + '<span class="pm-pain-count">' + painVal.length + '/20</span>'
           + '</div>';
 
         // 图片：缩略图 + 查看原图按钮
@@ -10424,20 +10926,21 @@ function bind(el, next) {
         if (typeof AI !== 'undefined' && AI.configured()) {
           cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="similar">🔄 举一反三</button>';
         }
+        cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="redo">🔁 练同类</button>';
         cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="review">📅 ' + (p.reviewPlan ? '复习中' : '复习计划') + '</button>'
           + '<button class="btn btn-ghost pm-ai-btn" data-act="editnote">✏️ 编辑备注</button>'
           + '<button class="btn btn-ghost pm-del-btn" data-act="del">删除</button>'
           + '</div>';
-        // 复习计划进度（艾宾浩斯 1/3/7/15 天）
+        // 复习计划进度（艾宾浩斯 1/3/7/15 天）—— 点节点即可标记/取消完成，闭环复习
         if (p.reviewPlan) {
           var stages = [1, 3, 7, 15];
           var rp = p.reviewPlan;
           var diff = Math.floor((Date.parse(U.dkey()) - Date.parse(rp.start)) / U.DAY_MS);
-          cardsHtml += '<div class="rvd-progress muted-sm">复习进度：'
+          cardsHtml += '<div class="rvd-progress muted-sm">复习进度（点节点标记完成）：'
             + stages.map(function (st) {
               var done = rp.done && rp.done['d' + st];
               var due = !done && diff >= st;
-              return '<span class="rvd-stage' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
+              return '<span class="rvd-stage rvd-click' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '" data-rvd-id="' + p.id + '" data-rvd-stage="' + st + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
             }).join(' ')
             + '</div>';
         }
@@ -10468,11 +10971,16 @@ function bind(el, next) {
       + '<button class="btn btn-ghost pm-export-btn" data-act="export-json" style="font-size:11px;padding:3px 8px" title="导出为 JSON（含图片 base64）">📥 JSON</button>'
       + '<button class="btn btn-ghost pm-export-btn" data-act="export-md" style="font-size:11px;padding:3px 8px" title="导出为 Markdown（文字+题目+解析）">📄 Markdown</button>'
       + '</span></div>'
+      + statChips(s)
+      + '<div class="pm-search"><input id="pm-search" class="input input-sm" placeholder="搜索题目 / 备注 / 疑难点…" value="' + U.esc(q) + '">'
+      + '<span class="pm-count">显示 <span id="pm-count">' + list.length + '</span> 条</span></div>'
       + '<div class="tab-row">' + tabsHtml + '</div>'
       + '<div class="pm-list">' + cardsHtml + '</div>'
       + '</div>';
 
     bind(el);
+    // 搜索态重渲染后保持焦点
+    if (q) { var si = el.querySelector('#pm-search'); if (si) { var v = si.value; si.focus(); try { si.setSelectionRange(v.length, v.length); } catch (e) {} } }
   }
 
   // ---------- 交互绑定 ----------
@@ -10482,12 +10990,20 @@ function bind(el, next) {
       b.onclick = function () { filter = b.getAttribute('data-f'); render(el); };
     });
 
-    // 疑难点输入：失焦/回车保存（10字限）
+    // 关键词搜索：IME 组合输入中不触发筛选，组字结束后防抖 280ms 再渲染
+    var search = el.querySelector('#pm-search');
+    if (search) {
+      search.oninput = function () { q = this.value.trim(); debounceSearch(el); };
+      search.oncompositionstart = function () { composing = true; };
+      search.oncompositionend = function () { composing = false; q = this.value.trim(); debounceSearch(el); };
+    }
+
+    // 疑难点输入：失焦/回车保存（20字限）
     el.querySelectorAll('.pm-pain-input').forEach(function (inp) {
       var id = inp.getAttribute('data-id');
       var cnt = inp.parentNode.querySelector('.pm-pain-count');
       var save = function () {
-        var v = inp.value.trim().slice(0, 10);
+        var v = inp.value.trim().slice(0, 20);
         inp.value = v;
         if (cnt) cnt.textContent = v.length + '/10';
         Store.update(function (st) {
@@ -10565,6 +11081,15 @@ function bind(el, next) {
           Toast.success('已删除'); App.refresh();
         }, true);
       };
+
+      // 练同类（深链 AI 出题）
+      var redoBtn = card.querySelector('[data-act="redo"]');
+      if (redoBtn) redoBtn.onclick = function () { redoSimilar(id, el); };
+    });
+
+    // 复习节点点击 → 标记/取消完成，闭环艾宾浩斯复习
+    el.querySelectorAll('.rvd-stage[data-rvd-id]').forEach(function (sp) {
+      sp.onclick = function () { markReview(sp.getAttribute('data-rvd-id'), parseInt(sp.getAttribute('data-rvd-stage'), 10)); };
     });
 
     // 导出按钮
@@ -10665,8 +11190,11 @@ function bind(el, next) {
       + '{"extractedQuestion":"从图片中识别出的完整题目文字（保留所有数学符号和公式，用 LaTeX 表示如 \\frac{a}{b}、\\sqrt{x}、x^{2}、\\int 等）",'
       + '"keySteps":"解题关键步骤（分步，落到具体公式/方法，数学表达式用 LaTeX）",'
       + '"errorCause":"本题最易踩的坑/典型错误原因（符号/概念/计算等）",'
-      + '"painPoint":"用不超过10个汉字概括本题最易卡住的核心知识点/方法（如\\"分部积分\\"、\\"洛必达\\"、\\"中值定理\\"），不要标点、不要空格、不要解释"}'
-      + '要求：extractedQuestion 必须准确还原题目原貌；keySteps 要具体到每步推导；errorCause 指出真正易错点；painPoint 必须精炼、≤10字、能直接作为疑难点标签。';
+      + '"painPoint":"【角色】你是刚批完这道题的阅卷老师，要告诉考生：这道题最核心的考点是什么？哪一步最容易丢分？用≤20字精准概括。\\n'
+      + '【正例】\\"变限积分绝对值奇偶性+0点可导性判断\\"、\\"定积分换元法忘记调限与正负号\\"、\\"含参变限积分求导链式法则漏项\\"、\\"二重积分极坐标面积元素rdr遗漏\\"、\\"级数审敛选错（比值vs根值）判别混淆\\"\\n'
+      + '【反例（绝对禁止）】\\"科目不符/此题属于数学一\\"、\\"题目难度中等\\"、\\"计算错误/粗心大意\\"、\\"需要多练习\\"、\\"概念不清\\"——这些全是空话，零信息量！\\n'
+      + '【硬约束】①必须含具体知识点名称（如：变限积分/格林公式/泰勒展开）②必须点出具体陷阱或易错操作 ③可含LaTeX符号 ④末尾无标点 ⑤禁止评价科目归属/难度等级/学习态度"}'
+      + '要求：extractedQuestion 必须准确还原题目原貌；keySteps 要具体到每步推导并标注关键公式；errorCause 指出真正易错根因（习惯/概念漏洞/计算陷阱）；painPoint 必须≤20字、是「具体考点+易错细节」而非科目/难度/态度评价，可直接作为复习聚焦标签。';
 
     var userPrompt = '请分析这张题目图片。'
       + (photo.note ? '\n考生备注：' + photo.note : '')
@@ -10696,7 +11224,7 @@ function bind(el, next) {
       }
       // 写回数据（含提取的题目）
       var wasEmpty = !photo.painPoint; // 解析前是否已标记过疑难点
-      var autoPain = (analysis.painPoint || '').trim().slice(0, 10);
+      var autoPain = (analysis.painPoint || '').trim().slice(0, 20);
       Store.update(function (st) {
         var photos = st.mistakePhotos || [];
         var target = photos.find(function (p) { return p.id === id; });
@@ -10880,7 +11408,7 @@ function bind(el, next) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
     var s = Store.get();
     var photos = s.mistakePhotos || [];
-    // 优先取疑难点标签（10字内），最多 40 条
+    // 优先取疑难点标签（20字内），最多 40 条
     var painPoints = photos.filter(function (p) { return p.painPoint && p.painPoint.trim(); })
       .map(function (p) { return p.painPoint.trim(); });
     // 备份：疑难点不足时，取最近题目的题干文字（限 12 条、每条截断 60 字）
@@ -10945,6 +11473,55 @@ function bind(el, next) {
     }).catch(function (err) {
       if (out) out.textContent = '❌ 分析失败：' + (err && err.message ? err.message : err);
     });
+  }
+
+  // ---------- 统计概览 chips ----------
+  function chip(label, n, cls) {
+    return '<div class="stat-chip' + (cls ? ' stat-chip-' + cls : '') + '"><div class="stat-chip-n">' + n + '</div><div class="stat-chip-l">' + label + '</div></div>';
+  }
+  function statChips(s) {
+    var photos = s.mistakePhotos || [];
+    var total = photos.length;
+    var analyzed = photos.filter(function (p) { return p.aiAnalysis && (p.aiAnalysis.keySteps || p.aiAnalysis.errorCause); }).length;
+    var reviewing = photos.filter(function (p) { return p.reviewPlan; }).length;
+    var due = photos.filter(function (p) {
+      if (!p.reviewPlan) return false;
+      var diff = Math.floor((Date.parse(U.dkey()) - Date.parse(p.reviewPlan.start)) / U.DAY_MS);
+      return [1, 3, 7, 15].some(function (st) { return !(p.reviewPlan.done && p.reviewPlan.done['d' + st]) && diff >= st; });
+    }).length;
+    return '<div class="pm-stats">'
+      + chip('总题数', total)
+      + chip('已解析', analyzed)
+      + chip('复习中', reviewing)
+      + chip('待复习', due, due > 0 ? 'danger' : '')
+      + '</div>';
+  }
+
+  // ---------- 复习节点：标记 / 取消完成 ----------
+  function markReview(id, stage) {
+    Store.update(function (st) {
+      var p = (st.mistakePhotos || []).find(function (x) { return x.id === id; });
+      if (p && p.reviewPlan) {
+        p.reviewPlan.done = p.reviewPlan.done || {};
+        if (p.reviewPlan.done['d' + stage]) delete p.reviewPlan.done['d' + stage];
+        else p.reviewPlan.done['d' + stage] = true;
+      }
+    });
+    App.refresh();
+  }
+
+  // ---------- 练同类：深链 AI 出题 ----------
+  function redoSimilar(id, el) {
+    var p = (Store.get().mistakePhotos || []).find(function (x) { return x.id === id; });
+    if (!p) return;
+    if (window.QuizModule && QuizModule.startVariant) {
+      App.go('quiz');
+      setTimeout(function () {
+        QuizModule.startVariant({ subject: p.subject, type: 'concept', desc: (p.painPoint || p.note || p.extractedQuestion || '同类练习题'), refId: p.id });
+      }, 50);
+    } else {
+      Toast.warn('AI 测验模块未就绪');
+    }
   }
 
   window.PhotoMistakeModule = { render };
@@ -11373,6 +11950,735 @@ function bind(el, next) {
 })();
 
 
+/* ===== js/modules/polrecite.js ===== */
+/* ============================================================
+ * polrecite.js — 政治大题背诵/带背（Leitner间隔重复 + 挖空自测 + AI口诀）
+ * 考研政治分析题靠背诵：录入肖四/肖八/背诵手册大题，挖空自测关键词，
+ *   Leitner 盒(1/2/4/7/15天)驱动复习，AI 生成记忆口诀。到期复习聚合进作战台。
+ * 数据：Store.polRecite[]（随主数据云同步）
+ * ============================================================ */
+(function () {
+  'use strict';
+  // Leitner 盒：box 1-5，间隔 1/2/4/7/15 天
+  const BOX_DAYS = [0, 1, 2, 4, 7, 15];
+  const SOURCES = ['肖四', '肖八', '背诵手册', '腿姐', '徐涛', '米鹏', '自定义'];
+  const SUBJECTS = ['马原', '毛中特', '史纲', '思修', '当代'];
+  const PRIORITIES = ['必背', '熟悉', '了解'];
+  function uid() { return 'pr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function hasAI() { return window.AI && AI.configured(); }
+  function list() { return Store.get().polRecite || []; }
+  function getOne(id) { return list().find(function (x) { return x.id === id; }); }
+  function dueItems() {
+    const today = U.dkey();
+    return list().filter(function (p) { return (p.box || 1) < 5 && (!p.due || p.due <= today); });
+  }
+  function masteredCount() { return list().filter(function (p) { return (p.box || 1) >= 4; }).length; }
+  // Leitner 评级（被作战台到期复习复用）；同时记录复习日志与易错次数
+  function grade(id, known) {
+    Store.update(function (s) {
+      const it = (s.polRecite || []).find(function (x) { return x.id === id; });
+      if (!it) return;
+      it.box = known ? Math.min(5, (it.box || 1) + 1) : 1;
+      const d = new Date();
+      d.setDate(d.getDate() + BOX_DAYS[it.box]);
+      it.due = U.dkey(d);
+      it.lastReview = U.dkey();
+      if (!known) it.wrongCount = (it.wrongCount || 0) + 1;
+      s.polReciteLog = s.polReciteLog || [];
+      s.polReciteLog.push({ date: U.dkey(), ok: known ? 1 : 0, id: id });
+      if (s.polReciteLog.length > 400) s.polReciteLog = s.polReciteLog.slice(-400);
+    });
+  }
+  function addItem(data) {
+    Store.update(function (s) {
+      s.polRecite = s.polRecite || [];
+      s.polRecite.unshift({
+        id: uid(),
+        topic: data.topic || '',
+        points: data.points || [],
+        keywords: data.keywords || [],
+        source: data.source || '自定义',
+        subject: data.subject || '',
+        year: data.year || '',
+        priority: data.priority || '熟悉',
+        card: data.card || '',
+        box: 1,
+        due: U.dkey(),
+        createdAt: U.dkey(),
+        lastReview: '',
+        wrongCount: 0
+      });
+    });
+  }
+  function removeItem(id) {
+    Store.update(function (s) { s.polRecite = (s.polRecite || []).filter(function (x) { return x.id !== id; }); });
+  }
+  function patchItem(id, patch) {
+    Store.update(function (s) {
+      const it = (s.polRecite || []).find(function (x) { return x.id === id; });
+      if (it) Object.assign(it, patch);
+    });
+  }
+  // ---------- 文本工具 ----------
+  function norm(s) {
+    return String(s).toLowerCase().replace(/[\s,，。、；;:：!！?？().（）"'’‘]/g, '');
+  }
+  function fuzzyMatch(ans, kw) {
+    const a = norm(ans), k = norm(kw);
+    if (!a || !k) return false;
+    return a.indexOf(k) >= 0 || k.indexOf(a) >= 0;
+  }
+  function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\<!--@js-->'); }
+  // 把要点文本里的关键词挖成输入框；用占位 token 防止「长关键词含短关键词」时误伤属性
+  function blanked(text, kws) {
+    const sorted = kws.slice().sort(function (a, b) { return b.length - a.length; });
+    let esc = U.esc(text);
+    const ph = [];
+    sorted.forEach(function (kw) {
+      const token = '' + ph.length + '';
+      const re = new RegExp('(' + escapeRe(kw) + ')', 'gi');
+      esc = esc.replace(re, function () { ph.push(kw); return token; });
+    });
+    return esc.replace(/(\d+)/g, function (m, i) {
+      const kw = ph[+i];
+      return '<input class="st-blank" data-kw="' + U.esc(kw) + '" size="' + Math.max(3, kw.length) + '" placeholder="__">';
+    });
+  }
+  // ---------- 渲染 ----------
+  function stat(label, n) {
+    return '<div class="stat"><div class="stat-num">' + n + '</div><div class="stat-label">' + label + '</div></div>';
+  }
+  function cardHtml(p) {
+    const box = p.box || 1;
+    const due = !p.due || p.due <= U.dkey();
+    const dots = [1, 2, 3, 4, 5].map(function (b) {
+      return '<span class="box-dot' + (b <= box ? ' on' : '') + '"></span>';
+    }).join('');
+    const status = box >= 5
+      ? '<span class="tag tag-ok">已牢固</span>'
+      : (due ? '<span class="tag tag-warn">待背</span>' : '<span class="tag">' + U.esc(p.due) + '</span>');
+    const subj = p.subject ? '<span class="tag">' + U.esc(p.subject) + '</span>' : '';
+    const yr = p.year ? '<span class="tag">' + U.esc(p.year) + '</span>' : '';
+    const prioCls = p.priority === '必背' ? 'tag-prio' : (p.priority === '了解' ? 'tag-low' : '');
+    const prio = p.priority ? '<span class="tag ' + prioCls + '">' + U.esc(p.priority) + '</span>' : '';
+    const wrong = (p.wrongCount || 0) > 0 ? '<span class="tag tag-warn">错' + p.wrongCount + '</span>' : '';
+    return '<div class="card pr-card" data-id="' + p.id + '">'
+      + '<div class="pr-top"><div class="pr-topic">' + U.esc(p.topic || '（未命名大题）') + '</div>' + status + '</div>'
+      + '<div class="pr-meta"><span class="tag">' + U.esc(p.source || '自定义') + '</span>' + subj + yr + prio + wrong
+      + '<span class="box-wrap" title="Leitner盒（越高越牢）">' + dots + '</span>'
+      + (box < 5 ? '<span class="muted-sm" style="margin-left:auto">下次：' + U.esc(p.due || U.dkey()) + '</span>' : '') + '</div>'
+      + (p.card ? '<div class="pr-card-line">🔑 ' + U.esc(p.card) + '</div>' : '')
+      + '<div class="pr-actions">'
+      + '<button class="btn btn-sm btn-primary pr-self" data-id="' + p.id + '">✏️ 挖空</button>'
+      + '<button class="btn btn-sm btn-ghost pr-write" data-id="' + p.id + '">✍️ 默写</button>'
+      + '<button class="btn btn-sm btn-ghost pr-flip" data-id="' + p.id + '">🃏 看卡片</button>'
+      + '<button class="btn btn-sm btn-ghost pr-edit" data-id="' + p.id + '">✏️ 编辑</button>'
+      + (p.card ? '' : '<button class="btn btn-sm btn-ghost pr-aicard" data-id="' + p.id + '">🤖 口诀</button>')
+      + '<button class="btn btn-sm btn-ghost pr-aihint" data-id="' + p.id + '">💡 提示</button>'
+      + '<button class="btn btn-sm btn-ghost pr-del" data-id="' + p.id + '">🗑</button>'
+      + '</div></div>';
+  }
+  function render(el) {
+    const all = list();
+    const due = dueItems();
+    const stats = '<div class="stat-row">' + stat('总题数', all.length) + stat('今日待背', due.length) + stat('已牢固', masteredCount()) + '</div>' + memStatsHtml();
+    const srcOpts = '<option value="">全部来源</option>' + SOURCES.map(function (x) {
+      return '<option value="' + x + '">' + x + '</option>';
+    }).join('');
+    const subjOpts = '<option value="">全部科目</option>' + SUBJECTS.map(function (x) {
+      return '<option value="' + x + '">' + x + '</option>';
+    }).join('');
+    const prioOpts = '<option value="">全部优先级</option>' + PRIORITIES.map(function (x) {
+      return '<option value="' + x + '">' + x + '</option>';
+    }).join('');
+    const header = '<div class="card">'
+      + '<div class="card-title-row"><span class="card-title">📕 政治大题背诵</span>'
+      + (due.length ? '<button class="btn btn-primary btn-sm" id="pr-review">🔁 背一道待背</button>' : '')
+      + '<button class="btn btn-ghost btn-sm" id="pr-batch">📥 批量</button>'
+      + '<button class="btn btn-ghost btn-sm" id="pr-sample">✨ 载入示例</button>'
+      + '<button class="btn btn-ghost btn-sm" id="pr-add">＋ 添加</button></div>'
+      + boxBarHtml()
+      + '<div class="pr-filter"><select id="pr-srcf" class="input input-sm">' + srcOpts + '</select>'
+      + '<select id="pr-subjf" class="input input-sm">' + subjOpts + '</select>'
+      + '<select id="pr-priof" class="input input-sm">' + prioOpts + '</select>'
+      + '<input id="pr-search" class="input input-sm" placeholder="搜索考点 / 关键词…">'
+      + '<label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap"><input type="checkbox" id="pr-wrong"> 只看易错</label>'
+      + '<button class="btn btn-ghost btn-sm" id="pr-drill">🎲 抽背</button>'
+      + '<button class="btn btn-ghost btn-sm" id="pr-tts">🔊 朗读待背</button></div>'
+      + '<div class="muted-sm">录入肖四/肖八/背诵手册大题，挖空自测关键词，Leitner 间隔重复（1/2/4/7/15 天）帮你牢记；AI 还能生成记忆口诀与易混点提示。到期复习聚合进作战台。</div>'
+      + calendarHtml()
+      + trendHtml()
+      + dueListHtml(due)
+      + '</div>';
+    el.innerHTML = stats + header;
+    const filtered = filterList(all);
+    const body = all.length
+      ? (filtered.length ? filtered.map(cardHtml).join('') : '<div class="card empty-hint">没有匹配「' + U.esc(curFilter().q) + '」的大题。</div>')
+      : '<div class="card empty-hint">还没有大题。点「＋ 添加」录入，或「✨ 载入示例」看范例。</div>';
+    el.innerHTML = stats + header + body;
+    bind(el);
+  }
+  function bind(el) {
+    const add = el.querySelector('#pr-add');
+    if (add) add.onclick = openAdd;
+    const batch = el.querySelector('#pr-batch'); if (batch) batch.onclick = openBatch;
+    const sample = el.querySelector('#pr-sample'); if (sample) sample.onclick = loadExamples;
+    const drill = el.querySelector('#pr-drill'); if (drill) drill.onclick = function () { startDrill(5); };
+    const tts = el.querySelector('#pr-tts'); if (tts) tts.onclick = speakDue;
+    const srcf = el.querySelector('#pr-srcf'); if (srcf) srcf.onchange = function () { render(el); };
+    const subjf = el.querySelector('#pr-subjf'); if (subjf) subjf.onchange = function () { render(el); };
+    const priof = el.querySelector('#pr-priof'); if (priof) priof.onchange = function () { render(el); };
+    const wrong = el.querySelector('#pr-wrong'); if (wrong) wrong.onchange = function () { render(el); };
+    const search = el.querySelector('#pr-search'); if (search) search.oninput = U.debounce(function () { render(el); const s2 = el.querySelector('#pr-search'); if (s2) s2.focus(); }, 250);
+    const rv = el.querySelector('#pr-review');
+    if (rv) rv.onclick = function () { const d = dueItems()[0]; if (d) openFlip(d.id); };
+    el.querySelectorAll('.pr-due-flip').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); openFlip(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-due-self').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); openSelfTest(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-self').forEach(function (b) { b.onclick = function () { openSelfTest(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-write').forEach(function (b) { b.onclick = function () { openWrite(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-flip').forEach(function (b) { b.onclick = function () { openFlip(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-edit').forEach(function (b) { b.onclick = function () { openEdit(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-aicard').forEach(function (b) { b.onclick = function () { genCard(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-aihint').forEach(function (b) { b.onclick = function () { genHint(b.getAttribute('data-id')); }; });
+    el.querySelectorAll('.pr-del').forEach(function (b) {
+      b.onclick = function () {
+        const id = b.getAttribute('data-id');
+        Modal.confirm('删除大题', '<p>确定删除这道政治大题？此操作不可撤销。</p>', '删除', function () {
+          removeItem(id); Toast.success('已删除'); App.refresh();
+        });
+      };
+    });
+  }
+  // ---------- 添加（手动 / AI） ----------
+  function genAddPrompt(raw) {
+    return '你是考研政治辅导专家。从以下政治大题材料/考点中，提取：①答案要点（分条，3-5条，每条简洁可背诵，可带①②③序号）；'
+      + '②关键词（用于挖空自测，4-8个核心词）；③记忆口诀（一句顺口好记的助记语，10-25字）。'
+      + '只输出JSON对象，不要任何多余文字：{"points":["..."],"keywords":["..."],"card":"..."}。材料：\n' + raw.slice(0, 2500);
+  }
+  function openAdd() {
+    const srcOpts = SOURCES.map(function (x) { return '<option value="' + x + '">' + x + '</option>'; }).join('');
+    const subjOpts = SUBJECTS.map(function (x) { return '<option value="' + x + '">' + x + '</option>'; }).join('');
+    const prioOpts = PRIORITIES.map(function (x) { return '<option value="' + x + '">' + x + '</option>'; }).join('');
+    Modal.open({
+      title: '＋ 添加政治大题',
+      html: '<div class="form-col">'
+        + '<label class="fld fld-full"><span>考点 / 题干</span><textarea id="pr-topic" class="input" rows="2" placeholder="如：为什么说全面深化改革只有进行时、没有完成时？"></textarea></label>'
+        + '<label class="fld fld-full"><span>答案要点（每行一条）</span><textarea id="pr-points" class="input" rows="4" placeholder="① 改革开放是党和人民大踏步赶上时代的重要法宝…"></textarea></label>'
+        + '<label class="fld fld-full"><span>关键词（逗号分隔，用于挖空自测）</span><input id="pr-kw" class="input" placeholder="如：进行时, 攻坚战, 系统性"></label>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+        + '<label class="fld" style="flex:1;min-width:120px"><span>来源</span><select id="pr-src" class="input">' + srcOpts + '</select></label>'
+        + '<label class="fld" style="flex:1;min-width:90px"><span>科目</span><select id="pr-subj" class="input">' + subjOpts + '</select></label>'
+        + '<label class="fld" style="flex:1;min-width:90px"><span>优先级</span><select id="pr-prio" class="input">' + prioOpts + '</select></label>'
+        + '<label class="fld" style="flex:1;min-width:80px"><span>年份</span><input id="pr-year" class="input" placeholder="如2024"></label>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px;align-items:center;margin-top:6px">'
+        + '<button class="btn btn-ghost btn-sm" id="pr-photo-btn" type="button">📷 拍照/传图录入</button>'
+        + '<input type="file" id="pr-photo" accept="image/*" capture="environment" style="display:none">'
+        + '<span class="muted-sm" id="pr-photo-msg"></span></div>'
+        + '<div style="display:flex;gap:6px;align-items:flex-start">'
+        + '<textarea id="pr-ai-raw" class="input" rows="2" placeholder="或粘贴考点/材料，让 AI 提取要点+关键词+口诀"></textarea>'
+        + (hasAI() ? '<button class="btn btn-ghost btn-sm" id="pr-aigen" style="white-space:nowrap" type="button">🤖 AI提取</button>' : '')
+        + '</div>'
+        + '<input type="hidden" id="pr-card-tmp" value="">'
+        + '<div id="pr-msg"></div>'
+        + '</div>',
+      actions: [
+        { label: '取消' },
+        { label: '保存', kind: 'btn-primary', onClick: function (close) {
+          const topic = document.getElementById('pr-topic').value.trim();
+          const points = document.getElementById('pr-points').value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+          const kw = document.getElementById('pr-kw').value.split(/[,，]/).map(function (x) { return x.trim(); }).filter(Boolean);
+          const card = document.getElementById('pr-card-tmp').value.trim();
+          if (!topic && !points.length) {
+            document.getElementById('pr-msg').innerHTML = '<div class="alert alert-danger">考点和要点至少填一项</div>';
+            return;
+          }
+          addItem({ topic: topic || points[0], points: points, keywords: kw, source: document.getElementById('pr-src').value, subject: document.getElementById('pr-subj').value, year: document.getElementById('pr-year').value.trim(), priority: document.getElementById('pr-prio').value, card: card });
+          Toast.success('已添加，进入 Leitner 第 1 盒');
+          close(); App.refresh();
+        } }
+      ]
+    });
+    const aiBtn = document.getElementById('pr-aigen');
+    if (aiBtn) aiBtn.onclick = function () {
+      const raw = document.getElementById('pr-ai-raw').value.trim();
+      if (!raw) { Toast.warn('请先粘贴材料'); return; }
+      aiBtn.disabled = true; aiBtn.textContent = '🤖 提取中…';
+      AI.chatJSON('你是考研政治辅导专家，只输出JSON对象。', genAddPrompt(raw)).then(function (r) {
+        const points = Array.isArray(r.points) ? r.points.map(String) : [];
+        const keywords = Array.isArray(r.keywords) ? r.keywords.map(String) : [];
+        const card = r.card ? String(r.card) : '';
+        if (!points.length) throw new Error('AI未返回要点');
+        document.getElementById('pr-points').value = points.join('\n');
+        document.getElementById('pr-kw').value = keywords.join('，');
+        document.getElementById('pr-card-tmp').value = card;
+        if (!document.getElementById('pr-topic').value.trim()) {
+          document.getElementById('pr-topic').value = raw.split('\n')[0].slice(0, 60);
+        }
+        aiBtn.disabled = false; aiBtn.textContent = '🤖 AI提取';
+        Toast.success('AI已提取 ' + points.length + ' 条要点' + (card ? ' + 记忆口诀' : ''));
+      }).catch(function (e) {
+        document.getElementById('pr-msg').innerHTML = '<div class="alert alert-danger">AI提取失败：' + U.esc(e.message) + '。可手动填写。</div>';
+        aiBtn.disabled = false; aiBtn.textContent = '🤖 AI提取';
+      });
+    };
+    const photoBtn = document.getElementById('pr-photo-btn');
+    if (photoBtn) photoBtn.onclick = function () { document.getElementById('pr-photo').click(); };
+    const photoInput = document.getElementById('pr-photo');
+    if (photoInput) photoInput.onchange = function (e) { const f = e.target.files && e.target.files[0]; if (f) photoExtract(f); };
+  }
+  // ---------- 挖空自测 ----------
+  function openSelfTest(id) {
+    const it = getOne(id);
+    if (!it) return;
+    const kws = (it.keywords && it.keywords.length) ? it.keywords : [];
+    if (!kws.length) { Toast.warn('这道大题没有关键词，无法挖空。添加时填关键词，或先点「🤖 口诀」让 AI 生成要点关键词。'); return; }
+    const ptsHtml = it.points.map(function (pt, idx) {
+      return '<div class="st-point"><div class="st-idx">' + (idx + 1) + '</div><div class="st-text">' + blanked(pt, kws) + '</div></div>';
+    }).join('');
+    Modal.open({
+      title: '✏️ 挖空自测：' + U.esc(it.topic),
+      html: '<div class="muted-sm">把挖空处填上关键词，提交后自动判对错。填对越多，Leitner 盒越高。</div>' + ptsHtml
+        + '<div id="st-msg"></div>'
+        + '<button class="btn btn-primary" id="st-submit" style="margin-top:10px">提交自测</button>',
+      actions: [{ label: '关闭' }]
+    });
+    document.getElementById('st-submit').onclick = function () {
+      const inputs = document.querySelectorAll('.st-blank');
+      const total = inputs.length;
+      if (!total) { Toast.warn('要点里没有出现这些关键词，无法挖空'); return; }
+      let ok = 0;
+      inputs.forEach(function (inp) {
+        const correct = fuzzyMatch(inp.value, inp.getAttribute('data-kw'));
+        if (correct) { ok++; inp.classList.add('st-ok'); }
+        else { inp.classList.add('st-bad'); inp.value = inp.getAttribute('data-kw'); inp.classList.add('st-reveal'); }
+      });
+      const known = ok === total, failed = ok === 0;
+      if (known) grade(id, true);
+      else if (failed) grade(id, false);
+      else Store.update(function (s) {
+        const it = (s.polRecite || []).find(function (x) { return x.id === id; });
+        if (it) { const d = new Date(); d.setDate(d.getDate() + 1); it.due = U.dkey(d); it.lastReview = U.dkey(); }
+      });
+      const cls = known ? 'alert-ok' : (failed ? 'alert-danger' : 'alert-warn');
+      const msg = '正确 ' + ok + '/' + total + (known ? '，已记牢一层 🎉' : (failed ? '，已重置第 1 盒，明天再背' : '，进度已保留，明天巩固'));
+      document.getElementById('st-msg').innerHTML = '<div class="alert ' + cls + '">' + msg + '</div>';
+      Toast.success('自测完成：' + ok + '/' + total);
+      setTimeout(function () { Modal.close(); App.refresh(); }, 1100);
+    };
+  }
+  // ---------- 记忆卡片翻面 ----------
+  function openFlip(id, after) {
+    const it = getOne(id);
+    if (!it) return;
+    Modal.open({
+      title: '🃏 记忆卡片',
+      html: '<div id="flip-box"><div class="flip-front"><div class="muted-sm">考点（点击翻面看答案）</div>'
+        + '<div class="flip-topic">' + U.esc(it.topic) + '</div>'
+        + '<div class="flip-grade"><button class="btn btn-ghost" id="fl-show">👀 看答案</button>'
+        + '<button class="btn btn-ghost" id="fl-speak">🔊 朗读</button></div></div></div>',
+      actions: [{ label: '关闭' }]
+    });
+    document.getElementById('fl-speak').onclick = function () { speak((it.topic || '') + '。' + (it.points || []).join('。'), 1); };
+    document.getElementById('fl-show').onclick = function () {
+      const hintHtml = it.hint ? '<div class="pr-hint">💡 ' + U.esc(it.hint) + '</div>' : '';
+      const back = '<div class="flip-back"><div class="muted-sm">答案要点</div>'
+        + it.points.map(function (p) { return '<div class="flip-pt">' + U.esc(p) + '</div>'; }).join('')
+        + (it.card ? '<div class="flip-card">🔑 ' + U.esc(it.card) + '</div>' : '')
+        + hintHtml
+        + '<div class="flip-grade"><button class="btn btn-sm btn-primary" id="fl-yes">😎 记住了</button>'
+        + '<button class="btn btn-sm btn-ghost" id="fl-no">🤔 没记住</button>'
+        + '<button class="btn btn-sm btn-ghost" id="fl-speak2">🔊 朗读</button>'
+        + '<button class="btn btn-sm btn-ghost" id="fl-hint">💡 易混/模板</button></div></div>';
+      document.getElementById('flip-box').innerHTML = back;
+      document.getElementById('fl-yes').onclick = function () { grade(id, true); if (after) { Modal.close(); after(); } else { Toast.success('已记牢一层 🎉'); Modal.close(); App.refresh(); } };
+      document.getElementById('fl-no').onclick = function () { grade(id, false); if (after) { Modal.close(); after(); } else { Toast.show('已重置到第 1 盒，明天再来', 'info'); Modal.close(); App.refresh(); } };
+      document.getElementById('fl-speak2').onclick = function () { speak((it.points || []).join('。'), 1); };
+      document.getElementById('fl-hint').onclick = function () { genHint(id); };
+    };
+  }
+  // ---------- AI 生成记忆口诀（已有条目） ----------
+  function genCard(id) {
+    const it = getOne(id);
+    if (!it) return;
+    if (!hasAI()) { Toast.warn('未配置 AI，无法生成口诀'); return; }
+    const prompt = '为这道考研政治大题生成一句好记的背诵口诀（顺口溜/谐音/数字串联均可），10-25字。只输出JSON对象：{"card":"一句口诀"}。'
+      + '考点：' + (it.topic || '') + '；要点：' + it.points.join('；');
+    Toast.show('🤖 生成口诀中…', 'info');
+    AI.chatJSON('你是考研政治记忆口诀大师，只输出JSON对象。', prompt).then(function (r) {
+      const card = (r && r.card) ? String(r.card).trim() : '';
+      if (!card) throw new Error('未返回口诀');
+      patchItem(id, { card: card });
+      Toast.success('口诀已生成：' + card.slice(0, 30));
+      App.refresh();
+    }).catch(function (e) { Toast.warn('生成失败：' + e.message); });
+  }
+  // ---------- 进度可视化 ----------
+  function boxCounts() {
+    const c = [0, 0, 0, 0, 0];
+    list().forEach(function (p) { const b = (p.box || 1); if (b >= 1 && b <= 5) c[b - 1]++; });
+    return c;
+  }
+  function boxBarHtml() {
+    const c = boxCounts();
+    const total = c.reduce(function (a, b) { return a + b; }, 0);
+    const segs = c.map(function (n, i) {
+      const cls = i >= 3 ? 'hi' : (i >= 1 ? 'mid' : 'lo');
+      const flex = total ? (n / total) : 0;
+      return '<div class="pr-boxseg ' + cls + '" style="flex:' + (flex || 0.0001) + '"><span>' + n + '</span></div>';
+    }).join('');
+    return '<div class="muted-sm" style="margin:8px 0 4px">Leitner 盒分布（1→5 越牢）</div><div class="pr-boxes">' + segs + '</div>';
+  }
+  function curFilter() {
+    const g = function (id) { return (document.getElementById(id) || {}).value || ''; };
+    return {
+      src: g('pr-srcf'),
+      subj: g('pr-subjf'),
+      prio: g('pr-priof'),
+      wrong: !!((document.getElementById('pr-wrong') || {}).checked),
+      q: g('pr-search').trim().toLowerCase()
+    };
+  }
+  function filterList(arr) {
+    const f = curFilter();
+    return (arr || []).filter(function (p) {
+      if (f.src && (p.source || '自定义') !== f.src) return false;
+      if (f.subj && (p.subject || '') !== f.subj) return false;
+      if (f.prio && (p.priority || '熟悉') !== f.prio) return false;
+      if (f.wrong && !(p.wrongCount > 0)) return false;
+      if (f.q) {
+        const hay = ((p.topic || '') + ' ' + (p.keywords || []).join(' ') + ' ' + (p.points || []).join(' ') + ' ' + (p.subject || '')).toLowerCase();
+        if (hay.indexOf(f.q) < 0) return false;
+      }
+      return true;
+    });
+  }
+  function dueListHtml(due) {
+    if (!due.length) return '';
+    const rows = due.slice(0, 6).map(function (p) {
+      return '<div class="pr-dueitem"><span class="rvd-stage">待背</span>'
+        + '<span class="pr-duetext">' + U.esc((p.topic || '一道政治大题').slice(0, 24)) + '</span>'
+        + '<button class="btn btn-ghost btn-sm pr-due-flip" data-id="' + p.id + '">🃏</button>'
+        + '<button class="btn btn-ghost btn-sm pr-due-self" data-id="' + p.id + '">✏️</button></div>';
+    }).join('');
+    return '<div class="pr-duelist"><div class="muted-sm" style="margin:8px 0 4px">📅 待背清单（' + due.length + '）</div>' + rows + '</div>';
+  }
+  // ---------- 记忆统计 ----------
+  function memStatsHtml() {
+    const all = list();
+    const log = (Store.get().polReciteLog) || [];
+    const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 6);
+    const weekKey = U.dkey(weekAgo);
+    const weekCount = log.filter(function (l) { return l.date >= weekKey; }).length;
+    const avgBox = all.length ? (all.reduce(function (a, p) { return a + (p.box || 1); }, 0) / all.length) : 0;
+    const keepPct = Math.round(avgBox / 5 * 100);
+    const wrong = all.filter(function (p) { return (p.wrongCount || 0) > 0; }).length;
+    return '<div class="stat-row">' + stat('本周复习', weekCount) + stat('平均牢固', keepPct + '%') + stat('易错本', wrong) + '</div>';
+  }
+  // ---------- 未来 7 天复习日历 ----------
+  function calendarHtml() {
+    const all = list();
+    const today = new Date();
+    const cells = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today); d.setDate(d.getDate() + i);
+      const key = U.dkey(d);
+      let n;
+      if (i === 0) n = all.filter(function (p) { return (p.box || 1) < 5 && (!p.due || p.due <= key); }).length;
+      else n = all.filter(function (p) { return (p.box || 1) < 5 && p.due === key; }).length;
+      const wd = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+      cells.push('<div class="pr-cal-cell' + (i === 0 ? ' today' : '') + '"><div class="pr-cal-wd">' + wd + '</div><div class="pr-cal-n">' + n + '</div></div>');
+    }
+    return '<div class="muted-sm" style="margin:10px 0 4px">📅 未来 7 天复习量</div><div class="pr-cal">' + cells.join('') + '</div>';
+  }
+  // ---------- 近 14 天复习趋势 ----------
+  function trendHtml() {
+    const log = (Store.get().polReciteLog) || [];
+    const days = [];
+    const today = new Date();
+    for (let i = 13; i >= 0; i--) { const d = new Date(today); d.setDate(d.getDate() - i); days.push(U.dkey(d)); }
+    let max = 1;
+    const counts = days.map(function (key) { const n = log.filter(function (l) { return l.date === key; }).length; if (n > max) max = n; return n; });
+    const bars = counts.map(function (n, i) {
+      const h = n ? Math.max(8, Math.round(n / max * 48)) : 3;
+      return '<div class="pr-trend-bar" style="height:' + h + 'px" title="' + days[i] + '：' + n + ' 次"></div>';
+    }).join('');
+    const total = counts.reduce(function (a, b) { return a + b; }, 0);
+    return '<div class="muted-sm" style="margin:10px 0 4px">📈 近 14 天复习（共 ' + total + ' 次）</div><div class="pr-trend">' + bars + '</div>';
+  }
+  // ---------- 默写模式（主动回忆 + 关键词命中率） ----------
+  function openWrite(id) {
+    const it = getOne(id);
+    if (!it) return;
+    const kws = (it.keywords && it.keywords.length) ? it.keywords : [];
+    Modal.open({
+      title: '✍️ 默写：' + U.esc(it.topic),
+      html: '<div class="muted-sm">遮住答案，凭记忆写出要点；提交后按关键词命中率评分。</div>'
+        + '<textarea id="wr-text" class="input" rows="6" placeholder="在此默背要点…"></textarea>'
+        + '<div id="wr-msg"></div>'
+        + '<button class="btn btn-primary" id="wr-submit" style="margin-top:10px">对照评分</button>',
+      actions: [{ label: '关闭' }]
+    });
+    document.getElementById('wr-submit').onclick = function () {
+      const box = document.getElementById('wr-msg');
+      if (!kws.length) {
+        box.innerHTML = '<div class="alert alert-warn">该大题未设关键词，无法自动评分。对照要点自评：</div>'
+          + it.points.map(function (p) { return '<div class="flip-pt">' + U.esc(p) + '</div>'; }).join('')
+          + '<div class="flip-grade" style="margin-top:8px"><button class="btn btn-sm btn-primary" id="wr-yes">😎 我记住了</button><button class="btn btn-sm btn-ghost" id="wr-no">🤔 没记住</button></div>';
+        document.getElementById('wr-yes').onclick = function () { grade(id, true); Modal.close(); App.refresh(); };
+        document.getElementById('wr-no').onclick = function () { grade(id, false); Modal.close(); App.refresh(); };
+        return;
+      }
+      const ntext = norm((document.getElementById('wr-text').value || ''));
+      let hit = 0; const detail = [];
+      kws.forEach(function (kw) {
+        const found = ntext.indexOf(norm(kw)) >= 0;
+        if (found) hit++;
+        detail.push((found ? '✅' : '⬜') + ' ' + U.esc(kw));
+      });
+      const total = kws.length;
+      const ratio = total ? hit / total : 0;
+      const known = ratio >= 0.6;
+      grade(id, known);
+      const cls = known ? 'alert-ok' : (ratio >= 0.3 ? 'alert-warn' : 'alert-danger');
+      box.innerHTML = '<div class="alert ' + cls + '">关键词命中 ' + hit + '/' + total + '（' + Math.round(ratio * 100) + '%）' + (known ? '，已记牢一层 🎉' : (ratio === 0 ? '，已重置第 1 盒' : '，进度已保留')) + '</div>'
+        + '<div class="muted-sm" style="margin-top:6px">' + detail.join('　') + '</div>';
+      Toast.success('默写完成：' + hit + '/' + total);
+      setTimeout(function () { Modal.close(); App.refresh(); }, 1300);
+    };
+  }
+  // ---------- 拍照智能 AI 录入 ----------
+  function compressImage(file, cb) {
+    const reader = new FileReader();
+    reader.onload = function () {
+      const img = new Image();
+      img.onload = function () {
+        const MAX = 1000;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) { const r = Math.min(MAX / w, MAX / h); w = Math.round(w * r); h = Math.round(h * r); }
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        cb(c.toDataURL('image/jpeg', 0.7));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+  function photoExtract(file) {
+    if (!hasAI()) { Toast.warn('未配置 AI，无法识图'); return; }
+    const msg = document.getElementById('pr-photo-msg');
+    if (msg) msg.textContent = '🤖 识别中…';
+    compressImage(file, function (dataUrl) {
+      const sys = '你是考研政治辅导专家。从图片中识别政治大题（肖四/肖八/背诵手册/真题等），提取：①答案要点（分条，3-5条）；②关键词（4-8个核心词）；③记忆口诀（10-25字）；④若图中有科目(马原/毛中特/史纲/思修/当代)或年份也请推断。只输出JSON对象，不要多余文字：{"points":["..."],"keywords":["..."],"card":"...","subject":"...","year":"..."}。';
+      AI.chatJSON(sys, '请分析这张政治大题图片，提取要点、关键词、口诀，并推断科目与年份。', dataUrl).then(function (r) {
+        const points = Array.isArray(r.points) ? r.points.map(String) : [];
+        const keywords = Array.isArray(r.keywords) ? r.keywords.map(String) : [];
+        const card = r.card ? String(r.card) : '';
+        if (!points.length) throw new Error('未识别到要点');
+        const tEl = document.getElementById('pr-topic'); if (tEl && !tEl.value.trim()) tEl.value = r.topic ? String(r.topic) : '图片识别的大题';
+        document.getElementById('pr-points').value = points.join('\n');
+        document.getElementById('pr-kw').value = keywords.join('，');
+        const ct = document.getElementById('pr-card-tmp'); if (ct) ct.value = card;
+        const subj = document.getElementById('pr-subj'); if (subj && r.subject) { for (let i = 0; i < subj.options.length; i++) { if (subj.options[i].value === r.subject) { subj.value = r.subject; break; } } }
+        if (msg) msg.textContent = '✓ 已识别 ' + points.length + ' 条要点';
+        Toast.success('图片识别完成');
+      }).catch(function (e) { if (msg) msg.textContent = ''; Toast.warn('识别失败：' + e.message); });
+    });
+  }
+  // ---------- 听觉背诵 (Web Speech API) ----------
+  function speak(text, rate) {
+    try {
+      if (!('speechSynthesis' in window)) { Toast.warn('当前浏览器不支持语音朗读'); return; }
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN'; u.rate = rate || 1; u.pitch = 1;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* 忽略 */ }
+  }
+  function speakDue() {
+    const due = dueItems();
+    const items = due.length ? due : list();
+    if (!items.length) { Toast.warn('没有可朗读的内容'); return; }
+    const text = items.slice(0, 5).map(function (p) {
+      return (p.topic || '') + '。' + (p.points || []).join('。');
+    }).join(' ');
+    speak(text, 1);
+    Toast.show('🔊 朗读 ' + Math.min(5, items.length) + ' 道待背', 'info');
+  }
+  // ---------- 载入示例（不自动播种，按需一键） ----------
+  function loadExamples() {
+    const ex = [
+      { topic: '为什么说全面深化改革只有进行时、没有完成时？', points: ['改革开放是党和人民大踏步赶上时代的重要法宝，是坚持和发展中国特色社会主义的必由之路', '改革开放永无止境，只有进行时、没有完成时，这是历史唯物主义的态度', '面对发展新要求和人民新期待，必须全面深化改革，不断推进国家治理体系和治理能力现代化'], keywords: ['法宝', '必由之路', '进行时', '没有完成时'], source: '肖四', card: '法宝路，永不止' },
+      { topic: '如何理解中国式现代化是强国建设、民族复兴的唯一正确道路？', points: ['中国式现代化是中国共产党领导的社会主义现代化，既有各国现代化的共同特征，更有基于国情的中国特色', '中国式现代化是人口规模巨大、全体人民共同富裕、物质文明和精神文明相协调、人与自然和谐共生、走和平发展道路的现代化', '中国式现代化创造了人类文明新形态，为人类实现现代化提供了新的选择'], keywords: ['中国共产党', '中国特色', '共同富裕', '人类文明新形态'], source: '肖八', card: '党领特色共富新形态' },
+      { topic: '为什么要加快构建新发展格局，着力推动高质量发展？', points: ['构建新发展格局是适应我国发展新阶段要求、塑造国际合作和竞争新优势的必然选择', '高质量发展是全面建设社会主义现代化国家的首要任务', '坚持推动高质量发展，把实施扩大内需战略同深化供给侧结构性改革有机结合'], keywords: ['新发展格局', '高质量发展', '首要任务', '扩大内需'], source: '背诵手册', card: '新格高质扩内需' }
+    ];
+    ex.forEach(function (e) { addItem(e); });
+    Toast.success('已载入 ' + ex.length + ' 道示例（可随意删除）');
+    App.refresh();
+  }
+  // ---------- 编辑 ----------
+  function openEdit(id) {
+    const it = getOne(id);
+    if (!it) return;
+    const sel = function (arr, val) {
+      return arr.map(function (x) { return '<option value="' + x + '"' + (x === val ? ' selected' : '') + '>' + x + '</option>'; }).join('');
+    };
+    const srcOpts = sel(SOURCES, it.source || '自定义');
+    const subjOpts = sel(SUBJECTS, it.subject || '');
+    const prioOpts = sel(PRIORITIES, it.priority || '熟悉');
+    Modal.open({
+      title: '✏️ 编辑政治大题',
+      html: '<div class="form-col">'
+        + '<label class="fld fld-full"><span>考点 / 题干</span><textarea id="pr-topic" class="input" rows="2">' + U.esc(it.topic || '') + '</textarea></label>'
+        + '<label class="fld fld-full"><span>答案要点（每行一条）</span><textarea id="pr-points" class="input" rows="4">' + U.esc((it.points || []).join('\n')) + '</textarea></label>'
+        + '<label class="fld fld-full"><span>关键词（逗号分隔）</span><input id="pr-kw" class="input" value="' + U.esc((it.keywords || []).join('，')) + '"></label>'
+        + '<label class="fld fld-full"><span>记忆口诀</span><input id="pr-card" class="input" value="' + U.esc(it.card || '') + '"></label>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+        + '<label class="fld" style="flex:1;min-width:120px"><span>来源</span><select id="pr-src" class="input">' + srcOpts + '</select></label>'
+        + '<label class="fld" style="flex:1;min-width:90px"><span>科目</span><select id="pr-subj" class="input">' + subjOpts + '</select></label>'
+        + '<label class="fld" style="flex:1;min-width:90px"><span>优先级</span><select id="pr-prio" class="input">' + prioOpts + '</select></label>'
+        + '<label class="fld" style="flex:1;min-width:80px"><span>年份</span><input id="pr-year" class="input" value="' + U.esc(it.year || '') + '"></label>'
+        + '</div>'
+        + '<div id="pr-msg"></div></div>',
+      actions: [{ label: '取消' }, { label: '保存', kind: 'btn-primary', onClick: function (close) {
+        const topic = document.getElementById('pr-topic').value.trim();
+        const points = document.getElementById('pr-points').value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+        const kw = document.getElementById('pr-kw').value.split(/[,，]/).map(function (x) { return x.trim(); }).filter(Boolean);
+        const card = document.getElementById('pr-card').value.trim();
+        if (!topic && !points.length) { document.getElementById('pr-msg').innerHTML = '<div class="alert alert-danger">考点和要点至少填一项</div>'; return; }
+        patchItem(id, { topic: topic || points[0], points: points, keywords: kw, card: card, source: document.getElementById('pr-src').value, subject: document.getElementById('pr-subj').value, year: document.getElementById('pr-year').value.trim(), priority: document.getElementById('pr-prio').value });
+        Toast.success('已保存'); close(); App.refresh();
+      } }]
+    });
+  }
+  // ---------- 批量录入（按题号拆分） ----------
+  function splitQuestions(raw) {
+    const lines = raw.split(/\r?\n/);
+    const re = /^\s*(?:第\s*\S+\s*题|\(?\d+[\)\.\、]|（\d+）)\s*/;
+    const chunks = [];
+    let cur = null;
+    lines.forEach(function (ln) {
+      if (re.test(ln)) {
+        if (cur) chunks.push(cur);
+        cur = ln.replace(re, '').trim();
+      } else if (cur !== null && ln.trim()) {
+        cur += '\n' + ln.trim();
+      }
+    });
+    if (cur) chunks.push(cur);
+    return chunks.filter(function (c) { return c.length > 2; });
+  }
+  function naiveParse(c, i) {
+    const ls = c.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+    const topic = ls.shift() || ('大题' + (i + 1));
+    return { topic: topic, points: ls, keywords: [], source: '自定义', card: '' };
+  }
+  function openBatch() {
+    const srcOpts = SOURCES.map(function (x) { return '<option value="' + x + '">' + x + '</option>'; }).join('');
+    Modal.open({
+      title: '📥 批量录入（肖四/肖八多题）',
+      html: '<div class="form-col">'
+        + '<label class="fld fld-full"><span>一次性粘贴多道大题（按 1. /（1）/ 第34题 等自动拆分）</span><textarea id="pr-batch-raw" class="input" rows="6" placeholder="1. 为什么说…？\n① …\n② …\n2. 如何理解…？\n① …"></textarea></label>'
+        + '<label class="fld fld-full"><span>来源</span><select id="pr-batch-src" class="input">' + srcOpts + '</select></label>'
+        + '<label class="fld fld-full" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="pr-batch-ai"' + (hasAI() ? '' : ' disabled') + '> <span>用 AI 为每题提取要点+关键词+口诀（' + (hasAI() ? '已配置' : '未配置 AI') + '）</span></label>'
+        + '<div id="pr-batch-preview"></div><div id="pr-batch-msg"></div></div>',
+      actions: [{ label: '关闭' }, { label: '解析并录入', kind: 'btn-primary', onClick: function (close) {
+        const raw = document.getElementById('pr-batch-raw').value.trim();
+        if (!raw) { document.getElementById('pr-batch-msg').innerHTML = '<div class="alert alert-danger">请先粘贴内容</div>'; return; }
+        let chunks = splitQuestions(raw);
+        if (!chunks.length) { document.getElementById('pr-batch-msg').innerHTML = '<div class="alert alert-warn">未识别到题号，按单题处理。</div>'; chunks = [raw]; }
+        const useAI = hasAI() && document.getElementById('pr-batch-ai').checked;
+        const src = document.getElementById('pr-batch-src').value;
+        const preview = document.getElementById('pr-batch-preview');
+        preview.innerHTML = '<div class="muted-sm">识别到 ' + chunks.length + ' 道，解析中…</div>';
+        const results = [];
+        function step(i) {
+          if (i >= chunks.length) {
+            results.forEach(function (r) { addItem(r); });
+            Toast.success('已录入 ' + results.length + ' 道');
+            close(); App.refresh();
+            return;
+          }
+          const c = chunks[i];
+          if (useAI) {
+            AI.chatJSON('你是考研政治辅导专家，只输出JSON对象。', genAddPrompt(c)).then(function (r) {
+              const points = Array.isArray(r.points) ? r.points.map(String) : [];
+              if (!points.length) throw new Error('无要点');
+              results.push({ topic: r.topic ? String(r.topic) : c.split('\n')[0].slice(0, 60), points: points, keywords: Array.isArray(r.keywords) ? r.keywords.map(String) : [], source: src, card: r.card ? String(r.card) : '' });
+              preview.innerHTML = '<div class="muted-sm">已解析 ' + results.length + '/' + chunks.length + '</div>';
+              step(i + 1);
+            }).catch(function () { results.push(naiveParse(c, i)); step(i + 1); });
+          } else {
+            results.push(naiveParse(c, i));
+            preview.innerHTML = '<div class="muted-sm">已解析 ' + results.length + '/' + chunks.length + '</div>';
+            step(i + 1);
+          }
+        }
+        step(0);
+      } }]
+    });
+  }
+  // ---------- AI 易混点 / 答题模板 ----------
+  function genHint(id) {
+    const it = getOne(id);
+    if (!it) return;
+    if (!hasAI()) { Toast.warn('未配置 AI，无法生成提示'); return; }
+    Toast.show('🤖 生成易混/模板提示中…', 'info');
+    const prompt = '你是考研政治辅导专家。针对这道分析题，给出：①1-2个易混易错点（概念混淆、审题陷阱）；②一句答题模板（破题思路，如"是什么-为什么-怎么做"）。只输出JSON对象：{"hint":"易混点与模板，80字内"}。考点：' + (it.topic || '') + '；要点：' + (it.points || []).join('；');
+    AI.chatJSON('你是考研政治辅导专家，只输出JSON对象。', prompt).then(function (r) {
+      const hint = (r && r.hint) ? String(r.hint).trim() : '';
+      if (!hint) throw new Error('未返回提示');
+      patchItem(id, { hint: hint });
+      const box = document.getElementById('flip-box');
+      if (box && box.querySelector('.flip-back')) {
+        const el = document.createElement('div');
+        el.className = 'pr-hint';
+        el.textContent = '💡 ' + hint;
+        box.querySelector('.flip-back').appendChild(el);
+      }
+      Toast.success('提示已生成');
+      App.refresh();
+    }).catch(function (e) { Toast.warn('生成失败：' + e.message); });
+  }
+  // ---------- 抽背组卷（单弹窗连续翻面） ----------
+  function startDrill(n) {
+    let pool = dueItems();
+    if (!pool.length) pool = list().slice();
+    if (!pool.length) { Toast.warn('还没有大题，先录入或载入示例'); return; }
+    pool = pool.slice().sort(function () { return Math.random() - 0.5; });
+    const picks = pool.slice(0, Math.min(n, pool.length));
+    let idx = 0;
+    Modal.open({ title: '🎲 抽背（' + picks.length + ' 道）', html: '<div id="drill-box"></div>', actions: [{ label: '退出' }] });
+    function show(i) {
+      if (i >= picks.length) { const b = document.getElementById('drill-box'); if (b) b.innerHTML = '<div class="alert alert-ok">🎉 抽背完成，共 ' + picks.length + ' 道</div>'; Toast.success('抽背完成'); return; }
+      const it = getOne(picks[i].id);
+      if (!it) { show(i + 1); return; }
+      const box = document.getElementById('drill-box');
+      box.innerHTML = '<div class="flip-front"><div class="muted-sm">第 ' + (i + 1) + '/' + picks.length + ' 道（点击看答案）</div>'
+        + '<div class="flip-topic">' + U.esc(it.topic) + '</div>'
+        + '<div class="flip-grade"><button class="btn btn-ghost" id="drill-show">👀 看答案</button>'
+        + '<button class="btn btn-ghost" id="drill-speak">🔊 朗读</button></div></div>';
+      document.getElementById('drill-speak').onclick = function () { speak((it.topic || '') + '。' + (it.points || []).join('。'), 1); };
+      document.getElementById('drill-show').onclick = function () {
+        const hintHtml = it.hint ? '<div class="pr-hint">💡 ' + U.esc(it.hint) + '</div>' : '';
+        box.innerHTML = '<div class="flip-back"><div class="muted-sm">答案要点</div>'
+          + it.points.map(function (p) { return '<div class="flip-pt">' + U.esc(p) + '</div>'; }).join('')
+          + (it.card ? '<div class="flip-card">🔑 ' + U.esc(it.card) + '</div>' : '') + hintHtml
+          + '<div class="flip-grade"><button class="btn btn-sm btn-primary" id="drill-yes">😎 记住了</button>'
+          + '<button class="btn btn-sm btn-ghost" id="drill-no">🤔 没记住</button>'
+          + '<button class="btn btn-sm btn-ghost" id="drill-speak2">🔊 朗读</button>'
+          + '<button class="btn btn-sm btn-ghost" id="drill-hint">💡 提示</button></div></div>';
+        document.getElementById('drill-yes').onclick = function () { grade(it.id, true); show(i + 1); };
+        document.getElementById('drill-no').onclick = function () { grade(it.id, false); show(i + 1); };
+        document.getElementById('drill-speak2').onclick = function () { speak((it.points || []).join('。'), 1); };
+        document.getElementById('drill-hint').onclick = function () { genHint(it.id); };
+      };
+    }
+    show(0);
+  }
+  window.PolReciteModule = { render: render, grade: grade, openReview: openFlip, openSelfTest: openSelfTest, openWrite: openWrite, startDrill: startDrill };
+})();
+
 /* ===== js/app.js ===== */
 /* ============================================================
  * app.js — 应用主控
@@ -11403,6 +12709,7 @@ function bind(el, next) {
     ['decision', '院校决策', '⚖️', DecisionModule],
     ['mental', '心理状态', '🧘', MentalModule],
     ['reading', '英语阅读', '📖', ReadingModule],
+    ['polrecite', '政治背诵', '📕', PolReciteModule],
     ['redline', '红线禁令', '⛔', RedlineModule],
     ['progress', '进度追踪', '📈', ProgressModule],
     ['settings', '设置', '⚙️', SettingsModule]
