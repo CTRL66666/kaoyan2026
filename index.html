@@ -764,24 +764,32 @@ body.cp-lock { overflow: hidden; }
 /* 状态栏连续作战 */
 .sb-streak { color: #d4380d; }
 
-/* ---------- 作战日历 ---------- */
-.cal-grid { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
-.cal-row { display: flex; gap: 3px; }
-.cal-cell { flex: 0 0 18px; width: 18px; height: 18px; border-radius: 3px; background: var(--line); }
-.cal-lv0 { background: #ededed; }
-.cal-lv1 { background: #d4d4d4; }
-.cal-lv2 { background: #a3a3a3; }
-.cal-lv3 { background: #666; }
-.cal-lv4 { background: #111; }
+/* ---------- 作战日历（扁平黑白灰，对齐 App 设计系统） ---------- */
+.cal-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.cal-title { font-size: 15px; font-weight: 500; }
+.cal-meta { display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: var(--text-muted); }
+.cal-streak { color: var(--danger); font-weight: 500; }
+.cal-active b { font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: 500; }
+.cal-grid { display: flex; flex-direction: column; gap: 3px; }
+.cal-mrow, .cal-row { display: flex; gap: 3px; align-items: center; }
+.cal-mrow { margin-bottom: 3px; }
+.cal-mcell { flex: 0 0 16px; width: 16px; font-size: 10.5px; line-height: 1; color: var(--text-muted); text-align: center; }
+.cal-mcell-on { color: var(--text-secondary); font-weight: 500; }
+.cal-wd { flex: 0 0 16px; width: 16px; font-size: 10.5px; line-height: 1; color: var(--text-muted); text-align: right; padding-right: 5px; box-sizing: border-box; }
+.cal-wd-empty { padding-right: 0; }
+.cal-cell { flex: 0 0 16px; width: 16px; height: 16px; border-radius: 3px; background: var(--line); }
+.cal-lv0 { background: var(--line); }
+.cal-lv1 { background: #d9d9d9; }
+.cal-lv2 { background: #bfbfbf; }
+.cal-lv3 { background: var(--text-muted); }
+.cal-lv4 { background: var(--text-secondary); }
 .cal-empty { background: transparent; }
-.cal-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
-.cal-legend .cal-cell { flex: 0 0 12px; width: 12px; height: 12px; aspect-ratio: auto; }
-.cal-main { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; }
-.cal-main .cal-grid { flex: 0 1 auto; }
-.cal-side { flex: 1 1 130px; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding-left: 16px; border-left: 1px solid var(--line); }
-.cal-stat { display: flex; flex-direction: column; gap: 2px; }
-.cal-stat-n { font-size: 20px; font-weight: 700; line-height: 1.1; color: var(--text-primary); }
-.cal-stat-l { font-size: 12px; color: var(--text-muted); }
+.cal-today { border: 2px solid var(--blue); }
+.cal-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.cal-legend { display: flex; align-items: center; gap: 4px; }
+.cal-legend .cal-cell { flex: 0 0 12px; width: 12px; height: 12px; }
+.cal-total { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.cal-total b { color: var(--text-primary); font-weight: 500; }
 
 /* ---------- 每日一题作答模式 ---------- */
 .dq-fold { padding: 10px 12px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r-btn); font-size: 13px; color: var(--text-secondary); margin: 8px 0; }
@@ -5343,30 +5351,39 @@ body.cp-lock { overflow: hidden; }
       }).join('') + '</div>';
   }
 
-  // ---------- 作战日历（12周 GitHub 风热力图，黑白灰 5 级强度） ----------
+  // ---------- 作战日历（扁平黑白灰热力图，对齐 App 设计系统） ----------
   function calendarHtml(s) {
     var WEEKS = 12;
+    var WD = ['一', '二', '三', '四', '五', '六', '日'];
     var today = new Date();
     today.setHours(23, 59, 59, 999);
     var monday = U.weekMonday(new Date());
     monday = new Date(monday.getTime() - (WEEKS - 1) * 7 * U.DAY_MS);
+    // 顶部月份刻度（与列对齐）
+    var mheadHtml = '', lastMonth = -1;
+    for (var w = 0; w < WEEKS; w++) {
+      var mc = new Date(monday.getTime() + w * 7 * U.DAY_MS);
+      var ml = (w === 0 || mc.getMonth() !== lastMonth) ? (mc.getMonth() + 1) + '月' : '';
+      if (ml) lastMonth = mc.getMonth();
+      mheadHtml += '<span class="cal-mcell' + (ml ? ' cal-mcell-on' : '') + '">' + ml + '</span>';
+    }
     var rowsHtml = '';
     for (var d = 0; d < 7; d++) {
-      rowsHtml += '<div class="cal-row">';
-      for (var w = 0; w < WEEKS; w++) {
-        var date = new Date(monday.getTime() + (w * 7 + d) * U.DAY_MS);
+      rowsHtml += '<div class="cal-row"><span class="cal-wd">' + WD[d] + '</span>';
+      for (var w2 = 0; w2 < WEEKS; w2++) {
+        var date = new Date(monday.getTime() + (w2 * 7 + d) * U.DAY_MS);
         if (date > today) { rowsHtml += '<span class="cal-cell cal-empty"></span>'; continue; }
         var k = U.dkey(date);
         var h = s.studyHours[k] || 0;
         var doneN = (s.completions[k] || []).length;
-        // 强度 = 时长为主，打卡加成
-        var eff = h + doneN * 0.5;
+        var eff = h + doneN * 0.5; // 强度 = 时长为主，打卡加成
         var lv = eff <= 0 ? 0 : eff < 2 ? 1 : eff < 4 ? 2 : eff < 6 ? 3 : 4;
-        rowsHtml += '<span class="cal-cell cal-lv' + lv + '" title="' + k + ' · ' + h + 'h · 完成' + doneN + '项"></span>';
+        var isToday = date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+        rowsHtml += '<span class="cal-cell cal-lv' + lv + (isToday ? ' cal-today' : '') + '" title="' + k + ' · ' + h + 'h · 完成' + doneN + '项"></span>';
       }
       rowsHtml += '</div>';
     }
-    // 统计（按时间顺序遍历窗口内每一天：活跃天数 / 累计时长 / 最长连续）
+    // 统计
     var totalH = 0, activeDays = 0, best = 0, cur = 0;
     for (var i = 0; ; i++) {
       var dd = new Date(monday.getTime() + i * U.DAY_MS);
@@ -5377,22 +5394,20 @@ body.cp-lock { overflow: hidden; }
       else cur = 0;
     }
     var streak = Store.studyStreak();
-    var weekH = U.round1(U.sum(Store.weekHours()));
-    var todayH = U.round1(Store.todayHours());
-    var avgActive = activeDays > 0 ? U.round1(totalH / activeDays) : 0;
-    var stat = function (n, l) { return '<div class="cal-stat"><span class="cal-stat-n">' + n + '</span><span class="cal-stat-l">' + l + '</span></div>'; };
-    return '<div class="card"><div class="card-title-row"><span class="card-title">作战日历</span>'
-      + '<span class="muted-sm">' + (streak >= 2 ? '🔥 连续 ' + streak + ' 天 · ' : '') + '近12周 ' + activeDays + ' 天活跃</span></div>'
-      + '<div class="cal-main"><div class="cal-grid">' + rowsHtml + '</div>'
-      + '<div class="cal-side">'
-      + stat(weekH + 'h', '本周时长')
-      + stat(todayH + 'h', '今日时长')
-      + stat(best + ' 天', '最长连续')
-      + stat(avgActive + 'h', '活跃日均')
-      + '</div></div>'
-      + '<div class="cal-legend"><span class="muted-sm">少</span><span class="cal-cell cal-lv0"></span><span class="cal-cell cal-lv1"></span><span class="cal-cell cal-lv2"></span><span class="cal-cell cal-lv3"></span><span class="cal-cell cal-lv4"></span><span class="muted-sm">多</span>'
-      + '<span class="muted-sm" style="margin-left:auto">累计 ' + U.round1(totalH) + 'h</span></div>'
-      + '</div>';
+    return '<div class="card">'
+      + '<div class="cal-head">'
+      + '<span class="cal-title">作战日历</span>'
+      + '<span class="cal-meta">'
+      + (streak >= 2 ? '<span class="cal-streak">🔥 连续 ' + streak + ' 天</span>' : '')
+      + '<span class="cal-active">近12周 <b>' + activeDays + '</b> 天活跃</span>'
+      + '</span></div>'
+      + '<div class="cal-grid"><div class="cal-mrow"><span class="cal-wd cal-wd-empty"></span>' + mheadHtml + '</div>' + rowsHtml + '</div>'
+      + '<div class="cal-foot">'
+      + '<div class="cal-legend"><span class="muted-sm">少</span>'
+      + '<span class="cal-cell cal-lv0"></span><span class="cal-cell cal-lv1"></span><span class="cal-cell cal-lv2"></span><span class="cal-cell cal-lv3"></span><span class="cal-cell cal-lv4"></span>'
+      + '<span class="muted-sm">多</span></div>'
+      + '<span class="cal-total">累计 <b>' + U.round1(totalH) + 'h</b></span>'
+      + '</div></div>';
   }
 
   // ---------- 每日一题 ----------
