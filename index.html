@@ -680,8 +680,25 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 }
 #copilot-fab:active { transform: scale(.92); }
 #copilot-fab.cp-hide { opacity: 0; pointer-events: none; transform: scale(.6); }
+#copilot-fab.cp-dot::after {
+  content: ''; position: absolute; top: 4px; right: 4px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #ff4d4f; border: 2px solid var(--bg-primary, #fff);
+  animation: cp-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes cp-dot-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.25); } }
 body.focus-lock #copilot-fab { display: none; }
 body.cp-lock { overflow: hidden; }
+
+/* planDay 预览清单 */
+.cp-plan-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cp-plan-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg-secondary, #f5f5f7); cursor: pointer; }
+.cp-plan-row input { flex: none; }
+.cp-plan-subj { flex: none; font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--text-primary); color: #fff; }
+.cp-plan-txt { flex: 1; font-size: 14px; }
+/* 记忆时间线小结 */
+.mem-timeline { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.mem-tl { font-size: 13px; }
 
 #copilot-panel {
   position: fixed; left: 50%; bottom: 0; z-index: 150;
@@ -750,7 +767,7 @@ body.cp-lock { overflow: hidden; }
 /* ---------- 作战日历 ---------- */
 .cal-grid { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
 .cal-row { display: flex; gap: 3px; }
-.cal-cell { flex: 1; aspect-ratio: 1; border-radius: 3px; background: var(--line); min-width: 0; }
+.cal-cell { flex: 0 0 18px; width: 18px; height: 18px; border-radius: 3px; background: var(--line); }
 .cal-lv0 { background: #ededed; }
 .cal-lv1 { background: #d4d4d4; }
 .cal-lv2 { background: #a3a3a3; }
@@ -759,6 +776,12 @@ body.cp-lock { overflow: hidden; }
 .cal-empty { background: transparent; }
 .cal-legend { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
 .cal-legend .cal-cell { flex: 0 0 12px; width: 12px; height: 12px; aspect-ratio: auto; }
+.cal-main { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; }
+.cal-main .cal-grid { flex: 0 1 auto; }
+.cal-side { flex: 1 1 130px; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding-left: 16px; border-left: 1px solid var(--line); }
+.cal-stat { display: flex; flex-direction: column; gap: 2px; }
+.cal-stat-n { font-size: 20px; font-weight: 700; line-height: 1.1; color: var(--text-primary); }
+.cal-stat-l { font-size: 12px; color: var(--text-muted); }
 
 /* ---------- 每日一题作答模式 ---------- */
 .dq-fold { padding: 10px 12px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r-btn); font-size: 13px; color: var(--text-secondary); margin: 8px 0; }
@@ -1593,7 +1616,7 @@ body.cp-lock { overflow: hidden; }
       heat: {},                   // topicId -> {level:0|1|2, score:0-100|null, updatedAt}
       mistakeDrills: [],          // 错题重练队列 {id, source:'mistake'|'topic', refId, title, subject, status:'pending'|'done', createdAt, penaltyOf}
       mental: [],                 // {id, date, mood:1-10, fatigue:'fresh'|'tired'|'exhausted'|'giveup', jumpy:bool, hwUrge:bool, stuck}
-      reading: { results: [], cards: {}, customVocab: [] }, // results:{id,date,source,answer,choice,correct,secs}; cards: wordKey -> {box:1-5, due:'YYYY-MM-DD'}; customVocab: 用户自定义词
+      reading: { results: [], cards: {}, customVocab: [], analysis: {} }, // results:{id,date,source,answer,choice,correct,secs}; cards: wordKey -> {box:1-5, due:'YYYY-MM-DD'}; customVocab: 用户自定义词; analysis: wordKey -> {text, at} AI深度解析缓存
       decision: { inputs: { mathSims: [], profScore: '', engAccuracy: '', polProgress: 0, xiankongScore: 5 }, result: null, updatedAt: '' },
       inspector: { runs: [] },    // {id,date,type,risk,flags:[]}
       quizBank: [],               // 收藏的题目 {id, topicId, topicName, stem, type, options, answer, solution, trap, diff, savedAt, note}
@@ -1611,11 +1634,14 @@ body.cp-lock { overflow: hidden; }
         profile: '',              // AI 维护的考生画像总结（每次反思时重写，注入所有 AI 提示词）
         facts: [],                // 记忆事实 [{id,text,kind:'weakness'|'habit'|'preference'|'goal'|'context'|'pattern',hits,createdAt,updatedAt,pinned,source:'ai'|'user'|'system'}]
         reflectCount: 0,          // 已反思次数（用于首次提示）
+        lastConsolidate: '',      // 上次「每周记忆巩固」日期 YYYY-MM-DD（≥7天触发一次 AI 合并/晋升/重写画像）
         updatedAt: ''
       },
       dailyBrief: null,           // AI 每日作战简报 {date:'YYYY-MM-DD', content, generatedAt}（按天缓存，手动可重新生成）
       copilotChats: {},           // 'YYYY-MM-DD' -> [{role:'user'|'assistant', content, ts}] Copilot 会话（保留最近7天，每天≤60条）
       ai: { endpoint: '', key: '', model: '', preset: '', stream: false, thinkingMode: undefined, memAuto: true, briefAuto: true,
+        superviseMode: 'coach', // 主动督学：'off' 关闭 | 'coach' 本地信号触发+AI话术(省token) | 'ai' 每日AI全智能主动
+        lastSupervise: null,    // {date:'YYYY-MM-DD', key} 督学节流：每日至多一次主动推送
         apis: [],          // 多接口列表 [{id,name,endpoint,key,model}]，数组顺序即优先级（第1个最高）
         activeApi: '',     // 当前使用接口 id（endpoint/key/model 旧字段会同步为当前接口，兼容云同步）
         autoSwitch: true,  // 智能切换：当前接口无响应/报错时自动按优先级切到备用接口
@@ -2005,44 +2031,53 @@ body.cp-lock { overflow: hidden; }
 
 /* ===== js/core/cloud.js ===== */
 /* ============================================================
- * cloud.js — GitHub Gist 云端同步层（个人令牌模式）
+ * cloud.js — GitHub Gist 云端同步层（个人令牌模式 · 分区增量 v4）
  * 设计原则：
  *   1. localStorage 仍作离线缓存，断网也能用，零侵入现有逻辑。
- *   2. 每个用户在前端填入【自己的 GitHub 个人令牌(gist 权限)】，
- *      数据存到该用户【自己 GitHub 账号下的 Gist】，天然按人隔离、完全去中心化。
- *   3. 近实时：保存时防抖上传 + 每 60s 轮询拉取远端变更。
- *   4. 多设备：同一令牌登录不同设备 → 操作的是同一个 Gist → 自动同步。
+ *   2. 每个用户填入【自己的 GitHub 个人令牌(gist 权限)】，数据存到该用户
+ *      【自己 GitHub 账号下的 Gist】，天然按人隔离、完全去中心化。
+ *   3. 多设备：同一令牌登录不同设备 → 操作同一份 Gist → 自动同步。
  *
- * ⚠️ 安全：令牌仅存于本机浏览器 localStorage；请只授予 gist 权限，不要给 repo 权限。
- *    Gist 内容经其 URL 可被匿名访问（"secret" 非"private"），勿在其中存放高敏感密码。
+ * v4 增量化（解决"国内慢 / 照片大 / 轮询白下整包"）：
+ *   ┌ 核心 Gist（复用旧 gistId）：core.json（设置/进度/任务/错题元数据…，小而频繁）
+ *   │                            + manifest.json（大集合内容哈希清单 + bulkGistId）
+ *   └ 大数据 Gist（新建 desc=kaoyan2026-sync-bulk）：quizBank/mistakePhotos/essays/vocab
+ *                                各存一个 .json 文件（含 base64 图片，大而少变）
+ *   - 拉取：GET 核心 Gist 带 If-None-Match →【304 直接结束、零流量零限额】；
+ *           有变化才读 manifest，逐集合比对哈希，只拉哈希不同的集合（本地已有不重复拉）。
+ *   - 推送：分区哈希去重——只改设置只 PATCH core.json（照片零传输）；
+ *           某集合变化才 PATCH 大数据 Gist 里对应的那个文件。
+ *   - 删除仍走 Store 墓碑（tomb 随 core.json 同步），跨设备删除生效且不被旧副本复活。
+ *   - 旧格式（单文件 kaoyan2026.json）自动识别并在首次推送时无感迁移为新布局。
  *
- * v3 优化（解决"老是同步失败 / API 限额打满"）：
- *   - 内容哈希去重：数据未变时不重复上传（节省大量无效 API 调用）
- *   - 推送防抖延长至 2s（用户连续操作只推一次最终态）
- *   - 轮询从 20s 放宽到 60s（跨设备同步延迟可接受，API 开销降 3 倍）
- *   - 推送后不再额外 getGist 确认时间戳（用本地时间代替，省 1 次 API 调用/次）
- *   - 推送前合并远端改为尽力而为（瞬时失败不阻断上传）
- *   - 403 限额自动退避（指数退避，最高 5 分钟一查，避免死循环撞墙）
- *   - 任务级合并（mergeFrom）：增删都跨设备同步（墓碑机制）
+ * ⚠️ 安全：令牌仅存于本机浏览器 localStorage；请只授予 gist 权限。
+ *    Gist "secret" 非 "private"，有链接即可匿名访问，勿存高敏感密码。
  * ============================================================ */
 (function () {
   'use strict';
 
   const API = 'https://api.github.com';
-  const GIST_FILENAME = 'kaoyan2026.json';   // Gist 内的文件名
-  const GIST_DESC = 'kaoyan2026-sync';       // Gist 描述
+  const GIST_FILENAME = 'kaoyan2026.json';   // 旧格式整包文件名（仅用于识别/迁移）
+  const CORE_FILE = 'core.json';             // 新格式：核心数据
+  const MANIFEST_FILE = 'manifest.json';     // 新格式：大集合清单
+  const GIST_DESC = 'kaoyan2026-sync';       // 核心 Gist 描述
+  const BULK_DESC = 'kaoyan2026-sync-bulk';  // 大数据 Gist 描述
   const TOKEN_KEY = 'kaoyan2026_ghtoken';    // 本机保存的用户令牌
-  const META_KEY = 'kaoyan2026_cloud';       // 保存 gistId / 时间戳，用于冲突判断
-  const SAVE_DEBOUNCE = 2000;                // 保存防抖（毫秒）——比原来 800ms 长，减少频繁保存时的 API 浪费
-  const POLL_INTERVAL = 60000;               // 轮询间隔（毫秒）——从 20s 放宽到 60s，API 开销降 3 倍
+  const META_KEY = 'kaoyan2026_cloud';       // 保存 gistId / etag / 已推哈希等
+  const SAVE_DEBOUNCE = 2000;                // 保存防抖（毫秒）
+  const POLL_INTERVAL = 60000;               // 轮询间隔（毫秒）
   const TOKEN_HELP = 'https://github.com/settings/tokens/new?scopes=gist&description=kaoyan2026同步';
 
+  // 大数据集合（与 Store.initialState().tomb 键、Store.mergeFrom 的 TOMB_COLLS 一致）
+  const BULK_COLLS = ['quizBank', 'mistakePhotos', 'essays', 'vocab'];
+  const COLL_LABEL = { quizBank: '题库', mistakePhotos: '错题照片', essays: '作文', vocab: '单词本' };
+
   const state = {
-    enabled: false, token: null, gistId: null,
+    enabled: false, token: null, gistId: null, bulkGistId: null,
     lastPushedAt: 0, lastSyncAt: 0, pollTimer: null, badge: null,
-    lastPayloadHash: '',          // 上次推送的内容哈希（去重：相同内容不再重复上传）
     pushing: false,                // 是否正在推送中（防止并发推送）
-    rateLimitBackoffUntil: 0      // 403 限额退避截止时间戳
+    rateLimitBackoffUntil: 0,      // 403 限额退避截止时间戳
+    lastTransfer: null             // 最近一次同步的传输明细 {pulled:[],pushed:[],bytes}
   };
   let suppressPush = false;       // 拉取写回本地时抑制再次上传（防回环）
   let pushTimer = null;
@@ -2052,13 +2087,13 @@ body.cp-lock { overflow: hidden; }
     let m;
     try { m = JSON.parse(localStorage.getItem(META_KEY)); } catch (e) { m = null; }
     m = m || {};
-    // 默认开启「同步 AI Key」：未显式关闭过（undefined）即视为同步，
-    // 已显式关闭（=false）的用户仍保留其选择。
-    if (m.syncAiKey === undefined) m.syncAiKey = true;
+    if (m.syncAiKey === undefined) m.syncAiKey = true; // 默认同步 AI Key
+    m.pushedHashes = m.pushedHashes || {};
     return m;
   }
   function saveMeta() {
-    meta.gistId = state.gistId; meta.lastPushedAt = state.lastPushedAt; meta.lastSyncAt = state.lastSyncAt;
+    meta.gistId = state.gistId; meta.bulkGistId = state.bulkGistId;
+    meta.lastPushedAt = state.lastPushedAt; meta.lastSyncAt = state.lastSyncAt;
     try { localStorage.setItem(META_KEY, JSON.stringify(meta)); } catch (e) {}
   }
   function loadToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
@@ -2068,38 +2103,38 @@ body.cp-lock { overflow: hidden; }
   // ---------- 轻量哈希（不用 crypto.subtle 以兼容所有浏览器）----------
   function contentHash(str) {
     let h = 0;
-    for (let i = 0; i < str.length; i++) {
-      h = ((h << 5) - h + str.charCodeAt(i)) | 0;
-    }
+    for (let i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
     return h.toString(36);
   }
 
-  // ---------- 403 限额退避检查 ----------
-  function isRateLimited() {
-    return Date.now() < state.rateLimitBackoffUntil;
-  }
+  // ---------- 403 限额退避 ----------
+  function isRateLimited() { return Date.now() < state.rateLimitBackoffUntil; }
   function setRateLimitBackoff(attempt) {
-    // 指数退避：第1次等30s，第2次60s，第3次120s，第4次240s，第5次300s封顶
     const delay = Math.min(30000 * Math.pow(2, attempt), 300000);
     state.rateLimitBackoffUntil = Date.now() + delay;
     console.warn('[Cloud] 触发 API 限额退避，' + Math.round(delay / 1000) + '秒内跳过请求');
   }
 
-  // ---------- GitHub API 封装 ----------
-  async function api(path, opts) {
+  // ---------- GitHub API 封装：返回 {status, etag, data}，支持 304（不抛错）----------
+  async function apiReq(path, opts) {
     if (isRateLimited()) {
-      throw new Error('HTTP 403（退避中，' + Math.ceil((state.rateLimitBackoffUntil - Date.now()) / 1000) + 's 后恢复）');
+      const e = new Error('HTTP 403（退避中，' + Math.ceil((state.rateLimitBackoffUntil - Date.now()) / 1000) + 's 后恢复）');
+      e.status = 403; throw e;
     }
     opts = opts || {};
+    const headers = {
+      'Authorization': 'Bearer ' + state.token,
+      'Accept': 'application/vnd.github+json',
+      'Content-Type': 'application/json'
+    };
+    if (opts.etag) headers['If-None-Match'] = opts.etag;
     const res = await fetch(API + path, {
       method: opts.method || 'GET',
-      headers: {
-        'Authorization': 'Bearer ' + state.token,
-        'Accept': 'application/vnd.github+json',
-        'Content-Type': 'application/json'
-      },
+      headers: headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined
     });
+    const etag = res.headers && res.headers.get ? res.headers.get('ETag') : null;
+    if (res.status === 304) return { status: 304, etag: opts.etag || etag, data: null };
     if (!res.ok) {
       const e = new Error('HTTP ' + res.status);
       e.status = res.status;
@@ -2109,80 +2144,178 @@ body.cp-lock { overflow: hidden; }
       throw e;
     }
     const txt = await res.text();
-    return txt ? JSON.parse(txt) : null;
+    return { status: res.status, etag: etag, data: txt ? JSON.parse(txt) : null };
   }
 
-  async function createGist(json) {
-    const data = await api('/gists', {
-      method: 'POST',
-      body: { description: GIST_DESC, public: false, files: { [GIST_FILENAME]: { content: json } } }
-    });
-    return data.id;
+  // 读取 Gist 文件内容：>1MB 被 GitHub 截断（truncated）时改抓 raw_url
+  async function readFileContent(f) {
+    if (!f) return null;
+    if (f.truncated && f.raw_url) {
+      const r = await fetch(f.raw_url);
+      if (!r.ok) throw new Error('raw 拉取失败 HTTP ' + r.status);
+      return await r.text();
+    }
+    return f.content;
   }
-  async function updateGist(id, json) {
-    await api('/gists/' + id, { method: 'PATCH', body: { files: { [GIST_FILENAME]: { content: json } } } });
+
+  // ---------- Gist CRUD ----------
+  async function createGistFiles(desc, files) {
+    const r = await apiReq('/gists', { method: 'POST', body: { description: desc, public: false, files: files } });
+    return r.data.id;
   }
-  async function getGist(id) {
-    const data = await api('/gists/' + id);
-    if (!data || !data.files) return { content: null, updatedAt: 0 };
-    const f = data.files && data.files[GIST_FILENAME];
-    return { content: f ? f.content : null, updatedAt: data.updated_at ? new Date(data.updated_at).getTime() : 0 };
+  async function patchGistFiles(id, files) {
+    await apiReq('/gists/' + id, { method: 'PATCH', body: { files: files } });
   }
-  // 同一令牌下，靠文件名找出已存在的 Gist（解决换浏览器/设备无 gistId 的问题）
-  async function discoverGist() {
-    let page = 1, best = null, bestSize = -1;
-    while (page <= 3) {                 // 从 5 页减到 3 页（最多 300 个），绝大多数用户不会超过 3 页
-      const list = await api('/gists?per_page=100&page=' + page);
+  function collFiles(collJson, list) {
+    const files = {};
+    (list || BULK_COLLS).forEach(c => { files[c + '.json'] = { content: collJson[c] }; });
+    return files;
+  }
+  async function createBulkGist(collJson) {
+    return await createGistFiles(BULK_DESC, collFiles(collJson));
+  }
+
+  // 同一令牌下按文件/描述发现已有 Gist（换设备无 gistId 时）：优先新格式核心，回退旧格式整包
+  async function discoverCore() {
+    let page = 1, newFmt = null, oldFmt = null, oldBest = -1;
+    while (page <= 3) {
+      const list = (await apiReq('/gists?per_page=100&page=' + page)).data;
       if (!list || !list.length) break;
       for (const g of list) {
-        const f = g.files && g.files[GIST_FILENAME];
-        if (!f) continue;
-        const size = (f.size != null) ? f.size : 0;
-        const updated = g.updated_at ? new Date(g.updated_at).getTime() : 0;
-        if (size > bestSize || (size === bestSize && updated > (best ? best.updated : 0))) {
-          best = { id: g.id, size, updated }; bestSize = size;
+        const files = g.files || {};
+        if (files[MANIFEST_FILE] && !newFmt) newFmt = g.id;   // 列表按 updated 倒序，取最新的新格式
+        if (files[GIST_FILENAME]) {
+          const sz = files[GIST_FILENAME].size || 0;
+          if (sz > oldBest) { oldBest = sz; oldFmt = g.id; }
         }
       }
+      if (newFmt) break;
       page++;
     }
-    return best ? best.id : null;
+    return newFmt || oldFmt || null;
+  }
+  async function discoverBulk() {
+    let page = 1;
+    while (page <= 3) {
+      const list = (await apiReq('/gists?per_page=100&page=' + page)).data;
+      if (!list || !list.length) break;
+      for (const g of list) { if (g.description === BULK_DESC) return g.id; }
+      page++;
+    }
+    return null;
   }
 
-  // ---------- 拉取：远端更新时间更新则合并覆盖本地（任务按 id 合并）----------
-  // force=true 时忽略时间戳闸门，强制以远端为准合并
+  // ---------- 载荷拆分 / 哈希 ----------
+  function stripAiKeys(ai) {
+    if (typeof ai.key === 'string') ai.key = '';
+    if (Array.isArray(ai.apis)) ai.apis.forEach(p => { if (p && typeof p.key === 'string') p.key = ''; });
+  }
+  // 取"核心"对象：完整数据剔除大集合（tomb/taskTomb 仍留在核心，让删除随 core 同步）
+  function coreOf(full) {
+    const core = Object.assign({}, full);
+    BULK_COLLS.forEach(c => { delete core[c]; });
+    return core;
+  }
+  function collHashOf(full, c) { return contentHash(JSON.stringify(full[c] || [])); }
+  // 本地核心哈希（与推送口径一致：syncAiKey=false 时剥离 Key 后再算）
+  function localSnapshot() {
+    const full = JSON.parse(window.Store.exportJSON());
+    if (meta.syncAiKey === false && full.ai) stripAiKeys(full.ai);
+    return full;
+  }
+
+  function mergeRemote(remoteObj, opts) {
+    suppressPush = true;
+    try { window.Store.mergeFrom(remoteObj, opts || {}); } finally { suppressPush = false; }
+    if (window.App) App.refresh();
+    if (window.Onboarding && Onboarding.dismissIfNeeded) Onboarding.dismissIfNeeded();
+  }
+
+  // ============================================================
+  // 拉取（增量）：核心 Gist 走 ETag/304；大集合按哈希清单只拉变化项
+  // force=true 忽略 ETag 闸门（手动/推送前合并）；mergeOpts 透传给 Store.mergeFrom
+  // ============================================================
   async function pull(force, mergeOpts) {
     if (!state.gistId) { state.lastSyncAt = Date.now(); saveMeta(); return; }
-    const { content, updatedAt } = await getGist(state.gistId);
-    if (content && (force || updatedAt > (state.lastPushedAt || 0))) {
-      let changed = true;
-      try {
-        // 内容哈希比对：若远端与本端完全一致，说明没有真正的新数据，
-        // 跳过合并与刷新——既避免每次操作后的自动同步把页面滚回顶部，
-        // 也避免 reconcile 拉取在无变更时销毁用户正在进行的就地编辑。
-        const localObj = JSON.parse(window.Store.exportJSON());
-        // 与上传负载一致：仅在显式关闭同步时才剥离 AI Key（默认同步）
-        if (meta.syncAiKey === false && localObj.ai) stripAiKeys(localObj.ai);
-        const localHash = contentHash(JSON.stringify(localObj));
-        const remoteHash = contentHash(content);
-        if (localHash === remoteHash) {
-          changed = false;
-        } else {
-          const d = JSON.parse(content);
-          suppressPush = true;
-          try { window.Store.mergeFrom(d, mergeOpts || {}); } finally { suppressPush = false; }
-        }
-        if (changed) {
-          if (window.App) App.refresh();
-          if (window.Onboarding && Onboarding.dismissIfNeeded) Onboarding.dismissIfNeeded();
-        }
-      } catch (e) { console.error('[Cloud] 远端数据解析/合并失败', e); }
+    const transfer = { pulled: [], pushed: [], bytes: 0 };
+    const resp = await apiReq('/gists/' + state.gistId, { etag: force ? null : meta.coreEtag });
+    if (resp.status === 304) {                    // 全部无变化：零后续请求
+      state.lastSyncAt = Date.now(); saveMeta();
+      state.lastTransfer = transfer; return;
     }
-    state.lastPushedAt = updatedAt;
-    state.lastSyncAt = Date.now();
-    saveMeta();
+    meta.coreEtag = resp.etag;
+    const data = resp.data;
+    if (!data || !data.files) { state.lastSyncAt = Date.now(); saveMeta(); return; }
+    const files = data.files;
+    const updatedAt = data.updated_at ? new Date(data.updated_at).getTime() : Date.now();
+
+    // ---- 旧格式：单文件整包 ----
+    if (!files[MANIFEST_FILE] && files[GIST_FILENAME]) {
+      const content = await readFileContent(files[GIST_FILENAME]);
+      if (content) {
+        transfer.bytes += content.length; transfer.pulled.push('整包(旧格式)');
+        try {
+          const localHash = contentHash(JSON.stringify(localSnapshot()));
+          if (contentHash(content) !== localHash) mergeRemote(JSON.parse(content), mergeOpts);
+        } catch (e) { console.error('[Cloud] 旧格式解析/合并失败', e); }
+      }
+      meta.legacyRemote = true;                   // 标记：下次推送时迁移为新布局
+      state.lastPushedAt = updatedAt; state.lastSyncAt = Date.now(); saveMeta();
+      state.lastTransfer = transfer; return;
+    }
+
+    // ---- 新格式：core.json + manifest.json ----
+    const coreStr = await readFileContent(files[CORE_FILE]);
+    const manStr = await readFileContent(files[MANIFEST_FILE]);
+    if (!coreStr || !manStr) { state.lastSyncAt = Date.now(); saveMeta(); return; }
+    transfer.bytes += coreStr.length + manStr.length; transfer.pulled.push('核心');
+    let core, manifest;
+    try { core = JSON.parse(coreStr); manifest = JSON.parse(manStr); }
+    catch (e) { console.error('[Cloud] 核心数据解析失败', e); return; }
+
+    meta.legacyRemote = false;
+    if (manifest.bulkGistId) { state.bulkGistId = manifest.bulkGistId; }
+
+    // 逐集合比对哈希：本地已有（哈希相等）就不拉；有差异的才去大数据 Gist 取
+    const localFull = localSnapshot();
+    const need = [];
+    BULK_COLLS.forEach(c => {
+      const remoteHash = manifest.colls && manifest.colls[c] && manifest.colls[c].hash;
+      if (remoteHash !== collHashOf(localFull, c)) need.push(c);
+    });
+
+    const remoteColls = {};
+    if (need.length) {
+      if (!state.bulkGistId) { try { state.bulkGistId = await discoverBulk(); } catch (e) {} }
+      if (state.bulkGistId) {
+        const bresp = await apiReq('/gists/' + state.bulkGistId, { etag: force ? null : meta.bulkEtag });
+        if (bresp.status !== 304 && bresp.data && bresp.data.files) {
+          meta.bulkEtag = bresp.etag;
+          for (const c of need) {
+            const f = bresp.data.files[c + '.json'];
+            if (f) {
+              const s = await readFileContent(f);
+              if (s != null) { transfer.bytes += s.length; transfer.pulled.push(COLL_LABEL[c]); remoteColls[c] = JSON.parse(s); }
+            }
+          }
+        }
+      }
+    }
+
+    // 组装完整远端对象：核心字段 + { 变化集合用远端值，未变集合沿用本地(哈希相等=内容相同) }
+    const remoteObj = Object.assign({}, core);
+    BULK_COLLS.forEach(c => { remoteObj[c] = (c in remoteColls) ? remoteColls[c] : (localFull[c] || []); });
+
+    // 无实质变化（核心哈希相同且无集合差异）→ 跳过合并与刷新，避免滚动位置被重置
+    const coreSame = contentHash(JSON.stringify(coreOf(remoteObj))) === contentHash(JSON.stringify(coreOf(localFull)));
+    if (!(coreSame && need.length === 0)) {
+      try { mergeRemote(remoteObj, mergeOpts); } catch (e) { console.error('[Cloud] 合并失败', e); }
+    }
+    state.lastPushedAt = updatedAt; state.lastSyncAt = Date.now(); saveMeta();
+    state.lastTransfer = transfer;
   }
 
-  // ---------- 推送：防抖 + 哈希去重 + 合并远端（尽力而为）----------
+  // ---------- 推送：防抖 ----------
   function schedulePush() {
     if (!state.enabled || !state.token || suppressPush || state.pushing) return;
     if (pushTimer) clearTimeout(pushTimer);
@@ -2191,69 +2324,85 @@ body.cp-lock { overflow: hidden; }
     }, SAVE_DEBOUNCE);
   }
 
-  // 剥离 AI Key：旧单接口字段 + 多接口列表里的每个 key 都要清空
-  function stripAiKeys(ai) {
-    if (typeof ai.key === 'string') ai.key = '';
-    if (Array.isArray(ai.apis)) ai.apis.forEach(function (p) { if (p && typeof p.key === 'string') p.key = ''; });
-  }
-
-  // 构建上传负载：默认携带 ai.key（已默认开启同步；仅显式关闭时不带）
-  function buildPayload() {
-    const full = JSON.parse(window.Store.exportJSON());
-    if (meta.syncAiKey === false && full.ai) stripAiKeys(full.ai);
-    return JSON.stringify(full);
-  }
-
+  // ============================================================
+  // 推送（增量）：分区哈希去重——只上传真正变化的分区
+  // ============================================================
   async function push() {
     if (!state.enabled || !state.token || state.pushing) return;
     state.pushing = true;
     renderBadge('☁ 同步中…', 'busy');
+    const transfer = { pulled: [], pushed: [], bytes: 0 };
     try {
-      // 先尽力与远端合并（避免用本地旧副本覆盖对方新增）。
-      // preserveLocal：以本地为基准深合并，绝不丢弃本地打卡/错题等非任务数据，
-      // 只并入远端独有的任务——杜绝"陈旧云端快照"把本地数据整篇覆盖、误弹初始化向导。
+      // 先尽力与远端合并（避免用本地旧副本覆盖对方新增）；无变化时是 304，几乎零成本
       if (state.gistId) {
-        try {
-          suppressPush = true;
-          try { await pull(true, { preserveLocal: true }); } finally { suppressPush = false; }
-        } catch (e) { console.warn('[Cloud] 合并远端失败，已跳过（稍后自动重试）', e); }
+        try { suppressPush = true; try { await pull(true, { preserveLocal: true }); } finally { suppressPush = false; } }
+        catch (e) { console.warn('[Cloud] 推前合并失败，已跳过（稍后重试）', e); }
       }
 
-      // 合并完成后再取最新本地负载（已含并入的远端新增），避免上传陈旧快照
-      const json = buildPayload();
+      const full = localSnapshot();
+      const coreJson = JSON.stringify(coreOf(full));
+      const coreHash = contentHash(coreJson);
+      const collJson = {}, collHashes = {};
+      BULK_COLLS.forEach(c => { const j = JSON.stringify(full[c] || []); collJson[c] = j; collHashes[c] = contentHash(j); });
 
-      // 哈希去重：若内容与上次推送完全一致，跳过上传（节省大量无效 API 调用）
-      const hash = contentHash(json);
-      if (hash === state.lastPayloadHash && state.gistId) {
-        state.lastSyncAt = Date.now();
-        saveMeta();
-        renderBadge('☁ 已同步', 'on');
-        return;
-      }
+      const ph = meta.pushedHashes || {};
+      const legacy = !!meta.legacyRemote;
 
-      try {
-        if (!state.gistId) state.gistId = await createGist(json);
-        else await updateGist(state.gistId, json);
-      } catch (e) {
-        // Gist 不存在(404)或令牌失效(401)：尝试重新发现已有 Gist，否则新建
-        if (e && (e.status === 404 || e.status === 401)) {
-          state.gistId = null;
-          try { const id = await discoverGist(); if (id) state.gistId = id; } catch (_) {}
-          if (!state.gistId) state.gistId = await createGist(json);
-          else await updateGist(state.gistId, json);
-        } else if (e && e.status === 403) {
-          // 403 限额：记录退避，本次放弃推送（下次定时器会重试）
-          setRateLimitBackoff(0);
-          throw e;
+      // 1) 大数据 Gist：确保存在 + 只 PATCH 变化的集合文件
+      let bulkChanged = [];
+      if (!state.bulkGistId) {
+        try { state.bulkGistId = await discoverBulk(); } catch (e) {}
+        if (!state.bulkGistId) {
+          state.bulkGistId = await createBulkGist(collJson);
+          bulkChanged = BULK_COLLS.slice();
         } else {
-          throw e;
+          bulkChanged = BULK_COLLS.filter(c => legacy || collHashes[c] !== ph[c]);
+          if (bulkChanged.length) await patchGistFiles(state.bulkGistId, collFiles(collJson, bulkChanged));
         }
+      } else {
+        bulkChanged = BULK_COLLS.filter(c => legacy || collHashes[c] !== ph[c]);
+        if (bulkChanged.length) await patchGistFiles(state.bulkGistId, collFiles(collJson, bulkChanged));
+      }
+      bulkChanged.forEach(c => { transfer.pushed.push(COLL_LABEL[c]); transfer.bytes += collJson[c].length; });
+
+      // 2) 清单
+      const manifest = { ver: 2, bulkGistId: state.bulkGistId, colls: {} };
+      BULK_COLLS.forEach(c => { manifest.colls[c] = { hash: collHashes[c], n: (full[c] || []).length }; });
+      const manifestJson = JSON.stringify(manifest);
+      const manifestHash = contentHash(manifestJson);
+
+      // 3) 核心 Gist：确保存在 + 变化时 PATCH（core.json + manifest.json，迁移时删旧文件）
+      const coreChanged = legacy || coreHash !== ph.core || manifestHash !== ph.manifest;
+      if (!state.gistId) {
+        state.gistId = await createGistFiles(GIST_DESC, {
+          [CORE_FILE]: { content: coreJson }, [MANIFEST_FILE]: { content: manifestJson }
+        });
+        transfer.pushed.unshift('核心'); transfer.bytes += coreJson.length + manifestJson.length;
+      } else if (coreChanged) {
+        const files = { [CORE_FILE]: { content: coreJson }, [MANIFEST_FILE]: { content: manifestJson } };
+        if (legacy) files[GIST_FILENAME] = null;   // 迁移：删除旧整包文件
+        try {
+          await patchGistFiles(state.gistId, files);
+        } catch (e) {
+          // Gist 丢失/令牌换号：重新发现或新建，避免卡死
+          if (e && (e.status === 404 || e.status === 401)) {
+            state.gistId = null;
+            try { const id = await discoverCore(); if (id) state.gistId = id; } catch (_) {}
+            if (!state.gistId) state.gistId = await createGistFiles(GIST_DESC, files.hasOwnProperty(GIST_FILENAME) ? { [CORE_FILE]: files[CORE_FILE], [MANIFEST_FILE]: files[MANIFEST_FILE] } : files);
+            else await patchGistFiles(state.gistId, files);
+          } else if (e && e.status === 403) { setRateLimitBackoff(0); throw e; }
+          else throw e;
+        }
+        transfer.pushed.unshift('核心'); transfer.bytes += coreJson.length + manifestJson.length;
       }
 
-      // 推送成功：更新哈希和时间戳（不再额外调 getGist 确认，用本地时间代替，省 1 次 API 调用）
-      state.lastPayloadHash = hash;
-      state.lastPushedAt = Date.now();
-      state.lastSyncAt = Date.now();
+      // 记录已推哈希（下次据此判定分区是否需要上传）
+      meta.pushedHashes = Object.assign({ core: coreHash, manifest: manifestHash }, collHashes);
+      meta.legacyRemote = false;
+      // 推送后本地 ETag 已过期：清空，下次拉取先走一次 200 再进入 304 稳态
+      meta.coreEtag = null; meta.bulkEtag = null;
+      state.lastPushedAt = Date.now(); state.lastSyncAt = Date.now();
+      state.lastTransfer = transfer;
       saveMeta();
       renderBadge('☁ 已同步', 'on');
     } catch (e) {
@@ -2272,9 +2421,10 @@ body.cp-lock { overflow: hidden; }
     renderBadge('☁ 同步中…', 'busy');
     try {
       if (!state.gistId) {
-        try { const id = await discoverGist(); if (id) state.gistId = id; } catch (e) { console.warn('[Cloud] 发现 Gist 失败', e); }
-        state.lastPushedAt = 0;
+        try { const id = await discoverCore(); if (id) state.gistId = id; } catch (e) { console.warn('[Cloud] 发现 Gist 失败', e); }
+        state.lastPushedAt = 0; meta.coreEtag = null; meta.bulkEtag = null;
       }
+      state.bulkGistId = meta.bulkGistId || null;
       await pull();
       if (!state.gistId) await push();
       renderBadge('☁ 已同步', 'on');
@@ -2290,16 +2440,12 @@ body.cp-lock { overflow: hidden; }
   function startPolling() {
     stopPolling();
     state.pollTimer = setInterval(async () => {
-      // 退避期间跳过轮询
       if (isRateLimited()) return;
       try {
-        // 周期拉取采用 preserveLocal：以本地为基准深合并，绝不把"远端旧快照"覆盖回
-        // 本地刚做的改动（如切换思考模式/流式、删除题库题等），只并入远端独有的新增项。
-        // 内容哈希比对相等时 pull 内部会跳过实际合并，不触发无谓刷新。
-        await pull(true, { preserveLocal: true });
+        // 周期拉取用 preserveLocal 深合并；ETag 命中(304)时零流量
+        await pull(false, { preserveLocal: true });
         renderBadge('☁ 已同步', 'on');
       } catch (e) {
-        // 轮询中的 403 触发退避（非致命，静默处理）
         if (e && e.status === 403) setRateLimitBackoff(0);
       }
     }, POLL_INTERVAL);
@@ -2318,7 +2464,7 @@ body.cp-lock { overflow: hidden; }
   async function saveTokenAndStart(tok, mask) {
     state.token = tok.trim();
     try {
-      await api('/rate_limit');           // 轻量鉴权校验
+      await apiReq('/rate_limit');           // 轻量鉴权校验
       state.enabled = true;
       saveToken();
       state.gistId = null;
@@ -2334,10 +2480,9 @@ body.cp-lock { overflow: hidden; }
   async function logout() {
     stopPolling();
     clearToken();
-    state.token = null; state.enabled = false; state.gistId = null;
-    state.lastPayloadHash = '';
-    state.rateLimitBackoffUntil = 0;
-    meta = {}; saveMeta();
+    state.token = null; state.enabled = false; state.gistId = null; state.bulkGistId = null;
+    state.rateLimitBackoffUntil = 0; state.lastTransfer = null;
+    meta = { syncAiKey: meta.syncAiKey, pushedHashes: {} }; saveMeta();
     renderBadge('☁ 未同步', 'off');
   }
 
@@ -2377,7 +2522,17 @@ body.cp-lock { overflow: hidden; }
     if (type === 'on' && state.gistId) label = '☁ 已同步 #' + state.gistId.slice(0, 6);
     state.badge.className = type;
     state.badge.textContent = label;
-    state.badge.title = state.gistId ? ('Gist: ' + state.gistId + '（两台设备 Gist ID 相同即同一份数据）') : '未连接云端';
+    let title = state.gistId ? ('核心 Gist: ' + state.gistId + '（两台设备核心 ID 相同即同一份数据）') : '未连接云端';
+    if (state.lastTransfer) title += transferTip(state.lastTransfer);
+    state.badge.title = title;
+  }
+  function transferTip(t) {
+    const parts = [];
+    if (t.pulled && t.pulled.length) parts.push('拉取: ' + t.pulled.join('、'));
+    if (t.pushed && t.pushed.length) parts.push('推送: ' + t.pushed.join('、'));
+    if (!parts.length) parts.push('无变化（增量跳过）');
+    const kb = t.bytes ? '（' + (t.bytes > 1024 ? (Math.round(t.bytes / 1024 * 10) / 10) + ' KB' : t.bytes + ' B') + '）' : '';
+    return '\n最近同步 ' + parts.join(' · ') + kb;
   }
   function openPanel() {
     ensureStyle();
@@ -2412,22 +2567,25 @@ body.cp-lock { overflow: hidden; }
     const t = state.lastSyncAt ? new Date(state.lastSyncAt).toLocaleString() : '—';
     const gistUrl = state.gistId ? ('https://gist.github.com/' + state.gistId) : '#';
     const gistId = state.gistId ? state.gistId.slice(0, 8) : '（未绑定）';
+    const detail = state.lastTransfer ? transferTip(state.lastTransfer).replace(/^\n/, '') : '尚无同步记录';
     mask.innerHTML = '<div id="cloud-card">'
-      + '<h3>☁ 已同步到你的 GitHub</h3>'
+      + '<h3>☁ 已同步到你的 GitHub（增量）</h3>'
       + '<div class="hint" style="margin-top:0">最近同步：' + t + '<br>'
-      + '数据 Gist ID：<b style="color:#1a7f37">' + gistId + '</b><br>'
+      + '核心 Gist ID：<b style="color:#1a7f37">' + gistId + '</b>'
+      + (state.bulkGistId ? '　图库 Gist：<b>' + state.bulkGistId.slice(0, 8) + '</b>' : '') + '<br>'
       + 'Gist 地址：<a href="' + gistUrl + '" target="_blank" rel="noreferrer">查看</a><br>'
-      + '<span style="color:#c0392b;display:block;margin-top:6px">⚠ 跨设备同步的前提：<b>每台设备都粘贴【同一个】GitHub 令牌</b>。令牌指向同一份 Gist（即上方 ID 一致）→ 自动同步；若某台 ID 不同或显示「未同步」，说明它用的是另一个令牌/账号，数据自然各是各的。</span></div>'
+      + '<span style="color:#1a56c4">' + detail + '</span><br>'
+      + '<span style="color:#c0392b;display:block;margin-top:6px">⚠ 跨设备同步前提：<b>每台设备粘贴【同一个】令牌</b>且都升级到新版（分区增量）。旧版本会把整包写回，造成格式混用。</span></div>'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:10px;color:#444">'
       + '<input type="checkbox" id="cv-ai"' + (meta.syncAiKey ? ' checked' : '') + '>'
-      + ' 同步 AI Key 到云端（默认开，方便换设备免重填；Gist 链接可被匿名访问，介意可取消）</label>'
+      + ' 同步 AI Key 到云端（默认开，换设备免重填；Gist 链接可匿名访问，介意可取消）</label>'
       + '<div class="row"><button class="primary" id="cv-sync">拉取+推送</button><button class="ghost" id="cv-pull">仅拉取远端</button></div>'
       + '<div class="row"><button class="primary" id="cv-copy">复制同步令牌</button><button class="ghost" id="cv-out">退出</button></div>'
       + '<div class="err" id="cv-err"></div>'
       + '<div class="hint">退出仅清除本机令牌，云端数据不删；换设备用同一令牌仍可取回。</div>'
       + '</div>';
     mask.querySelector('#cv-ai').onchange = (e) => {
-      meta.syncAiKey = e.target.checked; saveMeta();
+      meta.syncAiKey = e.target.checked; meta.pushedHashes = {}; saveMeta();   // 改变剥离口径 → 强制重算核心哈希
       push().then(() => renderBadge('☁ 已同步', 'on')).catch(() => {});
     };
     mask.querySelector('#cv-sync').onclick = () => {
@@ -2774,7 +2932,7 @@ body.cp-lock { overflow: hidden; }
       exam: '\u521d\u8bd5\uff1a836 \u81ea\u52a8\u63a7\u5236\u7406\u8bba\uff08\u542b\u73b0\u63a7\uff0c\u5360\u6bd4\u9ad8\uff09', reexam: '\u590d\u8bd5\uff1a\u5fae\u673a\u539f\u7406\u4e0e\u8f6f\u786c\u4ef6',
       line: '\u590d\u8bd5\u7ebf\u9ad8\u4e8e\u6cb3\u5de5\u5927\uff0c\u5bf9\u6570\u5b66\u4e00\u8981\u6c42\u9ad8', ratio: '\u62a5\u5f55\u6bd4\u7ea6 6:1',
       pros: ['\u4e0a\u6d77\u5730\u57df+\u5927\u5382\u5b9e\u4e60\u673a\u4f1a\u591a', '836\u73b0\u63a7\u5bf9\u53e3', '\u590d\u8bd5\u5fae\u673a\u5339\u914d\u5de5\u7a0b\u80cc\u666f'],
-      cons: ['\u5206\u6570\u7ebf\u66f4\u9ad8\uff0c\u98ce\u9669\u66f4\u5927', '\u6570\u5b66\u4e00\u9700\u2112120\u624d\u6709\u5e95\u6c14'],
+      cons: ['\u5206\u6570\u7ebf\u66f4\u9ad8\uff0c\u98ce\u9669\u66f4\u5927', '\u6570\u5b66\u4e00\u9700\u2265120\u624d\u6709\u5e95\u6c14'],
       career: '\u4e0a\u6d77\u5927\u5382/\u5916\u4f01\u81ea\u52a8\u5316\u5c97\u9996\u9009\u8df3\u677f', score: { diff: 4, region: 5, career: 5 },
       examKeywords: ['\u81ea\u52a8\u63a7\u5236\u7406\u8bba', '\u81ea\u52a8\u63a7\u5236\u539f\u7406', '\u81ea\u63a7', '\u63a7\u5236\u7406\u8bba', '\u63a7\u5236']
     },
@@ -3167,9 +3325,9 @@ body.cp-lock { overflow: hidden; }
     var octTail = school ? '\uff08\u51b3\u5b9a\u51b2' + school + '\uff09' : '';
     return [
       { id: 'augProf', date: '8\u6708\u5e95', title: label.replace('{hard}', hard), deadline: '08-31' },
-      { id: 'octMath', date: '10\u6708\u5e95', title: '\u6570\u5b66\u771f\u9898\u6a21\u62df \u2112120\u5206' + octTail, deadline: '10-31' },
+      { id: 'octMath', date: '10\u6708\u5e95', title: '\u6570\u5b66\u771f\u9898\u6a21\u62df \u2265120\u5206' + octTail, deadline: '10-31' },
       { id: 'novProf', date: '11\u6708\u5e95', title: '\u4e13\u4e1a\u8bfe\u771f\u9898\u4e8c\u5232\u5b8c\u6210', deadline: '11-30' },
-      { id: 'decPol', date: '12\u6708', title: '\u653b\u6cbb\u5927\u9898\u80cc\u8bf8\u542f\u52a8', deadline: '12-01' }
+      { id: 'decPol', date: '12\u6708', title: '\u653f\u6cbb\u5927\u9898\u80cc\u8bf5\u542f\u52a8', deadline: '12-01' }
     ];
   }
 
@@ -4165,14 +4323,12 @@ body.cp-lock { overflow: hidden; }
   }
 
   // JSON 调用：多层容错提取（代码块 → 括号计数 → 修复 → 正则兜底）
+  // 底层走流式管线（SSE）：响应头先到即视为连接正常，30 秒超时只管“连不上”，
+  // 之后可等待云端慢慢生成（长材料/图片识别不再被“30秒无响应”误杀）；
+  // 厂商不支持流式时由 400 极简重试自动降级为非流式。
   function chatJSON(systemPrompt, userText, imageDataUrl, opts) {
-    const userMsg = imageDataUrl
-      ? { role: 'user', content: [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: imageDataUrl } }] }
-      : { role: 'user', content: userText };
-    return rawChat([
-      { role: 'system', content: systemPrompt },
-      userMsg
-    ], opts).then(txt => extractRobustJSON(txt));
+    return chatStream(systemPrompt, userText, null, imageDataUrl, opts)
+      .then(txt => extractRobustJSON(txt));
   }
 
   // 通用稳健 JSON 提取器（供 chatJSON 和各模块复用）
@@ -4573,6 +4729,14 @@ body.cp-lock { overflow: hidden; }
       if (s.weaknessProfile && s.weaknessProfile.weakAreas && s.weaknessProfile.weakAreas.length) {
         upsertSignal('sig-weakareas', '拍题暴露的薄弱点：' + s.weaknessProfile.weakAreas.slice(0, 3).join('、'), 'weakness');
       } else removeSignal('sig-weakareas');
+      // 8. 本周投入最多的科目（正向习惯，越用越懂其学习偏好）
+      var subj = weekSubjectCounts();
+      var topSubj = null, topN2 = 0;
+      Object.keys(subj).forEach(function (k) { if (subj[k] > topN2) { topN2 = subj[k]; topSubj = k; } });
+      upsertSignal('sig-strength', topN2 >= 3 ? '本周在' + (SUBJ_LABEL[topSubj] || topSubj) + '上投入最多（完成' + topN2 + '项任务）' : null, 'habit');
+      // 9. 连续作战天数（习惯强化，正向反馈）
+      var streak = Store.studyStreak();
+      upsertSignal('sig-streak', streak >= 3 ? '已连续学习' + streak + '天，节奏稳定' : null, 'habit');
     } catch (e) { /* 静默 */ }
   }
 
@@ -4585,6 +4749,112 @@ body.cp-lock { overflow: hidden; }
       var m = mem();
       m.facts = m.facts.filter(function (f) { return f.sigKey !== sigKey; });
     });
+  }
+
+  // 科目标签 + 本周各科完成任务数（用于学习偏好信号与督学）
+  var SUBJ_LABEL = { math: '数学', ctrl: '专业课', eng: '英语', pol: '政治' };
+  function weekSubjectCounts() {
+    var s = Store.get();
+    var counts = { math: 0, ctrl: 0, eng: 0, pol: 0 };
+    U.weekKeys().forEach(function (k) {
+      if (k === U.dkey()) {
+        var doneIds = s.completions[k] || [];
+        s.tasks.forEach(function (t) { if (counts[t.subject] != null && (t.done || doneIds.indexOf(t.id) >= 0)) counts[t.subject]++; });
+      } else {
+        (s.taskArchive[k] || []).forEach(function (t) { if (counts[t.subject] != null && t.done) counts[t.subject]++; });
+      }
+    });
+    return counts;
+  }
+
+  // ---------- 主动督学：零成本挑选“此刻最该被督促的一件事”（返回 {key,tab,preset} 或 null）----------
+  function dueBacklog() {
+    try {
+      var s = Store.get();
+      var today = U.dkey();
+      var n = 0;
+      (s.polRecite || []).forEach(function (p) { if (p.due && p.due <= today) n++; });
+      (s.vocab || []).forEach(function (v) { if (v.due && v.due <= today) n++; });
+      var cards = (s.reading && s.reading.cards) || {};
+      Object.keys(cards).forEach(function (w) { if (cards[w].due && cards[w].due <= today) n++; });
+      return n;
+    } catch (e) { return 0; }
+  }
+
+  function superviseSuggestion() {
+    try {
+      var s = Store.get();
+      var active = Store.studyStreak() > 0 || Object.keys(s.completions || {}).length > 0 || (s.tasks && s.tasks.length > 0);
+      // 1) 连续冷落科目（仅对活跃用户判定，避免新账号误报）
+      if (active) {
+        if (!Store.subjectDoneInDays('math', 3)) return { key: 'idle-math', tab: 'scheduler', preset: '已经三天没碰数学了。今天必须补上，先两道真题找手感，别再拖。' };
+        if (!Store.subjectDoneInDays('ctrl', 3)) return { key: 'idle-ctrl', tab: 'scheduler', preset: '专业课冷了三天。核心考点最忌断档，今天固定一小时把它捡回来。' };
+      }
+      // 2) 到期复习积压
+      var due = dueBacklog();
+      if (due >= 8) return { key: 'due-backlog', tab: 'dashboard', preset: '你有 ' + due + ' 项复习到期了。记忆不复习就是白学，先清一批到期的。' };
+      // 3) 数学正确率低于安全线
+      var acc = Store.currentMathAccuracy();
+      if (acc != null && acc < 70) return { key: 'low-acc', tab: 'quiz', preset: '数学正确率还在 ' + acc + '%，低于安全线。别刷新题，回头把错题按类型吃透。' };
+      // 4) 情绪连续偏低
+      var rm = (s.mental || []).slice(-3);
+      if (rm.length >= 3 && rm.every(function (x) { return x.mood <= 5; })) return { key: 'low-mood', tab: 'mental', preset: '连着几天状态都不高。别硬扛，把今天目标砍到能完成，稳住比冲刺重要。' };
+      // 5) 学习节奏低于目标
+      var wh = Store.weekHours();
+      var worked = wh.filter(function (h) { return h > 0; });
+      if (worked.length >= 2) {
+        var avgH = U.round1(U.sum(wh) / 7);
+        var target = (s.settings.weeklyTargetHours || 50) / 7;
+        if (avgH < target * 0.7) return { key: 'slow-pace', tab: 'dashboard', preset: '本周日均才 ' + avgH + ' 小时，离目标差一截。今天多挤一个番茄钟出来。' };
+      }
+      // 6) 今日任务过半未完成且时间已晚
+      if (new Date().getHours() >= 18) {
+        var st = Store.todayTaskStats();
+        var done = 0, total = 0;
+        Object.keys(st).forEach(function (k) { done += st[k][0]; total += st[k][1]; });
+        if (total > 0 && done * 2 < total) return { key: 'late-undone', tab: 'scheduler', preset: '都这个点了今天任务还没过半。挑最重要的两件先干完，别让今天空过。' };
+      }
+      return null;
+    } catch (e) { return null; }
+  }
+
+  // ---------- 每周记忆巩固（AI 合并/晋升/重写画像，≥7天一次，静默）----------
+  function consolidateDue() {
+    try {
+      var s = Store.get();
+      if (!AI.configured() || s.ai.memAuto === false) return false;
+      var last = mem().lastConsolidate;
+      if (!last) return true;
+      return (Date.now() - new Date(last).getTime()) >= 7 * U.DAY_MS;
+    } catch (e) { return false; }
+  }
+
+  function consolidateSystem() {
+    return '你是考研教练的“记忆官”，现在做每周记忆巩固。基于考生的全部长期记忆与画像，做一次去冗余与升华。'
+      + '只输出 JSON，不要多余文字、不要 markdown 代码块。格式：'
+      + '{"add":[{"text":"新提炼的稳定规律(≤40字)","kind":"weakness|habit|preference|goal|context|pattern"}],'
+      + '"reinforce":["值得强化保留的记忆原文片段"],'
+      + '"remove":["重复/过时/太琐碎应删除的记忆原文片段"],'
+      + '"profile":"重写后的考生画像一段话(≤140字，更立体：弱点·习惯·偏好·最佳状态·目标)"}。'
+      + '规则：1) 合并语义重复项，只留最凝练一条；2) remove 一次性或已过时的；3) add 最多3条真正跨周有用的规律；4) 简体中文。';
+  }
+
+  function markConsolidated() {
+    Store.update(function (s) { s.aiMemory.lastConsolidate = U.dkey(); });
+  }
+
+  function weeklyConsolidate() {
+    if (!AI.configured()) return Promise.resolve(false);
+    var m = mem();
+    var facts = sortFacts(m.facts);
+    if (!facts.length && !m.profile) { markConsolidated(); return Promise.resolve(false); }
+    var payload = '【当前画像】' + (m.profile || '（空）') + '\n【全部记忆事实】\n'
+      + facts.map(function (f) { return '- [' + (f.kind || 'context') + '] ' + f.text + '（命中' + (f.hits || 1) + '）'; }).join('\n');
+    return AI.chatJSON(consolidateSystem(), payload).then(function (ops) {
+      applyOps(ops);
+      markConsolidated();
+      return true;
+    }).catch(function () { return false; });
   }
 
   // ---------- AI 反思：从对话/事件中沉淀长期记忆 ----------
@@ -4668,6 +4938,10 @@ body.cp-lock { overflow: hidden; }
     togglePin: togglePin,
     setProfile: setProfile,
     syncLocalSignals: syncLocalSignals,
+    dueBacklog: dueBacklog,
+    superviseSuggestion: superviseSuggestion,
+    consolidateDue: consolidateDue,
+    weeklyConsolidate: weeklyConsolidate,
     reflect: reflect,
     recordEvent: recordEvent,
     flushEvents: flushEvents,
@@ -4726,7 +5000,7 @@ body.cp-lock { overflow: hidden; }
       Store.update(x => { x.alerts.lastNovPush = today; });
       Modal.open({
         title: '\u2696\ufe0f \u9662\u6821\u51b3\u7b56\u63d0\u9192',
-        html: '<p>\u5df2\u523011\u6708\uff0c\u300c\u6570\u5b66\u771f\u9898\u6a21\u62df\u2112120\u5206\u300d\u91cc\u7a0b\u78ca\u5c1a\u672a\u52fe\u9009\u3002</p>'
+        html: '<p>\u5df2\u523011\u6708\uff0c\u300c\u6570\u5b66\u771f\u9898\u6a21\u62df\u2265120\u5206\u300d\u91cc\u7a0b\u78ca\u5c1a\u672a\u52fe\u9009\u3002</p>'
           + '<p><b>\u8bf7\u7acb\u5373\u6839\u636e\u6570\u5b66\u6210\u7ee9\u51b3\u5b9a\u51b2\u4e0a\u5927\u8fd8\u662f\u5b88\u6cb3\u5de5\u5927\u3002</b>\u62a5\u540d\u7a97\u53e3\u4e0d\u7b49\u4eba\uff0c\u7528\u6570\u636e\u8bf4\u8bdd\uff0c\u4e0d\u80fd\u51ed\u611f\u89c9\u3002</p>',
         actions: [
           { label: '\u53bb\u51b3\u7b56\u53c2\u8c0b', kind: 'btn-primary', onClick: c => { c(); App.go('decision'); } },
@@ -5077,7 +5351,6 @@ body.cp-lock { overflow: hidden; }
     var monday = U.weekMonday(new Date());
     monday = new Date(monday.getTime() - (WEEKS - 1) * 7 * U.DAY_MS);
     var rowsHtml = '';
-    var totalH = 0, activeDays = 0;
     for (var d = 0; d < 7; d++) {
       rowsHtml += '<div class="cal-row">';
       for (var w = 0; w < WEEKS; w++) {
@@ -5089,15 +5362,34 @@ body.cp-lock { overflow: hidden; }
         // 强度 = 时长为主，打卡加成
         var eff = h + doneN * 0.5;
         var lv = eff <= 0 ? 0 : eff < 2 ? 1 : eff < 4 ? 2 : eff < 6 ? 3 : 4;
-        if (lv > 0) { activeDays++; totalH += h; }
         rowsHtml += '<span class="cal-cell cal-lv' + lv + '" title="' + k + ' · ' + h + 'h · 完成' + doneN + '项"></span>';
       }
       rowsHtml += '</div>';
     }
+    // 统计（按时间顺序遍历窗口内每一天：活跃天数 / 累计时长 / 最长连续）
+    var totalH = 0, activeDays = 0, best = 0, cur = 0;
+    for (var i = 0; ; i++) {
+      var dd = new Date(monday.getTime() + i * U.DAY_MS);
+      if (dd > today) break;
+      var kk = U.dkey(dd);
+      var hh = s.studyHours[kk] || 0;
+      if (hh + (s.completions[kk] || []).length * 0.5 > 0) { activeDays++; totalH += hh; cur++; if (cur > best) best = cur; }
+      else cur = 0;
+    }
     var streak = Store.studyStreak();
+    var weekH = U.round1(U.sum(Store.weekHours()));
+    var todayH = U.round1(Store.todayHours());
+    var avgActive = activeDays > 0 ? U.round1(totalH / activeDays) : 0;
+    var stat = function (n, l) { return '<div class="cal-stat"><span class="cal-stat-n">' + n + '</span><span class="cal-stat-l">' + l + '</span></div>'; };
     return '<div class="card"><div class="card-title-row"><span class="card-title">作战日历</span>'
       + '<span class="muted-sm">' + (streak >= 2 ? '🔥 连续 ' + streak + ' 天 · ' : '') + '近12周 ' + activeDays + ' 天活跃</span></div>'
-      + '<div class="cal-grid">' + rowsHtml + '</div>'
+      + '<div class="cal-main"><div class="cal-grid">' + rowsHtml + '</div>'
+      + '<div class="cal-side">'
+      + stat(weekH + 'h', '本周时长')
+      + stat(todayH + 'h', '今日时长')
+      + stat(best + ' 天', '最长连续')
+      + stat(avgActive + 'h', '活跃日均')
+      + '</div></div>'
       + '<div class="cal-legend"><span class="muted-sm">少</span><span class="cal-cell cal-lv0"></span><span class="cal-cell cal-lv1"></span><span class="cal-cell cal-lv2"></span><span class="cal-cell cal-lv3"></span><span class="cal-cell cal-lv4"></span><span class="muted-sm">多</span>'
       + '<span class="muted-sm" style="margin-left:auto">累计 ' + U.round1(totalH) + 'h</span></div>'
       + '</div>';
@@ -9365,11 +9657,18 @@ function bind(el, next) {
  * 功能5：📝 AI 长难句拆解（语法结构+翻译+考点）
  * 功能6：📋 AI 阅读理解出题（基于粘贴文本自动生成题目+选项+解析）
  * 功能7：🎯 AI 智能复习建议（基于错词/弱词数据生成个性化计划）
+ * 功能8：📚 词库管理（搜索/筛选/编辑/删除自定义词 + 掌握分布）
+ * AI 增强：① AI 整理走后台非阻塞任务（可离页）+ 预览勾选导入；
+ *          ② 单词深度解析一键生成并缓存到卡片（免重复请求）；
+ *          ③ 手动导入时可用 AI 自动补全缺失的常义/僻义/例句。
  * ============================================================ */
 (function () {
   'use strict';
-  let tab = 'drill'; // drill | flash
+  let tab = 'drill'; // drill | flash | manage
   let cardIdx = 0, cardFlip = false;
+  let mgFilter = 'all', mgSearch = '';       // 词库管理：筛选/搜索
+  let extractJob = null;                       // 后台 AI 整理任务 {status:'running'|'done'|'error', startedAt, items, error}
+  let lastEl = null;                           // 最近渲染容器（判断是否仍在本页）
 
   // 词库：内置 + 用户自定义合并（自定义在前优先复习）
   function allVocab() {
@@ -9408,7 +9707,141 @@ function bind(el, next) {
     return null;
   }
 
+  // ---------- AI 深度解析缓存（wordKey -> {text, at}）----------
+  function analysisMap() { return Store.get().reading.analysis || {}; }
+  function getAnalysis(w) { return analysisMap()[String(w).toLowerCase()] || null; }
+  function saveAnalysis(w, text) {
+    Store.update(s => {
+      s.reading.analysis = s.reading.analysis || {};
+      s.reading.analysis[String(w).toLowerCase()] = { text: text, at: U.dkey() };
+    });
+  }
+  // 深度解析结果卡片 HTML（有缓存则渲染，否则空）
+  function analysisCardHtml(word) {
+    const a = getAnalysis(word);
+    if (!a) return '';
+    return '<div class="card" style="margin-top:10px;background:var(--bg-card);border:1px solid var(--accent);border-radius:8px;padding:14px">'
+      + '<div class="card-title" style="font-size:13px">🔍 「' + U.esc(word) + '」AI 深度解析 <span class="muted-sm" style="font-weight:400">· 已缓存 ' + U.esc(a.at) + '</span></div>'
+      + '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap">' + U.esc(a.text) + '</div></div>';
+  }
+
+  // ---------- 后台 AI 整理任务（非阻塞：可离开本页，完成后 Toast + 横幅展示） ----------
+  const EXTRACT_SYS = '你是考研英语词汇专家，只输出JSON数组，不要多余文字。';
+  function extractPrompt(raw) {
+    return '从以下材料中提取考研高频「熟词僻义」单词（或整理用户给的混乱词表），只输出JSON数组，格式：'
+      + '[{"w":"单词(原形)","com":"常见义","rare":"僻义(考研常考)","ex":"英文例句(含中文翻译)"}]。'
+      + '只挑真正有生僻义或考研高频的词，跳过过于基础的词；最多15个；只输出JSON数组。材料：\n' + String(raw).slice(0, 2000);
+  }
+  function normalizeVocab(arr) {
+    const arr2 = Array.isArray(arr) ? arr : (arr && arr.words) || [];
+    return arr2.filter(v => v && v.w && v.rare).map(v => ({
+      w: String(v.w).trim().slice(0, 60),
+      com: String(v.com || '—').trim().slice(0, 120),
+      rare: String(v.rare).trim().slice(0, 200),
+      ex: String(v.ex || '').trim().slice(0, 300)
+    })).slice(0, 15);
+  }
+  // App 各页复用同一 #view 容器，用当前路由判断是否仍在阅读页
+  function onPage() { return !!(window.App && App.current === 'reading' && lastEl && document.body.contains(lastEl)); }
+
+  function startExtract(raw) {
+    if (extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 整理任务在后台进行中，请等它完成'); return; }
+    extractJob = { status: 'running', startedAt: Date.now() };
+    Modal.close();
+    AI.chatJSON(EXTRACT_SYS, extractPrompt(raw)).then(arr => {
+      const items = normalizeVocab(arr);
+      if (!items.length) throw new Error('AI 未提取到有效熟词僻义');
+      extractJob = { status: 'done', items: items };
+      if (onPage()) { render(lastEl); openPreview(items); }
+      else Toast.show('📖 阅读闪卡 AI 整理完成：' + items.length + ' 个词，回「英语阅读」确认导入', 'success', 8000);
+    }).catch(e => {
+      extractJob = { status: 'error', error: (e && e.message) || '未知错误' };
+      if (onPage()) render(lastEl); else Toast.show('📖 阅读闪卡 AI 整理失败：' + extractJob.error, 'warn', 8000);
+    });
+    if (onPage()) render(lastEl);
+  }
+
+  // 任务横幅：在闪卡/管理页顶部展示（进行中 / 完成待导入 / 失败）
+  function jobBannerHtml() {
+    if (!extractJob) return '';
+    if (extractJob.status === 'running') {
+      const secs = Math.round((Date.now() - extractJob.startedAt) / 1000);
+      return '<div class="card" style="border-left:3px solid var(--accent)">'
+        + '<div class="muted-sm">⏳ AI 正在整理熟词僻义' + (secs > 1 ? '（已进行 ' + secs + ' 秒）' : '') + '…<b>可离开本页去做别的</b>，完成后会弹提示。</div></div>';
+    }
+    if (extractJob.status === 'done') {
+      return '<div class="card" style="border-left:3px solid var(--ok)">'
+        + '<div class="muted-sm">✅ AI 整理完成：<b>' + extractJob.items.length + '</b> 个熟词僻义待确认导入。</div>'
+        + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary btn-sm" id="rd-job-view">查看并导入</button>'
+        + '<button class="btn btn-ghost btn-sm" id="rd-job-drop">丢弃</button></div></div>';
+    }
+    return '<div class="card" style="border-left:3px solid var(--danger)">'
+      + '<div class="muted-sm">❌ AI 整理失败：' + U.esc(extractJob.error) + '</div>'
+      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="rd-job-drop">知道了</button></div></div>';
+  }
+
+  // AI 整理结果预览（勾选/确认后入库）
+  function openPreview(items) {
+    const picked = items.map(() => true);
+    function body() {
+      return '<div class="muted-sm" style="margin-bottom:8px">AI 整理出 ' + items.length + ' 个熟词僻义，勾选导入（同词会更新僻义、立即可复习）：</div>'
+        + '<div style="max-height:46vh;overflow-y:auto">'
+        + items.map((v, i) => '<div class="his-row" style="align-items:flex-start">'
+          + '<input type="checkbox" class="rd-pick" data-i="' + i + '"' + (picked[i] ? ' checked' : '') + ' style="margin-top:4px">'
+          + '<div style="flex:1"><b>' + U.esc(v.w) + '</b>'
+          + '<div class="muted-sm" style="margin-top:2px">常义：' + U.esc(v.com) + '　<b style="color:var(--danger)">僻义：' + U.esc(v.rare) + '</b></div>'
+          + (v.ex ? '<div class="muted-sm" style="opacity:.75;font-size:11px">' + U.esc(v.ex) + '</div>' : '')
+          + '</div></div>').join('') + '</div>';
+    }
+    Modal.open({
+      title: '🤖 AI 熟词僻义整理预览',
+      wide: true,
+      html: body() + '<div id="rd-preview-result"></div>',
+      actions: [
+        { label: '取消' },
+        {
+          label: '✓ 导入选中', kind: 'btn-primary', onClick: function () {
+            const chosen = items.filter((_, i) => picked[i]);
+            if (!chosen.length) { Toast.warn('未选择任何词条'); return; }
+            addVocab(chosen);
+            if (extractJob && extractJob.items === items) { extractJob = null; }
+            const resEl = document.getElementById('rd-preview-result');
+            if (resEl) resEl.innerHTML = '<div class="alert alert-ok" style="margin-top:8px">✓ 已导入 ' + chosen.length + ' 个熟词僻义到闪卡系统。</div>';
+            if (onPage()) render(lastEl);
+          }
+        }
+      ]
+    });
+    document.querySelectorAll('.rd-pick').forEach(cb => {
+      cb.onchange = () => { picked[+cb.getAttribute('data-i')] = cb.checked; };
+    });
+  }
+
+  // AI 补全：给缺失 com/rare/ex 的词条补齐字段（导入前调用），返回 Promise<items>
+  function enrichVocab(items) {
+    const need = items.filter(v => !v.rare || v.rare === '—' || !v.com || v.com === '—' || !v.ex);
+    if (!need.length) return Promise.resolve(items);
+    const prompt = '为下列考研英语单词补全缺失字段（常见义 com、考研僻义 rare、含中文翻译的英文例句 ex），只输出JSON数组，'
+      + '格式：[{"w":"单词","com":"常见义","rare":"僻义","ex":"例句(含中文)"}]。单词列表：'
+      + JSON.stringify(need.map(v => v.w));
+    return AI.chatJSON(EXTRACT_SYS, prompt).then(arr => {
+      const filled = {};
+      normalizeVocab(arr).forEach(v => { filled[v.w.toLowerCase()] = v; });
+      return items.map(v => {
+        const f = filled[v.w.toLowerCase()];
+        if (!f) return v;
+        return {
+          w: v.w,
+          com: (v.com && v.com !== '—') ? v.com : f.com,
+          rare: (v.rare && v.rare !== '—') ? v.rare : f.rare,
+          ex: v.ex || f.ex
+        };
+      });
+    });
+  }
+
   function render(el) {
+    lastEl = el;
     const s = Store.get();
     const results = s.reading.results;
     const recent = results.slice(-20).reverse();
@@ -9451,7 +9884,7 @@ function bind(el, next) {
           + '<span class="muted-sm">' + r.secs + '秒 · ' + r.date + '</span></div>'
         ).join('') : '<div class="empty">暂无记录</div>')
         + '</div>';
-    } else {
+    } else if (tab === 'flash') {
       const cur = due[cardIdx % Math.max(1, due.length)];
       body =
         '<div class="card"><div class="card-title-row"><span class="card-title">熟词僻义闪卡（Leitner间隔重复）</span>'
@@ -9466,21 +9899,23 @@ function bind(el, next) {
             + '</div>'
             + (cardFlip
               ? '<div class="btn-row">'
-                + '<button class="btn btn-ghost" id="fc-ai-detail" style="font-size:12px">🔍 AI深度解析</button>'
+                + '<button class="btn btn-ghost" id="fc-ai-detail" style="font-size:12px">' + (getAnalysis(cur.w) ? '🔄 重新解析' : '🔍 AI深度解析') + '</button>'
                 + '<button class="btn btn-danger" id="fc-no">没想起来</button><button class="btn btn-primary" id="fc-yes">想起来了</button></div>'
               : '')
           : '<div class="empty">今日闪卡全部完成！明天再来。</div>')
         + '</div>'
         + '<div class="card"><div class="card-title">词库掌握分布</div><div id="fc-dist"></div></div>'
 
-        // ---- AI 单词深度解析结果区（动态注入）----
-        + '<div id="fc-ai-detail-result"></div>'
+        // ---- AI 单词深度解析结果区（有缓存则预填，动态注入）----
+        + '<div id="fc-ai-detail-result">' + (cur && cardFlip ? analysisCardHtml(cur.w) : '') + '</div>'
 
         // ---- AI 智能复习建议 ----
         + '<div class="card"><div class="card-title-row"><span class="card-title">🎯 AI 智能复习建议</span>'
         + '<button class="link-btn" id="fc-ai-review">生成复习计划</button></div>'
         + '<div class="muted-sm">基于你的错词记录和掌握分布，AI 生成个性化复习策略。</div>'
         + '<div id="fc-review-result"></div></div>';
+    } else {
+      body = manageHtml();
     }
 
     el.innerHTML =
@@ -9488,7 +9923,9 @@ function bind(el, next) {
       + '<div class="tab-row">'
       + '<button class="tab' + (tab === 'drill' ? ' tab-on' : '') + '" data-t="drill">定位法计时</button>'
       + '<button class="tab' + (tab === 'flash' ? ' tab-on' : '') + '" data-t="flash">熟词僻义闪卡</button>'
+      + '<button class="tab' + (tab === 'manage' ? ' tab-on' : '') + '" data-t="manage">词库管理</button>'
       + '</div></div>'
+      + jobBannerHtml()
       + body;
 
     bind(el);
@@ -9506,6 +9943,12 @@ function bind(el, next) {
 
   function bind(el) {
     el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { tab = b.getAttribute('data-t'); cardFlip = false; render(el); });
+
+    // ---- 后台 AI 整理任务横幅 ----
+    const jobView = el.querySelector('#rd-job-view');
+    if (jobView) jobView.onclick = () => { if (extractJob && extractJob.items) openPreview(extractJob.items); };
+    const jobDrop = el.querySelector('#rd-job-drop');
+    if (jobDrop) jobDrop.onclick = () => { extractJob = null; render(el); };
 
     // ---- 定位计时 ----
     const startBtn = el.querySelector('#rd-start');
@@ -9554,14 +9997,16 @@ function bind(el, next) {
     if (yes) yes.onclick = () => { const cur = due[cardIdx % due.length]; grade(cur.w, true); cardIdx++; cardFlip = false; render(el); };
     if (no) no.onclick = () => { const cur = due[cardIdx % due.length]; grade(cur.w, false); cardIdx++; cardFlip = false; Toast.warn('已回到第1盒，明天再见'); render(el); };
 
-    // ---- AI 单词深度解析 ----
+    // ---- AI 单词深度解析（先查缓存，免重复请求）----
     const aiDetailBtn = el.querySelector('#fc-ai-detail');
     if (aiDetailBtn) aiDetailBtn.onclick = () => {
       const cur = due[cardIdx % due.length];
       if (!cur) return;
-      aiDetailBtn.disabled = true; aiDetailBtn.textContent = '🔍 分析中…';
       const resultEl = document.getElementById('fc-ai-detail-result');
+      if (!AI.configured()) { Toast.warn('需先配置 AI Key'); return; }
+      aiDetailBtn.disabled = true; aiDetailBtn.textContent = '🔍 分析中…';
       if (resultEl) resultEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在深度解析「' + U.esc(cur.w) + '」…</div>';
+      var acc = '';
       AI.chatStream(
         '你是考研英语词汇专家。对给定单词做深度解析，用简体中文回答。结构要求：\n'
         + '1. **词源与记忆法**：词根词缀拆解+联想记忆（一句话）\n'
@@ -9572,12 +10017,14 @@ function bind(el, next) {
         + '格式清晰，用 emoji 分段。不要用 JSON。',
         '请深度解析单词：' + cur.w + '（已知常见义：' + cur.com + '；僻义：' + cur.rare + '）',
         function (text) {
+          acc = text;
           if (resultEl) resultEl.innerHTML = '<div class="card" style="margin-top:10px;background:var(--bg-card);border:1px solid var(--accent);border-radius:8px;padding:14px">'
             + '<div class="card-title" style="font-size:13px">🔍 「' + U.esc(cur.w) + '」AI 深度解析</div>'
             + '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap">' + U.esc(text) + '</div></div>';
         }
       ).then(function () {
-        aiDetailBtn.disabled = false; aiDetailBtn.textContent = '🔍 AI深度解析';
+        if (acc) saveAnalysis(cur.w, acc);   // 缓存结果，下次免请求
+        aiDetailBtn.disabled = false; aiDetailBtn.textContent = getAnalysis(cur.w) ? '🔄 重新解析' : '🔍 AI深度解析';
       }).catch(function (err) {
         if (resultEl) resultEl.innerHTML = '<div class="alert alert-danger">解析失败：' + U.esc(err && err.message || err || '未知错误') + '</div>';
         aiDetailBtn.disabled = false; aiDetailBtn.textContent = '🔍 AI深度解析';
@@ -9686,56 +10133,72 @@ function bind(el, next) {
           quizBtn.disabled = false; quizBtn.textContent = '📋 AI 生成题目';
         });
     };
+
+    // ---- 词库管理（manage tab）----
+    el.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { mgFilter = b.getAttribute('data-f'); render(el); });
+    const searchEl = el.querySelector('#rd-mg-search');
+    if (searchEl) searchEl.oninput = () => {
+      mgSearch = searchEl.value;
+      const lst = el.querySelector('#rd-mg-list');
+      if (lst) { lst.innerHTML = manageListHtml(); bindMgRows(el); }
+    };
+    bindMgRows(el);
   }
 
-  // 导入弹窗：手动粘贴 或 AI整理
+  // 绑定词库管理列表行的编辑/删除（搜索局部刷新后需重新绑定）
+  function bindMgRows(el) {
+    el.querySelectorAll('.rd-mg-edit').forEach(b => b.onclick = () => openEditVocab(b.getAttribute('data-w')));
+    el.querySelectorAll('.rd-mg-del').forEach(b => b.onclick = () => removeVocab(b.getAttribute('data-w')));
+  }
+
+  // 导入弹窗：手动粘贴（可选 AI 补全）或 AI 后台整理
   function openImport(el) {
     const hasAI = AI.configured();
     Modal.open({
       title: '📥 导入自定义单词',
       wide: true,
       html:
-        '<div class="muted-sm">方式一：直接粘贴标准格式（每行一个词，用 | 分隔 单词/常见义/僻义/例句）：</div>'
-        + '<textarea class="input" id="imp-raw" rows="5" placeholder="subject | 科目；主题 | 受试者；使服从 | The subjects were tested.&#10;address | 地址 | 处理；探讨 | address the problem"></textarea>'
+        '<div class="muted-sm">方式一：直接粘贴标准格式（每行一个词，用 | 分隔 单词/常见义/僻义/例句），未填的字段可勾选 AI 自动补全：</div>'
+        + '<textarea class="input" id="imp-raw" rows="5" placeholder="subject | 科目；主题 | 受试者；使服从 | The subjects were tested.&#10;address | 地址 | 处理；探讨 | address the problem&#10;prompt |  |  | （只填单词，就用下方 AI 补全）"></textarea>'
+        + '<label class="fld-check" style="margin:8px 0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="imp-enrich"' + (hasAI ? '' : ' disabled') + '><span class="muted-sm">导入时用 AI 自动补全缺失的常义/僻义/例句' + (hasAI ? '' : '（需先配置 API Key）') + '</span></label>'
         + '<div class="btn-row" style="margin:10px 0"><button class="btn btn-primary" id="imp-manual">✓ 按格式导入</button></div>'
         + '<hr style="border:none;border-top:1px solid var(--line);margin:14px 0">'
-        + '<div class="muted-sm">方式二：粘贴任意英文材料/混乱词表，AI自动提取熟词僻义并整理成标准格式' + (hasAI ? '' : '（需先配置API Key）') + '：</div>'
+        + '<div class="muted-sm">方式二：粘贴任意英文材料/混乱词表，AI 后台自动提取熟词僻义（<b>可离开本页</b>，完成后弹提示，预览勾选再导入）' + (hasAI ? '' : '（需先配置API Key）') + '：</div>'
         + '<textarea class="input" id="imp-ai-raw" rows="4" placeholder="粘贴真题阅读原文、或一堆没整理的单词…"></textarea>'
-        + '<div class="btn-row" style="margin:10px 0"><button class="btn ' + (hasAI ? 'btn-primary' : 'btn-ghost') + '" id="imp-ai"' + (hasAI ? '' : ' disabled') + '>🤖 AI整理并导入</button></div>'
+        + '<div class="btn-row" style="margin:10px 0"><button class="btn ' + (hasAI ? 'btn-primary' : 'btn-ghost') + '" id="imp-ai"' + (hasAI ? '' : ' disabled') + '>🤖 AI 后台整理</button></div>'
         + '<div id="imp-result"></div>',
       actions: [{ label: '完成', kind: 'btn-primary' }]
     });
 
-    // 手动导入
+    // 手动导入（可选 AI 补全）
     document.getElementById('imp-manual').onclick = () => {
       const raw = document.getElementById('imp-raw').value;
       const parsed = parseVocabLines(raw);
       if (!parsed.length) { Toast.warn('没识别到有效行。格式：单词 | 常见义 | 僻义 | 例句'); return; }
-      addVocab(parsed);
-      document.getElementById('imp-result').innerHTML = '<div class="alert alert-ok">✓ 成功导入 ' + parsed.length + ' 个单词到闪卡系统。</div>';
+      const enrich = document.getElementById('imp-enrich');
+      const resEl = document.getElementById('imp-result');
+      const doImport = (list) => {
+        addVocab(list);
+        if (resEl) resEl.innerHTML = '<div class="alert alert-ok">✓ 成功导入 ' + list.length + ' 个单词到闪卡系统。</div>';
+        if (onPage()) render(lastEl);
+      };
+      if (enrich && enrich.checked && AI.configured()) {
+        if (resEl) resEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在补全缺失字段…</div>';
+        enrichVocab(parsed).then(doImport).catch(e => {
+          if (resEl) resEl.innerHTML = '<div class="alert alert-warn">AI 补全失败（' + U.esc(e && e.message || '') + '），已按原样导入。</div>';
+          doImport(parsed);
+        });
+      } else {
+        doImport(parsed);
+      }
     };
 
-    // AI整理导入
+    // AI 后台整理（非阻塞：关闭弹窗后后台跑，完成弹预览）
     const aiBtn = document.getElementById('imp-ai');
     if (aiBtn && hasAI) aiBtn.onclick = () => {
       const raw = document.getElementById('imp-ai-raw').value.trim();
       if (!raw) { Toast.warn('请先粘贴材料'); return; }
-      aiBtn.disabled = true; aiBtn.textContent = '🤖 AI整理中…';
-      const prompt = '你是考研英语词汇专家。从以下材料中提取考研高频"熟词僻义"单词（或整理用户给的混乱词表），' +
-        '必须只输出JSON数组，不要多余文字。格式：' +
-        '[{"w":"单词","com":"常见义","rare":"僻义（考研常考）","ex":"英文例句（带中文）"}]。' +
-        '只挑真正有生僻义的词，最多15个。材料：\n' + raw.slice(0, 2000);
-      AI.chatJSON('你是词汇整理助手，只输出JSON数组。', prompt).then(arr => {
-        const list = Array.isArray(arr) ? arr : (arr.words || []);
-        const parsed = list.filter(v => v && v.w && v.rare).map(v => ({ w: String(v.w).trim(), com: String(v.com || '—'), rare: String(v.rare), ex: String(v.ex || '') }));
-        if (!parsed.length) throw new Error('AI未提取到有效单词');
-        addVocab(parsed);
-        document.getElementById('imp-result').innerHTML = '<div class="alert alert-ok">✓ AI整理完成，导入 ' + parsed.length + ' 个熟词僻义词：' + parsed.map(v => v.w).join('、') + '</div>';
-        aiBtn.disabled = false; aiBtn.textContent = '🤖 AI整理并导入';
-      }).catch(e => {
-        document.getElementById('imp-result').innerHTML = '<div class="alert alert-danger">AI整理失败：' + U.esc(e.message) + '。可改用方式一手动粘贴。</div>';
-        aiBtn.disabled = false; aiBtn.textContent = '🤖 AI整理并导入';
-      });
+      startExtract(raw);   // 内部会 Modal.close() 并在后台运行，完成后弹预览/Toast
     };
   }
 
@@ -9764,14 +10227,128 @@ function bind(el, next) {
     });
   }
 
+  // ---------- 📚 词库管理 ----------
+  function customKeySet() {
+    const set = {};
+    (Store.get().reading.customVocab || []).forEach(v => { set[String(v.w).toLowerCase()] = true; });
+    return set;
+  }
+
+  function manageList() {
+    const s = Store.get();
+    const cards = s.reading.cards || {};
+    const cset = customKeySet();
+    const kw = mgSearch.trim().toLowerCase();
+    return allVocab().filter(v => {
+      const key = String(v.w).toLowerCase();
+      const box = cards[v.w] ? cards[v.w].box : 0;
+      if (mgFilter === 'custom' && !cset[key]) return false;
+      if (mgFilter === 'builtin' && cset[key]) return false;
+      if (mgFilter === 'weak' && box > 1) return false;
+      if (mgFilter === 'mastered' && box < 4) return false;
+      if (kw && !(key.indexOf(kw) >= 0 || String(v.com || '').toLowerCase().indexOf(kw) >= 0 || String(v.rare || '').toLowerCase().indexOf(kw) >= 0)) return false;
+      return true;
+    });
+  }
+
+  function manageListHtml() {
+    const cards = Store.get().reading.cards || {};
+    const cset = customKeySet();
+    const list = manageList();
+    if (!list.length) return '<div class="empty">没有匹配的词。</div>';
+    const shown = list.slice(0, 200);
+    return '<div class="muted-sm" style="margin-bottom:6px">共 ' + list.length + ' 词' + (list.length > 200 ? '（仅显示前 200）' : '') + '</div>'
+      + '<div style="max-height:52vh;overflow-y:auto">'
+      + shown.map(v => {
+        const key = String(v.w).toLowerCase();
+        const isCustom = !!cset[key];
+        const box = cards[v.w] ? cards[v.w].box : 0;
+        const boxTag = box === 0 ? '<span class="tag">未学</span>' : '<span class="tag ' + (box >= 4 ? 'tag-ok' : (box <= 1 ? 'tag-red' : '')) + '">盒' + box + '</span>';
+        return '<div class="his-row" style="align-items:flex-start">'
+          + '<div style="flex:1"><b>' + U.esc(v.w) + '</b> ' + boxTag + ' ' + (isCustom ? '<span class="tag">自定义</span>' : '<span class="tag" style="opacity:.6">内置</span>')
+          + '<div class="muted-sm" style="margin-top:2px">常义：' + U.esc(v.com || '—') + '　<b style="color:var(--danger)">僻义：' + U.esc(v.rare || '—') + '</b></div>'
+          + (v.ex ? '<div class="muted-sm" style="opacity:.7;font-size:11px">' + U.esc(v.ex) + '</div>' : '')
+          + '</div>'
+          + '<div class="btn-row" style="flex-direction:column;gap:4px">'
+          + (isCustom
+            ? '<button class="btn btn-ghost btn-sm rd-mg-edit" data-w="' + U.esc(v.w) + '">编辑</button>'
+              + '<button class="btn btn-danger btn-sm rd-mg-del" data-w="' + U.esc(v.w) + '">删除</button>'
+            : '<span class="muted-sm" style="font-size:11px;opacity:.6">内置不可删</span>')
+          + '</div></div>';
+      }).join('') + '</div>';
+  }
+
+  function manageHtml() {
+    const s = Store.get();
+    const custom = s.reading.customVocab || [];
+    const filters = [['all', '全部'], ['custom', '自定义'], ['builtin', '内置'], ['weak', '薄弱'], ['mastered', '已掌握']];
+    return '<div class="card"><div class="card-title-row"><span class="card-title">📚 词库管理</span>'
+      + '<button class="link-btn" id="fc-import">+ 导入单词</button></div>'
+      + '<div class="muted-sm">共 ' + allVocab().length + ' 词（自定义 ' + custom.length + ' · 内置 ' + DB.VOCAB.length + '）。内置词只读，自定义词可编辑/删除。</div>'
+      + '<div class="tab-row" style="margin:8px 0">'
+      + filters.map(f => '<button class="tab' + (mgFilter === f[0] ? ' tab-on' : '') + '" data-f="' + f[0] + '">' + f[1] + '</button>').join('')
+      + '</div>'
+      + '<input id="rd-mg-search" class="input" placeholder="🔍 搜索单词 / 常义 / 僻义…" value="' + U.esc(mgSearch) + '">'
+      + '<div id="rd-mg-list" style="margin-top:10px">' + manageListHtml() + '</div>'
+      + '</div>';
+  }
+
+  // 编辑自定义词（内置词不可编）
+  function openEditVocab(word) {
+    const cv = Store.get().reading.customVocab || [];
+    const item = cv.find(x => String(x.w).toLowerCase() === String(word).toLowerCase());
+    if (!item) { Toast.warn('只能编辑自定义词'); return; }
+    Modal.open({
+      title: '✏️ 编辑「' + U.esc(item.w) + '」',
+      html:
+        '<label class="fld"><span>单词</span><input id="ev-w" class="input" value="' + U.esc(item.w) + '"></label>'
+        + '<label class="fld"><span>常见义</span><input id="ev-com" class="input" value="' + U.esc(item.com || '') + '"></label>'
+        + '<label class="fld"><span>僻义（考研常考）</span><input id="ev-rare" class="input" value="' + U.esc(item.rare || '') + '"></label>'
+        + '<label class="fld"><span>例句</span><input id="ev-ex" class="input" value="' + U.esc(item.ex || '') + '"></label>',
+      actions: [
+        { label: '取消' },
+        {
+          label: '✓ 保存', kind: 'btn-primary', onClick: function (close) {
+            const nw = (document.getElementById('ev-w').value || '').trim();
+            const rare = (document.getElementById('ev-rare').value || '').trim();
+            if (!nw) { Toast.warn('单词不能为空'); return; }
+            if (!rare) { Toast.warn('僻义不能为空'); return; }
+            Store.update(s => {
+              const arr = s.reading.customVocab || [];
+              const i = arr.findIndex(x => String(x.w).toLowerCase() === String(word).toLowerCase());
+              if (i < 0) return;
+              // 改名了就迁移卡片进度
+              if (String(word) !== nw && s.reading.cards[word]) { s.reading.cards[nw] = s.reading.cards[word]; delete s.reading.cards[word]; }
+              arr[i] = { w: nw, com: (document.getElementById('ev-com').value || '—').trim(), rare: rare, ex: (document.getElementById('ev-ex').value || '').trim() };
+            });
+            close();
+            Toast.success('已保存');
+            if (onPage()) render(lastEl);
+          }
+        }
+      ]
+    });
+  }
+
+  // 删除自定义词（同时清除其卡片）
+  function removeVocab(word) {
+    Modal.confirm('删除自定义词', '确定删除「' + U.esc(word) + '」？其复习进度也会一并清除。', '删除', function () {
+      Store.update(s => {
+        s.reading.customVocab = (s.reading.customVocab || []).filter(x => String(x.w).toLowerCase() !== String(word).toLowerCase());
+        if (s.reading.cards[word]) delete s.reading.cards[word];
+      });
+      Toast.success('已删除');
+      if (onPage()) render(lastEl);
+    }, true);
+  }
+
   window.ReadingModule = { render };
 })();
-
 
 /* ===== js/modules/wordbook.js ===== */
 /* ============================================================
  * wordbook.js — 英语单词本（SM-2 间隔重复 + 多通道收录 + 拼写自测）
- * 收录：手动 / 批量粘贴 / 文字AI整理 / 拍照AI识别（预览确认后入库）
+ * 收录：文字AI整理 / 拍照AI识别（预览确认后入库）/ 手动添加
  * 复习：SuperMemo-2 算法（Anki 内核）——EF 自适应难度系数驱动间隔，
  *   学习阶段(良好×2毕业) → 复习阶段(1→6→×EF 天)，遗忘进重学并惩罚 EF。
  *   4级评分(重来/困难/良好/简单) + 英中双向 + 拼写校对(拼错自动≤困难)。
@@ -9957,6 +10534,8 @@ function bind(el, next) {
   var spellMode = false;
   var spellChecked = null;       // {input, ok, html}
   var filter = 'all', searchQ = '';
+  var lastEl = null;             // 最近一次渲染容器（判断用户是否还留在单词本页）
+  var extractJob = null;         // 后台 AI 提取任务 {status:'running'|'done'|'error', source, startedAt, thumb, items, error}
 
   // 构造今日会话队列：重学/学习中 → 到期复习（逾期久的优先）→ 新词（限每日上限）
   function buildSession() {
@@ -9994,6 +10573,53 @@ function bind(el, next) {
     }).slice(0, 20);
   }
 
+  // ---------- 后台 AI 提取任务（非阻塞：可离开本页去别处，完成后 Toast 提醒 + 横幅展示结果） ----------
+  // 是否还留在单词本页：App 所有页面复用同一个 #view 容器，必须用当前路由判断
+  function onPage() { return !!(window.App && App.current === 'wordbook' && lastEl && document.body.contains(lastEl)); }
+
+  function startExtract(source, userText, imageDataUrl) {
+    if (extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); return; }
+    extractJob = { status: 'running', source: source, startedAt: Date.now(), thumb: imageDataUrl || '' };
+    AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl).then(function (arr) {
+      var items = normalizeExtracted(arr);
+      if (!items.length) throw new Error('AI 未提取到有效词条');
+      extractJob = { status: 'done', source: source, items: items };
+      if (onPage()) {
+        render(lastEl);
+        if (tab === 'add') openPreview(items, source); // 还守在收录页：直接弹预览
+        else Toast.show('📚 AI 提取完成：' + items.length + ' 个词条，见顶部横幅', 'success', 6000);
+      } else {
+        Toast.show('📚 单词本 AI 提取完成：' + items.length + ' 个词条，回「单词本」确认导入', 'success', 8000);
+      }
+    }).catch(function (e) {
+      extractJob = { status: 'error', source: source, error: (e && e.message) || '未知错误' };
+      if (onPage()) render(lastEl);
+      else Toast.show('📚 单词本 AI 提取失败：' + extractJob.error, 'warn', 8000);
+    });
+    if (onPage()) render(lastEl); // 立即显示「进行中」横幅
+  }
+
+  // 任务横幅：在单词本任意子页顶部展示（进行中 / 完成待导入 / 失败）
+  function jobBannerHtml() {
+    if (!extractJob) return '';
+    if (extractJob.status === 'running') {
+      var secs = Math.round((Date.now() - extractJob.startedAt) / 1000);
+      return '<div class="card" style="border-left:3px solid var(--blue)">'
+        + (extractJob.thumb ? '<img src="' + extractJob.thumb + '" style="max-height:80px;border-radius:6px;border:1px solid var(--line);margin-bottom:6px">' : '')
+        + '<div class="muted-sm">⏳ AI 正在提取（' + extractJob.source + (secs > 1 ? '，已进行 ' + secs + ' 秒' : '') + '）…'
+        + '<b>可离开本页去做别的</b>，完成后会弹提示。</div></div>';
+    }
+    if (extractJob.status === 'done') {
+      return '<div class="card" style="border-left:3px solid var(--ok)">'
+        + '<div class="muted-sm">✅ AI 提取完成（' + extractJob.source + '）：<b>' + extractJob.items.length + '</b> 个词条待确认导入。</div>'
+        + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary btn-sm" id="vb-job-view">查看并导入</button>'
+        + '<button class="btn btn-ghost btn-sm" id="vb-job-drop">丢弃</button></div></div>';
+    }
+    return '<div class="card" style="border-left:3px solid var(--danger)">'
+      + '<div class="muted-sm">❌ AI 提取失败（' + extractJob.source + '）：' + U.esc(extractJob.error) + '</div>'
+      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="vb-job-drop">知道了</button></div></div>';
+  }
+
   // 图片压缩（最大边 1600px，保证 OCR 清晰度）
   function compressImage(file, cb) {
     var reader = new FileReader();
@@ -10020,6 +10646,7 @@ function bind(el, next) {
   }
 
   function render(el) {
+    lastEl = el;
     var all = list();
     var due = dueCards().length + learningCards().length;
     var head = '<div class="card"><div class="card-title">📚 英语单词本（SM-2 间隔重复）</div>'
@@ -10036,7 +10663,7 @@ function bind(el, next) {
       + '</div></div>';
 
     var body = tab === 'review' ? reviewHtml(el) : (tab === 'add' ? addHtml() : manageHtml());
-    el.innerHTML = head + body;
+    el.innerHTML = head + jobBannerHtml() + body;
     bind(el);
     if (tab === 'manage') renderManageDist();
   }
@@ -10145,23 +10772,7 @@ function bind(el, next) {
   // ---------- 收录 ----------
   function addHtml() {
     var has = hasAI();
-    return '<div class="card"><div class="card-title">✍️ 手动添加</div>'
-      + '<div class="form-grid">'
-      + '<label class="fld"><span>单词/短语 *</span><input id="vb-w" class="input" placeholder="如：address"></label>'
-      + '<label class="fld"><span>中文释义 *</span><input id="vb-m" class="input" placeholder="如：地址；处理，探讨（僻义）"></label>'
-      + '<label class="fld"><span>音标</span><input id="vb-ph" class="input" placeholder="/əˈdres/"></label>'
-      + '<label class="fld"><span>词性</span><input id="vb-pos" class="input" placeholder="v. / n. / adj."></label>'
-      + '</div>'
-      + '<label class="fld"><span>例句（英文，可选）</span><input id="vb-ex" class="input" placeholder="We must address the problem."></label>'
-      + '<label class="fld"><span>例句翻译（可选）</span><input id="vb-excn" class="input" placeholder="我们必须处理这个问题。"></label>'
-      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary" id="vb-add-one">✓ 加入单词本</button></div></div>'
-
-      + '<div class="card"><div class="card-title">📋 批量粘贴（标准格式）</div>'
-      + '<div class="muted-sm">每行一个：单词 | 释义 | 例句（可省）。适合从现成词表导入。</div>'
-      + '<textarea class="input" id="vb-bulk" rows="4" placeholder="subject | 主题；受试者（僻义）；使服从（僻义） | The subjects were tested.&#10;novel | 小说 | 新颖的（僻义）"></textarea>'
-      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary" id="vb-bulk-add">✓ 按格式导入</button></div></div>'
-
-      + '<div class="card"><div class="card-title">🤖 文字 → AI 整理' + (has ? '' : '（需先配置 API Key）') + '</div>'
+    return '<div class="card"><div class="card-title">🤖 文字 → AI 整理' + (has ? '' : '（需先配置 API Key）') + '</div>'
       + '<div class="muted-sm">粘贴真题阅读原文/英文材料/混乱笔记，AI 自动提取考研词并整理成「单词+释义+例句」。</div>'
       + '<textarea class="input" id="vb-ai-raw" rows="4" placeholder="粘贴任意英文材料…"></textarea>'
       + '<div class="btn-row" style="margin:8px 0"><button class="btn ' + (has ? 'btn-primary' : 'btn-ghost') + '" id="vb-ai-extract"' + (has ? '' : ' disabled') + '>🤖 AI 提取并预览</button></div></div>'
@@ -10170,7 +10781,18 @@ function bind(el, next) {
       + '<div class="muted-sm">拍单词书页/真题卷/笔记照片，AI 识别图中单词并整理。需使用支持视觉的模型（如 GLM-4V / Qwen-VL / GPT-4o）。</div>'
       + '<input type="file" id="vb-file" accept="image/*" capture="environment" style="display:none">'
       + '<div class="btn-row" style="margin-top:8px"><label for="vb-file" class="btn ' + (has ? 'btn-primary' : 'btn-ghost') + '" style="cursor:pointer' + (has ? '' : ';opacity:.5;pointer-events:none') + '">📷 拍照 / 选图</label></div>'
-      + '<div id="vb-photo-status"></div></div>';
+      + '<div id="vb-photo-status"></div></div>'
+
+      + '<div class="card"><div class="card-title">✍️ 手动添加</div>'
+      + '<div class="form-grid">'
+      + '<label class="fld"><span>单词/短语 *</span><input id="vb-w" class="input" placeholder="如：address"></label>'
+      + '<label class="fld"><span>中文释义 *</span><input id="vb-m" class="input" placeholder="如：地址；处理，探讨（僻义）"></label>'
+      + '<label class="fld"><span>音标</span><input id="vb-ph" class="input" placeholder="/əˈdres/"></label>'
+      + '<label class="fld"><span>词性</span><input id="vb-pos" class="input" placeholder="v. / n. / adj."></label>'
+      + '</div>'
+      + '<label class="fld"><span>例句（英文，可选）</span><input id="vb-ex" class="input" placeholder="We must address the problem."></label>'
+      + '<label class="fld"><span>例句翻译（可选）</span><input id="vb-excn" class="input" placeholder="我们必须处理这个问题。"></label>'
+      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary" id="vb-add-one">✓ 加入单词本</button></div></div>';
   }
 
   // AI 提取结果预览（勾选/编辑后入库）
@@ -10201,6 +10823,8 @@ function bind(el, next) {
             var chosen = items.filter(function (_, i) { return picked[i]; });
             if (!chosen.length) { Toast.warn('未选择任何词条'); return false; }
             var res = addWords(chosen, source);
+            // 导入成功：清掉对应的后台任务横幅
+            if (extractJob && extractJob.items === items) { extractJob = null; if (onPage()) render(lastEl); }
             var resEl = document.getElementById('vb-preview-result');
             if (resEl) resEl.innerHTML = '<div class="alert alert-ok" style="margin-top:8px">✓ 新收录 ' + res.added + ' 个' + (res.merged ? '，合并已有 ' + res.merged + ' 个' : '') + '。</div>';
             return false; // 不关闭，让用户看到结果；再点取消关闭
@@ -10442,57 +11066,33 @@ function bind(el, next) {
       el.querySelector('#vb-w').focus();
     };
 
-    // ---- 收录：批量粘贴 ----
-    var bulkBtn = el.querySelector('#vb-bulk-add');
-    if (bulkBtn) bulkBtn.onclick = function () {
-      var raw = el.querySelector('#vb-bulk').value;
-      var items = String(raw).split('\n').map(function (line) {
-        var p = line.split('|').map(function (x) { return x.trim(); });
-        if (p.length < 2 || !p[0]) return null;
-        return { word: p[0], meaning: p[1], example: p[2] || '', exampleCn: p[3] || '' };
-      }).filter(Boolean);
-      if (!items.length) { Toast.warn('没识别到有效行。格式：单词 | 释义 | 例句'); return; }
-      var res = addWords(items, '批量导入');
-      Toast.success('✓ 新收录 ' + res.added + ' 个' + (res.merged ? '，合并 ' + res.merged + ' 个' : ''));
-      el.querySelector('#vb-bulk').value = '';
-      render(el);
+    // ---- 后台提取任务横幅：查看导入 / 丢弃 ----
+    var jobView = el.querySelector('#vb-job-view');
+    if (jobView) jobView.onclick = function () {
+      if (extractJob && extractJob.status === 'done') openPreview(extractJob.items, extractJob.source);
     };
+    var jobDrop = el.querySelector('#vb-job-drop');
+    if (jobDrop) jobDrop.onclick = function () { extractJob = null; render(el); };
 
-    // ---- 收录：文字 AI 整理 ----
+    // ---- 收录：文字 AI 整理（后台任务，不阻塞页面） ----
     var aiExtract = el.querySelector('#vb-ai-extract');
     if (aiExtract) aiExtract.onclick = function () {
       var raw = el.querySelector('#vb-ai-raw').value.trim();
       if (!raw) { Toast.warn('请先粘贴材料'); return; }
-      aiExtract.disabled = true; aiExtract.textContent = '🤖 整理中…';
-      AI.chatJSON(EXTRACT_SYS, extractPrompt() + '\n材料：\n' + raw.slice(0, 3000)).then(function (arr) {
-        var items = normalizeExtracted(arr);
-        if (!items.length) throw new Error('AI 未提取到有效词条');
-        openPreview(items, '文字整理');
-        aiExtract.disabled = false; aiExtract.textContent = '🤖 AI 提取并预览';
-      }).catch(function (e) {
-        Toast.warn('AI 整理失败：' + (e && e.message || '未知错误'), 5000);
-        aiExtract.disabled = false; aiExtract.textContent = '🤖 AI 提取并预览';
-      });
+      startExtract('文字整理', extractPrompt() + '\n材料：\n' + raw.slice(0, 3000));
     };
 
-    // ---- 收录：拍照 AI 整理 ----
+    // ---- 收录：拍照 AI 整理（后台任务，不阻塞页面） ----
     var fileInput = el.querySelector('#vb-file');
     if (fileInput) fileInput.onchange = function () {
       var f = fileInput.files[0];
       if (!f) return;
       if (!f.type.startsWith('image/')) { Toast.warn('请选择图片文件'); return; }
+      if (extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); fileInput.value = ''; return; }
       var stEl = document.getElementById('vb-photo-status');
       if (stEl) stEl.innerHTML = '<div class="muted-sm" style="margin-top:8px">⏳ 压缩图片中…</div>';
       compressImage(f, function (dataUrl) {
-        if (stEl) stEl.innerHTML = '<div style="margin-top:8px"><img src="' + dataUrl + '" style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid var(--line)"><div class="muted-sm" style="margin-top:6px">⏳ AI 识别中（约10-30秒）…</div></div>';
-        AI.chatJSON(EXTRACT_SYS, extractPrompt() + '\n请识别图片中的英语单词并整理。', dataUrl).then(function (arr) {
-          var items = normalizeExtracted(arr);
-          if (!items.length) throw new Error('AI 未从图片识别到有效词条');
-          if (stEl) stEl.innerHTML = '';
-          openPreview(items, '拍照识别');
-        }).catch(function (e) {
-          if (stEl) stEl.innerHTML = '<div class="alert alert-danger" style="margin-top:8px">识别失败：' + U.esc(e && e.message || '未知') + '。请确认模型支持视觉输入，或改用文字整理。</div>';
-        });
+        startExtract('拍照识别', extractPrompt() + '\n请识别图片中的英语单词并整理。', dataUrl);
       });
       fileInput.value = '';
     };
@@ -10838,6 +11438,15 @@ function bind(el, next) {
     var profile = AiMemory.profile();
     var facts = AiMemory.list();
     var srcMark = { ai: '🤖', user: '✍️', system: '📊' };
+    // 记忆时间线小结：按 kind 分组计数
+    var kindCount = {};
+    facts.forEach(function (f) { var k = f.kind || 'context'; kindCount[k] = (kindCount[k] || 0) + 1; });
+    var timelineHtml = Object.keys(KIND_NAMES).filter(function (k) { return kindCount[k]; }).map(function (k) {
+      return '<span class="mem-tl"><span class="mem-kind ' + k + '">' + KIND_NAMES[k] + '</span> ' + kindCount[k] + '</span>';
+    }).join('');
+    var lastCon = (s.aiMemory && s.aiMemory.lastConsolidate) ? s.aiMemory.lastConsolidate : '';
+    var mode = s.ai.superviseMode || 'coach';
+    var opt = function (v, label) { return '<option value="' + v + '"' + (mode === v ? ' selected' : '') + '>' + label + '</option>'; };
     var factsHtml = facts.map(function (f) {
       return '<div class="mem-fact' + (f.pinned ? ' mem-pinned' : '') + '" data-id="' + f.id + '">'
         + '<span class="mem-kind ' + U.esc(f.kind || 'context') + '">' + (KIND_NAMES[f.kind] || '背景') + '</span>'
@@ -10857,7 +11466,14 @@ function bind(el, next) {
       + '<div class="add-row" style="margin-top:8px"><input id="mem-add-in" class="input" placeholder="手动告诉 AI 一条关于你的事，如：我晚上效率最高"><button class="btn btn-ghost" id="mem-add-btn">记住</button></div>'
       + '<label class="check-row" style="margin-top:8px"><input type="checkbox" id="mem-auto"' + (s.ai.memAuto !== false ? ' checked' : '') + '><span class="box"></span><span>对话后自动反思沉淀记忆（每次少量 token）</span></label>'
       + '<label class="check-row" style="margin-top:6px"><input type="checkbox" id="brief-auto"' + (s.ai.briefAuto !== false ? ' checked' : '') + '><span class="box"></span><span>每日首次打开自动生成「作战简报」</span></label>'
+      + '<div class="card-title-sm" style="margin:10px 0 4px">主动督学</div>'
+      + '<select id="supervise-mode" class="input">' + opt('off', '关闭') + opt('coach', '教练督学（本地判定+AI话术，省token）') + opt('ai', '全智能督学（每日AI主动，更懂但耗token）') + '</select>'
+      + '<div class="muted-sm" style="margin-top:4px">开启后教练会在你打开应用时主动提醒最该被督促的一件事（每日至多一次）。</div>'
+      + '<div class="card-title-sm" style="margin:10px 0 4px">记忆时间线</div>'
+      + (timelineHtml ? '<div class="mem-timeline">' + timelineHtml + '</div>' : '<div class="muted-sm">尚无记忆。</div>')
+      + '<div class="muted-sm" style="margin-top:4px">反思 ' + st.reflectCount + ' 次 · 上次巩固：' + (lastCon || '从未') + '</div>'
       + '<div class="btn-row" style="margin-top:10px">'
+      + '<button class="btn btn-ghost" id="mem-consolidate">✨ 立即巩固记忆</button>'
       + '<button class="btn btn-ghost" id="mem-reflect">🔄 立即反思（从近期数据沉淀）</button>'
       + '<button class="btn btn-ghost" id="mem-clear">清空记忆</button>'
       + '</div></div>';
@@ -11199,6 +11815,21 @@ function bind(el, next) {
       if (memAuto) memAuto.onchange = () => { Store.update(s => { s.ai.memAuto = memAuto.checked; }); Toast.show(memAuto.checked ? '已开启自动反思' : '已关闭自动反思', 'info'); };
       var briefAuto = el.querySelector('#brief-auto');
       if (briefAuto) briefAuto.onchange = () => { Store.update(s => { s.ai.briefAuto = briefAuto.checked; }); };
+      var superviseMode = el.querySelector('#supervise-mode');
+      if (superviseMode) superviseMode.onchange = () => {
+        Store.update(s => { s.ai.superviseMode = superviseMode.value; });
+        Toast.show(superviseMode.value === 'off' ? '已关闭主动督学' : (superviseMode.value === 'ai' ? '已切为全智能督学' : '已切为教练督学'), 'info');
+      };
+      var memConsolidate = el.querySelector('#mem-consolidate');
+      if (memConsolidate) memConsolidate.onclick = () => {
+        if (!AI.configured()) { Toast.warn('请先保存 AI 配置'); return; }
+        memConsolidate.disabled = true;
+        memConsolidate.textContent = '巩固中…';
+        AiMemory.weeklyConsolidate().then(ok => {
+          Toast.show(ok ? '记忆已巩固（去重/晋级/重写画像）' : '本次未产生变化（记忆过少或AI未配置）', ok ? 'success' : 'info');
+          App.refresh();
+        });
+      };
       var memReflect = el.querySelector('#mem-reflect');
       if (memReflect) memReflect.onclick = () => {
         if (!AI.configured()) { Toast.warn('请先保存 AI 配置'); return; }
@@ -12892,13 +13523,13 @@ function bind(el, next) {
   };
 
   var QUICK = {
-    dashboard: ['帮我安排今天的学习', '根据我的数据指出最大风险', '我现在状态不好'],
-    scheduler: ['今天的任务顺序合理吗', '哪些任务该砍、为什么', '给我加一道防呆任务'],
+    dashboard: ['帮我把今天排满并排好优先级', '帮我安排今天的学习', '根据我的数据指出最大风险', '我现在状态不好'],
+    scheduler: ['帮我把今天排满并排好优先级', '今天的任务顺序合理吗', '哪些任务该砍、为什么', '给我加一道防呆任务'],
     review: ['帮我总结这一周', '用数据指出我最致命的问题', '下周最该改的一件事'],
-    photomistake: ['这些错题暴露了我什么模式', '疑难点背后真正的概念漏洞', '按我的薄弱点给我练习建议'],
-    quiz: ['怎么提高数学正确率', '我总在什么题型上翻车'],
+    photomistake: ['就我最近的薄弱点深入讲一题', '这些错题暴露了我什么模式', '疑难点背后真正的概念漏洞', '按我的薄弱点给我练习建议'],
+    quiz: ['就我最近的薄弱点深入讲一题', '怎么提高数学正确率', '我总在什么题型上翻车'],
     mental: ['我很焦虑，学不进去', '最近总想玩手机', '感觉来不及了好慌'],
-    reading: ['阅读正确率怎么突破', '给我讲讲定位法的精髓'],
+    reading: ['就我最近的薄弱点深入讲一题', '阅读正确率怎么突破', '给我讲讲定位法的精髓'],
     essay: ['英语作文怎么上第四档', '给我5个考研作文万能高级句型', '分析我最近作文的主要问题'],
     focus: ['我总是学20分钟就走神', '帮我设计今天下午的专注节奏'],
     default: ['今天该怎么学', '检查我的进度风险', '给我一句狠话骂醒我']
@@ -12924,11 +13555,20 @@ function bind(el, next) {
     });
     var lastMental = (s.mental || []).slice(-1)[0];
     var acc = Store.currentMathAccuracy();
+    // 答疑增强：可被 AI 精准引用的具体数据
+    var errTypeMap = { sign: '符号错误', fraction: '分式处理', integral: '积分', concept: '概念不清', careless: '粗心', other: '其他' };
+    var topErr = Store.weekTopMistakes();
+    var dueN = 0;
+    try { dueN = AiMemory.dueBacklog(); } catch (e) { }
+    var weak = (s.weaknessProfile && s.weaknessProfile.weakAreas) ? s.weaknessProfile.weakAreas.slice(0, 2) : [];
     return '【考生实时状态】\n'
       + '当前页面：' + (PAGE_NAMES[App.current] || App.current) + ' | 距考试：' + U.daysTo(s.settings.examDate) + '天\n'
       + '今日任务：' + done + '/' + total + ' 完成' + (undone.length ? ' | 未完成：' + undone.join('；') : '') + '\n'
       + '今日时长：' + Store.todayHours() + 'h | 本周日均：' + U.round1(U.sum(Store.weekHours()) / 7) + 'h\n'
       + '数学正确率：' + (acc != null ? acc + '%' : '未录入') + ' | 目标院校：' + (s.settings.targetSchool === 'undecided' ? '未定' : s.settings.targetSchool) + '\n'
+      + ((topErr && topErr.length) ? '本周主要错误：' + (errTypeMap[topErr[0].key] || topErr[0].key) + '（' + topErr[0].count + '次）\n' : '')
+      + (dueN > 0 ? '到期复习：' + dueN + ' 项待清\n' : '')
+      + (weak.length ? '拍题薄弱点：' + weak.join('、') + '\n' : '')
       + (lastMental ? '最近心情：' + lastMental.mood + '/10（' + lastMental.date + '）\n' : '');
   }
 
@@ -12943,8 +13583,11 @@ function bind(el, next) {
       + '\n' + snapshot()
       + '\n【动作协议】必要时你可以在回复末尾附一个动作（每回复最多1个），系统会渲染成可点按钮：'
       + '加任务 [[ACTION:{"type":"addTask","subject":"math|ctrl|eng|pol","text":"任务内容"}]]；'
-      + '跳转页面 [[ACTION:{"type":"goto","tab":"页面id","label":"按钮文字"}]]（可选tab：' + Object.keys(PAGE_NAMES).join('/') + '）。'
+      + '跳转页面 [[ACTION:{"type":"goto","tab":"页面id","label":"按钮文字"}]]（可选tab：' + Object.keys(PAGE_NAMES).join('/') + '）；'
+      + '一键排今日计划 [[ACTION:{"type":"planDay","tasks":[{"subject":"math|ctrl|eng|pol","text":"..."}]}]]（最多8条）。'
+      + '当用户要求“排今天/排满/给我计划”时，用 planDay 一次性给出当日任务清单并排好优先级，而不是逐条 addTask。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
+      + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
       + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。';
   }
 
@@ -12982,12 +13625,16 @@ function bind(el, next) {
         if (a && a.type) out.push(a);
       } catch (e) { }
     }
-    return out.slice(0, 2);
+    // planDay 优先且独占（最多1个）；否则最多2个普通动作
+    var plan = out.filter(function (a) { return a.type === 'planDay' && a.tasks && a.tasks.length; });
+    if (plan.length) return plan.slice(0, 1);
+    return out.filter(function (a) { return a.type !== 'planDay'; }).slice(0, 2);
   }
 
   function actionLabel(a) {
     if (a.type === 'goto') return a.label || ('→ 去' + (PAGE_NAMES[a.tab] || a.tab));
     if (a.type === 'addTask') return '＋ 添加任务：' + (a.text || '').slice(0, 14) + ((a.text || '').length > 14 ? '…' : '');
+    if (a.type === 'planDay') return '＋ 一键排入今日 ' + ((a.tasks || []).length) + ' 项计划';
     return a.label || '执行';
   }
 
@@ -13007,7 +13654,59 @@ function bind(el, next) {
       btn.disabled = true;
       Toast.show('已加入今日任务', 'success');
       if (App.current === 'dashboard' || App.current === 'scheduler') App.refresh();
+    } else if (a.type === 'planDay' && a.tasks && a.tasks.length) {
+      planDayPreview(a.tasks, btn);
     }
+  }
+
+  // planDay：弹预览清单（可勾选/全选）→ 确认后批量新增到今日任务（只增不删）
+  var SUBJ_CN = { math: '数学', ctrl: '专业课', eng: '英语', pol: '政治' };
+  function planDayPreview(tasks, btn) {
+    var list = tasks.filter(function (t) { return t && t.text; }).slice(0, 8);
+    if (!list.length) return;
+    var rows = list.map(function (t, i) {
+      var subj = SUBJ_CN[t.subject] ? t.subject : 'math';
+      return '<label class="cp-plan-row"><input type="checkbox" class="cp-plan-ck" data-i="' + i + '" data-subj="' + subj + '" checked>'
+        + '<span class="cp-plan-subj">' + SUBJ_CN[subj] + '</span>'
+        + '<span class="cp-plan-txt">' + U.esc(t.text) + '</span></label>';
+    }).join('');
+    Modal.open({
+      title: '🗓️ 一键排入今日计划',
+      html: '<p class="muted-sm">勾选要加入的任务（只新增，不会删除你已有的任务）：</p>'
+        + '<div class="cp-plan-list">' + rows + '</div>',
+      actions: [
+        { label: '取消', kind: 'btn-ghost' },
+        {
+          label: '全部加入', kind: 'btn-ghost', onClick: function (c) {
+            var ov = document.getElementById('modal-overlay');
+            if (ov) ov.querySelectorAll('.cp-plan-ck').forEach(function (ck) { ck.checked = true; });
+          }
+        },
+        {
+          label: '确认排入', kind: 'btn-primary', onClick: function (c) {
+            var ov = document.getElementById('modal-overlay');
+            var picks = [];
+            if (ov) ov.querySelectorAll('.cp-plan-ck').forEach(function (ck) {
+              if (ck.checked) { var t = list[+ck.getAttribute('data-i')]; if (t) picks.push({ subject: ck.getAttribute('data-subj'), text: t.text }); }
+            });
+            c();
+            if (!picks.length) { Toast.show('未选任何任务', 'warn'); return; }
+            var now = new Date().toISOString();
+            Store.update(function (s) {
+              var maxOrder = 0;
+              s.tasks.forEach(function (t) { if (t.order != null && t.order > maxOrder) maxOrder = t.order; });
+              picks.forEach(function (p) {
+                s.tasks.push({ id: U.uid(), subject: p.subject || 'math', text: p.text, done: false, createdAt: now, updatedAt: now, order: ++maxOrder });
+              });
+            });
+            AiMemory.recordEvent('AI教练生成今日计划', picks.length + '项');
+            if (btn) { btn.textContent = '✓ 已排入 ' + picks.length + ' 项'; btn.disabled = true; }
+            Toast.show('已排入 ' + picks.length + ' 项今日任务', 'success');
+            if (App.current === 'dashboard' || App.current === 'scheduler') App.refresh();
+          }
+        }
+      ]
+    });
   }
 
   // ---------- 面板 DOM ----------
@@ -13146,6 +13845,7 @@ function bind(el, next) {
     hasGreeted = true;
     document.getElementById('copilot-panel').classList.add('cp-open');
     document.getElementById('copilot-fab').classList.add('cp-hide');
+    document.getElementById('copilot-fab').classList.remove('cp-dot');
     document.body.classList.add('cp-lock');
     memBadge();
     quickChips();
@@ -13211,7 +13911,43 @@ function bind(el, next) {
         box.appendChild(row);
         box.scrollTop = box.scrollHeight;
       }
+    } else {
+      // 面板关闭时在悬浮球上标未读小红点，下次打开清除
+      var fab = document.getElementById('copilot-fab');
+      if (fab) fab.classList.add('cp-dot');
     }
+  }
+
+  // ---------- 主动督学（可开关 + 可切换智能程度，每日至多一次）----------
+  function superviseCheck() {
+    try {
+      var s = Store.get();
+      var mode = (s.ai && s.ai.superviseMode) || 'coach';
+      if (mode === 'off') return;
+      var today = U.dkey();
+      if (s.ai.lastSupervise && s.ai.lastSupervise.date === today) return; // 节流：每日至多一次
+      var sug = AiMemory.superviseSuggestion();
+      var save = function (key) { Store.update(function (x) { x.ai.lastSupervise = { date: today, key: key }; }); };
+      if (mode === 'coach') {
+        if (!sug) return; // 本地规则无触发点 → 不打扰
+        if (AI.configured()) {
+          var payload = '（系统指令：现在主动督学。基于【督学要点】和考生实时数据，用教练口吻说一句督促的话，≤60字，直给、犀利、可执行，不要问候、不要解释原因。）\n【督学要点】' + sug.preset;
+          AI.chatStream(systemPrompt(), payload, null).then(function (full) {
+            pushAssistant(full && full.trim() ? full : sug.preset);
+            save(sug.key);
+          }).catch(function () { pushAssistant(sug.preset); save(sug.key); });
+        } else {
+          pushAssistant(sug.preset);
+          save(sug.key);
+        }
+      } else if (mode === 'ai') {
+        if (!AI.configured()) return;
+        var payload2 = '（系统指令：现在主动督学。基于考生实时数据与长期记忆，指出此刻他最该被督促去做的一件事，≤60字，直给可执行，可在末尾附一个动作按钮。）';
+        AI.chatStream(systemPrompt(), payload2, null).then(function (full) {
+          if (full && full.trim()) { pushAssistant(full); save(sug ? sug.key : 'ai-daily'); }
+        }).catch(function () { });
+      }
+    } catch (e) { /* 静默 */ }
   }
 
   // ---------- 发送与流式回复 ----------
@@ -13290,6 +14026,7 @@ function bind(el, next) {
     close: close,
     mount: mount,
     pushAssistant: pushAssistant,
+    superviseCheck: superviseCheck,
     get isOpen() { return isOpen; }
   };
 })();
@@ -14195,6 +14932,13 @@ function bind(el, next) {
       if (Onboarding.needed()) Onboarding.show();
     });
     setTimeout(() => Alerts.runDailyChecks(), 800);
+    // 数据就绪后：主动督学（每日至多一次）+ 每周记忆巩固（≥7天一次，静默）
+    cloudReady.then(function () {
+      setTimeout(function () {
+        try { if (window.Copilot) Copilot.superviseCheck(); } catch (e) { }
+        try { if (window.AiMemory && AiMemory.consolidateDue()) AiMemory.weeklyConsolidate(); } catch (e) { }
+      }, 1200);
+    }).catch(function () { });
   }
   };
 
