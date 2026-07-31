@@ -365,12 +365,40 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 .fatigue-pop .btn-ghost { color: #fff; border-color: #595959; }
 
 /* ---------- 概念图谱 ---------- */
-.cm-scroll { overflow-x: auto; }
-.cm-node { transition: opacity 120ms; }
+.cm-scroll { overflow: visible; position: relative; }
+.cm-zoom-bar { display: flex; align-items: center; gap: 4px; padding: 6px 10px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn);
+  position: absolute; top: 8px; right: 8px; z-index: 5; font-size: 12px; user-select: none; }
+.cm-zoom-bar .btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; min-width: auto; }
+.cm-zoom-bar span { min-width: 42px; text-align: center; font-weight: 500; color: var(--text-secondary); }
+.cm-node { transition: opacity 120ms; cursor: pointer; }
 .cm-node:hover { opacity: .8; }
+.cm-dim { opacity: .18; }
 .gloss-row { display: flex; gap: 8px; font-size: 13px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
 .gloss-eng { font-weight: 500; min-width: 90px; }
 .gloss-arrow { color: var(--text-muted); }
+/* 掌握率进度条 */
+.cm-bar { height: 6px; background: var(--surface-muted); border-radius: 3px; overflow: hidden; margin: 4px 0 6px; }
+.cm-bar-in { height: 100%; background: var(--text-primary); transition: width 300ms; }
+/* AI 讲解块 */
+.cm-ai { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 10px 12px; margin-top: 10px; }
+.cm-ai-h { font-size: 12px; font-weight: 500; color: var(--text-muted); margin: 8px 0 4px; }
+.cm-ai-h:first-child { margin-top: 0; }
+.cm-ai-b { font-size: 13px; line-height: 1.7; }
+.cm-ai-l { font-size: 13px; line-height: 1.7; padding-left: 20px; }
+.cm-ai-trap { color: var(--danger); }
+.cm-ai-key { margin-top: 10px; padding: 8px 10px; background: var(--surface-muted); border-radius: var(--r-tag); font-size: 13px; }
+/* AI 速测题 */
+.cm-q { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.cm-q:last-of-type { border-bottom: none; }
+.cm-q-t { font-size: 13px; line-height: 1.7; }
+.cm-q-a { margin-top: 6px; padding: 8px 10px; background: var(--surface-muted); border-radius: var(--r-tag); font-size: 13px; line-height: 1.7; }
+/* AI 攻克路线 */
+.cm-path-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 13px; cursor: pointer; }
+.cm-path-row:last-of-type { border-bottom: none; }
+.cm-path-no { width: 20px; height: 20px; flex: 0 0 20px; border-radius: 50%; background: var(--text-primary); color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; }
+.cm-path-name { font-weight: 500; min-width: 76px; }
+.cm-path-why { color: var(--text-secondary); flex: 1; font-size: 12px; }
 
 /* ---------- 决策 ---------- */
 .sch-row { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 12px; margin-bottom: 8px; }
@@ -879,6 +907,12 @@ body.cp-lock { overflow: hidden; }
 .pr-filter { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
 .input-sm { padding: 4px 8px; font-size: 13px; flex: 1; min-width: 88px; }
 .pr-duelist { margin-top: 8px; }
+
+/* ---------- SVG 图示渲染（AI 出题 / 每日一题等需要图形演示的题目） ---------- */
+.dgm-wrap { margin: 10px 0; padding: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); overflow-x: auto; text-align: center; }
+.dgm-wrap svg { max-width: 100%; height: auto; display: inline-block; }
+.dgm-code { margin: 10px 0; }
+.dgm-code pre.report { margin: 0; max-height: 220px; }
 .pr-dueitem { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-btn); margin-bottom: 6px; background: var(--surface); }
 .pr-duetext { flex: 1; font-size: 13px; line-height: 1.5; }
 .pr-hint { margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: var(--r-btn); font-size: 13px; color: var(--text-secondary); background: var(--surface); line-height: 1.7; }
@@ -952,6 +986,42 @@ body.cp-lock { overflow: hidden; }
 .rvd-click:hover { outline: 1px solid var(--text-primary); }
 .rvd-stage-done { background: var(--ok); color: #fff; border-radius: 99px; padding: 1px 7px; }
 .rvd-stage-due { background: #fff1f0; color: var(--danger); border: 1px solid var(--danger); border-radius: 99px; padding: 0 6px; }
+
+/* AI 图示（SVG）容器 */
+.dgm-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  margin: 10px 0;
+  padding: 10px 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+}
+.dgm-wrap svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.dgm-code {
+  margin: 10px 0;
+}
+.dgm-code pre {
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.dgm-err {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--danger);
+  background: #fff1f0;
+  border-radius: var(--r-btn);
+  margin-bottom: 6px;
+}
+.dgm-fallback { border-style: dashed; opacity: 0.85; }
 
 </style>
 </head>
@@ -1658,6 +1728,13 @@ body.cp-lock { overflow: hidden; }
       deepReview: null,            // 深度复盘持久化 {week, snap, reasoning, output, status, running, generatedAt} —— 切页面/刷新后保留，避免阻塞式重生成
       weekPlan: null,              // AI 周计划 {start:'YYYY-MM-DD', strategy, days:[{date,focus,items:[{subject,text}],landed}], generatedAt}（7天一周期，过期重新生成）
       majorData: {},               // AI生成的专业数据缓存 { profName: { modules, topics, conceptGraph, ... } }
+      // ---- 概念图谱 AI 增强层 ----
+      conceptAI: {
+        nodes: {},                 // nodeId -> {explain:{core,exam,steps,traps,link,mnemonic,at}, gloss:[[口语,学术]...], quiz:{items:[{q,a}],at}}
+        extra: [],                 // AI 拆分出的子考点节点 [{id,name,x,y,deps,book,glossary,why,major,ai:true,createdAt}]
+        path: null,                // AI 攻克路线 {major, strategy, order:[{id,name,days,reason}], at}
+        updatedAt: ''
+      },
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false,
         examConfig: { mathType: 'shuyi', engType: 'yingyi', profName: '自控原理' },
         // ---- 以下字段均可被 AI/用户改写，原为代码内硬编码规则 ----
@@ -3809,6 +3886,96 @@ body.cp-lock { overflow: hidden; }
 })();
 
 
+/* ===== js/core/diagram.js ===== */
+// 图示渲染器：纯 SVG 管线（完全内置，无任何 CDN / 外部依赖，离线可用）
+// 策略：
+//   1) AI 输出 SVG 代码（可带 ```svg 围栏）→ 安全解析（剔除脚本/事件属性）→ 响应式插入
+//   2) 无法识别的内容 → 降级为转义代码块显示原文
+// 说明：已移除 Mermaid CDN 与 geoplot 语义化渲染器，图示统一由 AI 直接产出 SVG。
+(function () {
+  // ── 围栏剥离 ──
+  function stripFence(s) {
+    if (!s) return '';
+    s = String(s).trim();
+    var m = s.match(/^```(\w*)\s*([\s\S]*?)```$/i);
+    if (m) return { lang: (m[1] || '').toLowerCase(), code: m[2].trim() };
+    m = s.match(/```(\w*)\s*\n([\s\S]*?)```/);
+    if (m) return { lang: (m[1] || '').toLowerCase(), code: m[2].trim() };
+    return { lang: '', code: s };
+  }
+
+  // ── SVG 安全解析 ──
+  function sanitizeSvg(svgText) {
+    var text = String(svgText);
+    if (!/xmlns=/.test(text)) {
+      text = text.replace(/<svg/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    var doc;
+    try { doc = new DOMParser().parseFromString(text, 'image/svg+xml'); }
+    catch (e) { return null; }
+    if (!doc || doc.getElementsByTagName('parsererror').length) return null;
+    var svg = doc.documentElement;
+    if (!svg || svg.nodeName.toLowerCase() !== 'svg') return null;
+
+    var bad = svg.querySelectorAll('script, foreignObject, iframe, object, embed, link, meta');
+    for (var i = 0; i < bad.length; i++) { if (bad[i].parentNode) bad[i].parentNode.removeChild(bad[i]); }
+
+    var nodes = [svg].concat(Array.prototype.slice.call(svg.getElementsByTagName('*')));
+    for (var n = 0; n < nodes.length; n++) {
+      var node = nodes[n];
+      for (var a = node.attributes.length - 1; a >= 0; a--) {
+        var name = node.attributes[a].name;
+        var val = node.attributes[a].value || '';
+        if (/^on/i.test(name) ||
+            (/^(xlink:)?href$/i.test(name) && /^\s*javascript:/i.test(val)) ||
+            (name.toLowerCase() === 'style' && /javascript:|expression\s*\(/i.test(val))) {
+          node.removeAttribute(name);
+        }
+      }
+    }
+
+    if (svg.getAttribute('viewBox')) {
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+      svg.setAttribute('width', '100%');
+      if (!svg.getAttribute('preserveAspectRatio')) svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    } else if (!svg.getAttribute('width')) {
+      svg.setAttribute('width', '280');
+    }
+    svg.setAttribute('overflow', 'visible');
+    return new XMLSerializer().serializeToString(svg);
+  }
+
+  // ── 主渲染入口（同步，返回 HTML 字符串） ──
+  function render(raw) {
+    // 兼容历史数据：diagram 若为对象（旧 geoplot 格式）则无法渲染，直接忽略
+    if (raw && typeof raw === 'object') return '';
+
+    var fenced = stripFence(raw);
+    var src = fenced.code;
+    if (!src) return '';
+
+    // 路径 A：SVG（围栏语言=svg / 内容含 <svg 标签）
+    if (fenced.lang === 'svg' || src.toLowerCase().indexOf('<svg') >= 0) {
+      var clean = sanitizeSvg(src);
+      if (clean) return '<div class="dgm-wrap">' + clean + '</div>';
+    }
+
+    // 路径 B：无法识别 → 代码块降级
+    return '<div class="dgm-code"><pre class="report">' + U.esc(src) + '</pre></div>';
+  }
+
+  // renderSync 与 render 等价（保留以兼容既有调用点）
+  function renderSync(raw) { return render(raw); }
+
+  window.Diagram = {
+    render: render,
+    renderSync: renderSync,
+    sanitizeSvg: sanitizeSvg
+  };
+})();
+
+
 /* ===== js/core/components.js ===== */
 /* ============================================================
  * components.js — Toast 通知 / Modal 弹窗 / 通用表单弹窗
@@ -3954,8 +4121,26 @@ body.cp-lock { overflow: hidden; }
       '必须只输出 JSON，不要任何多余文字、不要markdown代码块。格式：' +
       '{"stem":"题干（公式用纯文本，如 ∫(0到1) x dx）","type":"choice|solve",' +
       '"options":["A. ...","B. ...","C. ...","D. ..."](仅choice需要),"answer":"标准答案",' +
-      '"solution":"分步详解（标出关键步骤）","trap":"本题最易踩的坑（符号/分母/积分因子/概念）"}。' +
-      '题目必须贴合考研难度，层级越高越综合。';
+      '"solution":"分步详解（标出关键步骤）","trap":"本题最易踩的坑（符号/分母/积分因子/概念）",' +
+      '"diagram":"题目需要配图时输出一段 SVG 代码字符串（不需要图时填 \"\"）。只能用 SVG，不要用 Mermaid 或其他语法。\\n' +
+      '硬性画法规范（务必遵守，否则图会很难看）：\\n' +
+      '1) 根标签必须为 <svg xmlns=\\\\"http://www.w3.org/2000/svg\\\\" viewBox=\\\\"0 0 320 240\\\\">，所有元素坐标必须落在 viewBox 内并留 20px 以上边距。\\n' +
+      '2) 建坐标系时统一取原点像素 O=(40,200)，x 正方向向右、y 正方向向上（即逻辑点 (a,b) → 像素 (40+a*S, 200-b*S)，S 为每单位像素数，自行选 S 使图形占满画布且不越界）。先把每个关键点的像素值算出来再写，不要凭感觉写坐标。\\n' +
+      '3) 坐标轴用 stroke=\\\\"#999\\\\" stroke-width=\\\\"1\\\\" 的直线，末端加小三角箭头；轴末标 x / y，原点标 O。\\n' +
+      '4) 阴影区域用 <polygon> 或 <path>，fill=\\\\"#4a90d9\\\\" fill-opacity=\\\\"0.18\\\\" stroke=\\\\"#2c6cb0\\\\" stroke-width=\\\\"1.5\\\\"。\\n' +
+      '5) 曲线用 <path d=\\\\"M ... L ...\\\\">，按函数在 8~20 个采样点上真实算出坐标再连线，禁止随手写贝塞尔。\\n' +
+      '6) 所有 <text> 用 font-size=\\\\"12\\\\" 或 13，短标签（如 (1,0)、x+y=1、区域D），文字必须避开线条且不出界。\\n' +
+      '示例（区域 D：x≥0, y≥0, x+y≤1，取 S=160）：\\n' +
+      '<svg xmlns=\\\\"http://www.w3.org/2000/svg\\\\" viewBox=\\\\"0 0 320 240\\\\">' +
+      '<line x1=\\\\"40\\\\" y1=\\\\"200\\\\" x2=\\\\"290\\\\" y2=\\\\"200\\\\" stroke=\\\\"#999\\\\" stroke-width=\\\\"1\\\\"/><polygon points=\\\\"290,200 282,196 282,204\\\\" fill=\\\\"#999\\\\"/>' +
+      '<line x1=\\\\"40\\\\" y1=\\\\"200\\\\" x2=\\\\"40\\\\" y2=\\\\"20\\\\" stroke=\\\\"#999\\\\" stroke-width=\\\\"1\\\\"/><polygon points=\\\\"40,20 36,28 44,28\\\\" fill=\\\\"#999\\\\"/>' +
+      '<polygon points=\\\\"40,200 200,200 40,40\\\\" fill=\\\\"#4a90d9\\\\" fill-opacity=\\\\"0.18\\\\" stroke=\\\\"#2c6cb0\\\\" stroke-width=\\\\"1.5\\\\"/>' +
+      '<text x=\\\\"294\\\\" y=\\\\"204\\\\" font-size=\\\\"12\\\\">x</text><text x=\\\\"32\\\\" y=\\\\"18\\\\" font-size=\\\\"12\\\\">y</text><text x=\\\\"26\\\\" y=\\\\"214\\\\" font-size=\\\\"12\\\\">O</text>' +
+      '<text x=\\\\"196\\\\" y=\\\\"216\\\\" font-size=\\\\"12\\\\">(1,0)</text><text x=\\\\"10\\\\" y=\\\\"40\\\\" font-size=\\\\"12\\\\">(0,1)</text>' +
+      '<text x=\\\\"88\\\\" y=\\\\"160\\\\" font-size=\\\\"13\\\\" fill=\\\\"#2c6cb0\\\\">区域 D</text>' +
+      '<text x=\\\\"150\\\\" y=\\\\"96\\\\" font-size=\\\\"12\\\\" fill=\\\\"#e67e22\\\\">x+y=1</text></svg>\\n' +
+      '流程/框图类题目同样用 SVG 画（矩形 + 箭头 + 文字），不要输出 Mermaid。"}' +
+      '题目必须贴合考研难度，层级越高越综合。diagram 仅作辅助，可留空。';
   }
 
   const JUDGE_PROMPT =
@@ -4339,13 +4524,83 @@ body.cp-lock { overflow: hidden; }
       .then(txt => extractRobustJSON(txt));
   }
 
+  // ── JSON 安全修复：逐字符扫描，只在「字符串外」做替换 ──
+  // 关键：绝不能全局把 ' 换成 "，否则英文例句里的 don't / it's / Tom's 会直接炸掉 JSON
+  //（单词本拍照识别几乎每次例句都带撇号，这曾是「返回JSON格式错误」的主因）
+  function repairJsonSafely(s) {
+    var out = '', quote = '', esc = false;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (quote) {                                  // ── 字符串内部 ──
+        if (esc) { out += c; esc = false; continue; }
+        if (c === '\\') { out += c; esc = true; continue; }
+        if (c === quote) { quote = ''; out += '"'; continue; }
+        if (c === '"') { out += '\\"'; continue; }  // 单/中文引号串内的裸双引号需转义
+        if (c === '\n') { out += '\\n'; continue; } // 裸换行 → 转义（AI 常见错误）
+        if (c === '\r') { out += '\\r'; continue; }
+        if (c === '\t') { out += '\\t'; continue; }
+        if (c < ' ') continue;                      // 其余控制字符丢弃
+        out += c; continue;
+      }
+      // ── 字符串外部 ──
+      if (c === '"') { quote = '"'; out += '"'; continue; }
+      if (c === "'") { quote = "'"; out += '"'; continue; }            // 单引号字符串
+      if (c === '\u201C') { quote = '\u201D'; out += '"'; continue; }  // 中文“ ”
+      if (c === '/' && s.charAt(i + 1) === '/') { while (i < s.length && s.charAt(i) !== '\n') i++; continue; }
+      if (c === '/' && s.charAt(i + 1) === '*') { i += 2; while (i + 1 < s.length && !(s.charAt(i) === '*' && s.charAt(i + 1) === '/')) i++; i++; continue; }
+      out += c;
+    }
+    if (quote) out += '"';                          // 补上被截断的收尾引号
+    return out.replace(/,\s*([}\]])/g, '$1');       // 去尾逗号
+  }
+
+  // ── 数组截断抢救：逐个抽取顶层完整 {...}，能解析几个算几个 ──
+  // AI 输出被 max_tokens 截断时（单词本一次要 10+ 词条最常见），
+  // 整体 JSON 必然缺 ]，但前面的词条其实都是完整可用的，不该整批丢弃。
+  function salvageObjects(s) {
+    var items = [], i = 0, n = s.length;
+    while (i < n) {
+      if (s.charAt(i) !== '{') { i++; continue; }
+      var depth = 0, inStr = false, esc = false, end = -1;
+      for (var j = i; j < n; j++) {
+        var c = s.charAt(j);
+        if (inStr) {
+          if (esc) { esc = false; continue; }
+          if (c === '\\') { esc = true; continue; }
+          if (c === '"') inStr = false;
+          continue;
+        }
+        if (c === '"') { inStr = true; continue; }
+        if (c === '{') depth++;
+        else if (c === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
+      }
+      if (end < 0) break;                    // 尾部是被截断的半个对象 → 丢弃
+      var piece = s.slice(i, end), o = null;
+      try { o = JSON.parse(piece); } catch (e) {
+        try { o = JSON.parse(repairJsonSafely(piece)); } catch (e2) { o = null; }
+      }
+      if (o && typeof o === 'object') items.push(o);
+      i = end;
+    }
+    return items;
+  }
+
   // 通用稳健 JSON 提取器（供 chatJSON 和各模块复用）
   function extractRobustJSON(raw) {
-    var str = (raw || '').trim();
+    var str = String(raw == null ? '' : raw).replace(/^\uFEFF/, '');
+    str = str.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();   // 剥掉推理模型的思考块
 
-    // 第 1 层：markdown 代码块
-    var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (m) { try { return JSON.parse(m[1].trim()); } catch (e) {} }
+    // 第 1 层：markdown 代码块（取最长的一块，避免命中回复里的小示例）
+    var best = null, reFence = /```(?:json|JSON)?\s*([\s\S]*?)```/g, mf;
+    while ((mf = reFence.exec(str)) !== null) {
+      if (!best || mf[1].length > best.length) best = mf[1];
+    }
+    if (best) {
+      var t = best.trim();
+      try { return JSON.parse(t); } catch (e) {}
+      try { return JSON.parse(repairJsonSafely(t)); } catch (e) {}
+      str = t;   // 后续各层在代码块内容上继续尝试（去掉围栏与解说文字干扰）
+    }
 
     // 第 2 层：括号计数找最外层 [{...}] 或 {...}
     var start = -1;
@@ -4366,22 +4621,24 @@ body.cp-lock { overflow: hidden; }
       if (c === openChar) depth++;
       else if (c === closeChar) { depth--; if (depth === 0) { end = j + 1; break; } }
     }
-    if (end <= start) throw new Error('AI返回的JSON不完整');
 
-    var jsonStr = str.slice(start, end);
+    if (end > start) {
+      var jsonStr = str.slice(start, end);
+      // 第 3 层：直接解析
+      try { return JSON.parse(jsonStr); } catch (e) {}
+      // 第 4 层：安全修复后重试（不破坏 don't / it's 这类撇号）
+      try { return JSON.parse(repairJsonSafely(jsonStr)); } catch (e) {}
+    }
 
-    // 第 3 层：直接解析
-    try { return JSON.parse(jsonStr); } catch (e) {}
+    // 第 5 层：数组元素级抢救（截断 / 中间某条格式坏掉 都能救回其余部分）
+    var salvaged = salvageObjects(str.slice(start));
+    if (salvaged.length) {
+      if (isArr) return salvaged;
+      if (salvaged.length === 1) return salvaged[0];
+      return salvaged;
+    }
 
-    // 第 4 层：修复常见格式问题后重试
-    var repaired = jsonStr
-      .replace(/\/\/[^\n]*/g, '')          // 去单行注释
-      .replace(/\/\*[\s\S]*?\*\//g, '')     // 去块注释
-      .replace(/,\s*([}\]])/g, '$1')        // 去尾逗号
-      .replace(/'/g, '"');                  // 单引号→双引号
-    try { return JSON.parse(repaired); } catch (e) {}
-
-    // 第 5 层（终极兜底）：正则逐字段捞值，构造对象
+    // 第 6 层（终极兜底）：正则逐字段捞值，构造对象
     if (!isArr) {
       var fields = {};
       var patterns = [
@@ -4406,7 +4663,7 @@ body.cp-lock { overflow: hidden; }
       if (fields.w || fields.word || fields.question) return fields;
     }
 
-    throw new Error('AI未返回有效JSON（已尝试5层提取均失败）。原始回复前200字：' + str.slice(0, 200));
+    throw new Error('AI未返回有效JSON（已尝试6层提取均失败）。原始回复前200字：' + str.slice(0, 200));
   }
 
   // 流式单接口一次请求（_noKwArgs：400 时的极简重试模式，此时非流式、整体返回）
@@ -4520,6 +4777,8 @@ body.cp-lock { overflow: hidden; }
     useThinking() { return Store.get().ai.thinkingMode === true; },
     // 通用稳健 JSON 提取器（供各模块复用）
     extractRobustJSON,
+    // JSON 安全修复（只在字符串外替换，不破坏 don't / it's 撇号）+ 截断抢救
+    repairJsonSafely, salvageObjects,
     // 动态出题提示词：每次访问按当前专业课生成（getter 保证换专业后即时生效）
     get QUIZ_PROMPT() { return quizPrompt(); },
     // 深度复盘系统提示词：基于打包的「学习进度全景快照」做结构化深度分析
@@ -5432,7 +5691,8 @@ body.cp-lock { overflow: hidden; }
     if (dq && dq.date === today && dq.question) {
       // 今日已生成：作答模式（解答默认折叠，自评回写）
       var subj = DB.SUBJECTS[dq.subject] || { short: '题', color: '#666' };
-      var body = '<div class="pm-question"><b>📝 ' + subj.short + '题：</b>' + renderMathSafe(dq.question) + '</div>';
+      var body = '<div class="pm-question"><b>📝 ' + subj.short + '题：</b>' + renderMathSafe(dq.question) + '</div>'
+        + (dq.diagram && window.Diagram ? Diagram.render(dq.diagram) : '');
       if (dq.selfEval === 'known') {
         body += '<div class="pm-ai-section"><b>🔑 解答：</b><div class="pm-ai-body">' + renderMathSafe(dq.solution || '') + '</div></div>'
           + (dq.trap ? '<div class="pm-ai-section"><b>⚠️ 易错点：</b><div class="pm-ai-body">' + renderMathSafe(dq.trap) + '</div></div>' : '')
@@ -5547,8 +5807,25 @@ body.cp-lock { overflow: hidden; }
       + '{"subject":"math|ctrl|eng|pol（该题目所属科目）",'
       + '"question":"完整题干（数学表达式用 LaTeX 如 \\frac{a}{b}、\\sqrt{x}、x^{2}、\\int、\\sum）",'
       + '"solution":"详细解答步骤（分步，含关键公式推导，LaTeX 格式）",'
-      + '"trap":"本题最易踩的坑（与考生薄弱点对应）"}'
-      + '要求：question 必须可独立作答；solution 自洽；trap 要点中考生该补的短板。';
+      + '"trap":"本题最易踩的坑（与考生薄弱点对应）",'
+      + '"diagram":"题目需要配图时输出一段 SVG 代码字符串（不需要图时填 \"\"）。只能用 SVG，不要用 Mermaid 或其他语法。\\n' +
+      '硬性画法规范：\\n' +
+      '1) 根标签必须为 <svg xmlns=\\\\"http://www.w3.org/2000/svg\\\\" viewBox=\\\\"0 0 320 240\\\\">，元素坐标须落在 viewBox 内并留 20px 边距。\\n' +
+      '2) 坐标系统一取原点像素 O=(40,200)，逻辑点 (a,b) → 像素 (40+a*S, 200-b*S)，S 自选使图形占满画布且不越界。关键点像素值请先算后写。\\n' +
+      '3) 坐标轴 stroke=\\\\"#999\\\\" stroke-width=\\\\"1\\\\"，末端加小三角箭头，标 x / y / O。\\n' +
+      '4) 阴影区域用 <polygon> 或 <path>，fill=\\\\"#4a90d9\\\\" fill-opacity=\\\\"0.18\\\\" stroke=\\\\"#2c6cb0\\\\" stroke-width=\\\\"1.5\\\\"。\\n' +
+      '5) 曲线用 <path d=\\\\"M ... L ...\\\\">，按函数在 8~20 个采样点上真实算出坐标再连线。\\n' +
+      '6) <text> 用 font-size=\\\\"12\\\\" 或 13，短标签，避开线条且不出界。\\n' +
+      '示例（区域 D：x≥0, y≥0, x+y≤1，S=160）：\\n' +
+      '<svg xmlns=\\\\"http://www.w3.org/2000/svg\\\\" viewBox=\\\\"0 0 320 240\\\\">' +
+      '<line x1=\\\\"40\\\\" y1=\\\\"200\\\\" x2=\\\\"290\\\\" y2=\\\\"200\\\\" stroke=\\\\"#999\\\\" stroke-width=\\\\"1\\\\"/><polygon points=\\\\"290,200 282,196 282,204\\\\" fill=\\\\"#999\\\\"/>' +
+      '<line x1=\\\\"40\\\\" y1=\\\\"200\\\\" x2=\\\\"40\\\\" y2=\\\\"20\\\\" stroke=\\\\"#999\\\\" stroke-width=\\\\"1\\\\"/><polygon points=\\\\"40,20 36,28 44,28\\\\" fill=\\\\"#999\\\\"/>' +
+      '<polygon points=\\\\"40,200 200,200 40,40\\\\" fill=\\\\"#4a90d9\\\\" fill-opacity=\\\\"0.18\\\\" stroke=\\\\"#2c6cb0\\\\" stroke-width=\\\\"1.5\\\\"/>' +
+      '<text x=\\\\"294\\\\" y=\\\\"204\\\\" font-size=\\\\"12\\\\">x</text><text x=\\\\"32\\\\" y=\\\\"18\\\\" font-size=\\\\"12\\\\">y</text><text x=\\\\"26\\\\" y=\\\\"214\\\\" font-size=\\\\"12\\\\">O</text>' +
+      '<text x=\\\\"196\\\\" y=\\\\"216\\\\" font-size=\\\\"12\\\\">(1,0)</text><text x=\\\\"10\\\\" y=\\\\"40\\\\" font-size=\\\\"12\\\\">(0,1)</text>' +
+      '<text x=\\\\"88\\\\" y=\\\\"160\\\\" font-size=\\\\"13\\\\" fill=\\\\"#2c6cb0\\\\">区域 D</text></svg>\\n' +
+      '流程/框图类题目同样用 SVG 画（矩形+箭头+文字），不要输出 Mermaid。"}'
+      + '要求：question 必须可独立作答；solution 自洽；trap 要点中考生该补的短板；diagram 仅辅助可留空。';
 
     var userPrompt = ctx + '\n\n请出今日针对性练习一题。';
 
@@ -5563,7 +5840,7 @@ body.cp-lock { overflow: hidden; }
           .replace(/^\s*"question"\s*:\s*"/i, '')
           .replace(/",\s*solution"\s*:.*/s, '');               // 截断到 question 尾
         cleaned = cleaned.trim().replace(/\n+$/, '');
-        res = { subject: chosenSubject || 'math', question: cleaned || fullText, solution: '', trap: '' };
+        res = { subject: chosenSubject || 'math', question: cleaned || fullText, solution: '', trap: '', diagram: '' };
       }
       Store.update(function (st) {
         var prev = st.dailyQuiz;
@@ -5582,6 +5859,7 @@ body.cp-lock { overflow: hidden; }
           question: res.question || '',
           solution: res.solution || '',
           trap: res.trap || '',
+          diagram: res.diagram || '',
           generatedAt: new Date().toISOString()
         };
       });
@@ -5596,13 +5874,27 @@ body.cp-lock { overflow: hidden; }
     });
   }
 
+  // 解析每日一题 JSON，但图示字段不走 LaTeX 修复（先保护 diagram 再修复文本，避免误伤 SVG）
+  function parseDailyJson(s) {
+    var obj = JSON.parse(s);
+    if (obj && typeof obj === 'object' && obj.hasOwnProperty('diagram')) {
+      var d = obj.diagram;            // 取出图示（字符串或对象），避免 LaTeX 修复误伤
+      obj.diagram = '';
+      obj = Tex.repairMangledLatex(obj);
+      obj.diagram = d;
+    } else {
+      obj = Tex.repairMangledLatex(obj);
+    }
+    return obj;
+  }
+
   // 从 AI 返回中稳健提取每日一题 JSON（含修复常见格式问题）
   function extractDailyJSON(raw) {
     var str = (raw || '').trim();
 
     // 先试 markdown 代码块
     var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (m) { try { return Tex.repairMangledLatex(JSON.parse(m[1].trim())); } catch (e) {} }
+    if (m) { try { return parseDailyJson(m[1].trim()); } catch (e) {} }
 
     // 找最外层 { ... }
     var start = str.indexOf('{');
@@ -5621,15 +5913,11 @@ body.cp-lock { overflow: hidden; }
     var jsonStr = str.slice(start, end);
 
     // 直接解析
-    try { return Tex.repairMangledLatex(JSON.parse(jsonStr)); } catch (e) {}
+    try { return parseDailyJson(jsonStr); } catch (e) {}
 
-    // 修复常见问题后重试
-    var repaired = jsonStr
-      .replace(/\/\/[^\n]*/g, '')       // 去单行注释
-      .replace(/\/\*[\s\S]*?\*\//g, '') // 去块注释
-      .replace(/,\s*([}\]])/g, '$1')     // 去尾逗号
-      .replace(/'/g, '"');               // 单引号→双引号
-    try { return Tex.repairMangledLatex(JSON.parse(repaired)); } catch (e) {}
+    // 修复常见问题后重试（用 AI.repairJsonSafely：只在字符串外替换，
+    // 不会把英文例句里的 don't / it's 撇号误换成双引号而炸掉 JSON）
+    try { return parseDailyJson(AI.repairJsonSafely(jsonStr)); } catch (e) {}
 
     // 最后兜底：用正则从原始文本中捞各字段值
     var fields = {};
@@ -7998,6 +8286,27 @@ function bind(el, next) {
   }
 
   // ==================== 出题 ====================
+  // 括号配平式 JSON 提取（兼容 SVG 图示中可能出现的花括号，且不跑 LaTeX 修复）
+  function extractJson(txt) {
+    var str = (txt || '').trim();
+    var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (m) { try { return JSON.parse(m[1].trim()); } catch (e) {} }
+    var start = str.indexOf('{');
+    if (start === -1) return null;
+    var depth = 0, inStr = false, esc = false, end = -1;
+    for (var i = start; i < str.length; i++) {
+      var c = str.charAt(i);
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    if (end <= start) return null;
+    try { return JSON.parse(str.slice(start, end)); } catch (e) { return null; }
+  }
+
   function makeQuiz() {
     const topic = allTopics().find(t => t.id === topicId);
     phase = 'quizzing'; judge = null; quiz = null;
@@ -8064,8 +8373,7 @@ function bind(el, next) {
       }
     }, null, { cache: false }).then(txt => {   // 出题需要“每次不一样”，跳过响应缓存
       if (cancelled) return;
-      let q = null;
-      try { const m = txt.match(/\{[\s\S]*\}/); if (m) q = JSON.parse(m[0]); } catch (e) { q = null; }
+      let q = extractJson(txt);
       if (!q || !q.stem) throw new Error('AI 返回内容无法解析为题目（请重试或检查模型是否稳定输出 JSON）');
       quiz = Object.assign({ source: 'ai', diff }, q);
       render(document.getElementById('view'));
@@ -8407,6 +8715,7 @@ function bind(el, next) {
       + '<span class="tag ' + (quiz.source === 'ai' ? 'tag-ok' : '') + '">' + (quiz.source === 'ai' ? 'AI出题' : '本地题') + '</span>'
       + '</span></div>'
       + '<div class="quiz-stem">' + formatStem(quiz.stem) + '</div>'
+      + (quiz.diagram && window.Diagram ? Diagram.render(quiz.diagram) : '')
       + '<div class="alert alert-warn" style="margin:10px 0">💣 本题陷阱预警：' + formatStem(quiz.trap || '无') + '</div>'
       + answerUI
       + '<div class="btn-row" style="margin-top:14px">'
@@ -8879,127 +9188,867 @@ function bind(el, next) {
 
 /* ===== js/modules/conceptmap.js ===== */
 /* ============================================================
- * conceptmap.js — 自控概念依赖图谱（技能树 + 锁定机制 + 术语桥）
- * 锁定规则：前置节点掌握度<60% → 后继节点锁定，无法添加相关任务
+ * conceptmap.js — AI 增强概念依赖图谱
+ *   基础：技能树 + 锁定机制（前置<60% → 后继锁定）+ 工程↔学术术语桥
+ *   AI 增强：① 讲透节点 ② 3题速测回写掌握度 ③ 拆分子考点自动挂图
+ *            ④ 补全术语桥 ⑤ 全图攻克路线（依赖×掌握度×剩余天数）
+ *   图谱加强：前置链高亮 / 搜索淡出 / 掌握进度统计 / 动态画布 / AI 节点可删
  * ============================================================ */
 (function () {
   'use strict';
 
-  function nodeState(n) {
-    const heat = Store.get().heat;
-    const h = heat[n.id] || {};
-    const score = h.score;
-    const mastered = (score != null ? score : (h.level === 2 ? 80 : h.level === 1 ? 55 : 0));
-    // 锁定判定：仅「已测评且<60」才锁死后继；从未测评（score 为 null）的前置不锁，避免首屏整片灰
-    const deps = n.deps || [];
-    const lockBy = deps.filter(d => {
-      const dh = heat[d] || {};
-      if (dh.score == null) return false;
-      return dh.score < 60;
+  const NW = 150, NH = 44;      // 节点尺寸
+  let lastEl = null;
+  let sel = null;               // 选中节点 id
+  let kw = '';                  // 搜索关键词（仅做轻量淡出，不重渲染）
+  let busy = '';                // 正在执行的 AI 动作标识
+  let quizState = null;         // {id, items:[{q,a,show,ok}]}
+  let cmZoom = 1;               // 缩放比例（0.3 ~ 3）
+  let cmPanX = 0, cmPanY = 0;   // 平移偏移
+
+  /* ---------------- 存储层 ---------------- */
+  function bag() {
+    const s = Store.get();
+    if (!s.conceptAI) s.conceptAI = { nodes: {}, extra: [], path: null, updatedAt: '' };
+    if (!s.conceptAI.nodes) s.conceptAI.nodes = {};
+    if (!s.conceptAI.extra) s.conceptAI.extra = [];
+    return s.conceptAI;
+  }
+  function bagUpdate(fn) {
+    Store.update(s => {
+      if (!s.conceptAI) s.conceptAI = { nodes: {}, extra: [], path: null, updatedAt: '' };
+      if (!s.conceptAI.nodes) s.conceptAI.nodes = {};
+      if (!s.conceptAI.extra) s.conceptAI.extra = [];
+      fn(s.conceptAI);
+      s.conceptAI.updatedAt = new Date().toISOString();
     });
-    return { score, mastered, locked: lockBy.length > 0, lockBy };
+  }
+  function nBag(id) { return bag().nodes[id] || {}; }
+  function majorName() { const m = DB.getActiveMajor() || {}; return m.name || DB.SUBJECTS.ctrl.short; }
+  function textbook() { return (DB.getActiveMajor() || {}).textbook || '专业课教材'; }
+  function daysLeft() {
+    try {
+      const d = Store.get().settings.examDate;
+      const n = Math.ceil((new Date(d + 'T00:00:00').getTime() - Date.now()) / 86400000);
+      return isNaN(n) ? 0 : n;
+    } catch (e) { return 0; }
   }
 
-  function render(el) {
-    const nodes = DB.CONCEPT_GRAPH;
-    const byId = {}; nodes.forEach(n => byId[n.id] = n);
+  /* ---------------- 节点集合（内置 + AI 扩展） ---------------- */
+  function allNodes() {
+    const mn = majorName();
+    const out = DB.CONCEPT_GRAPH.slice();
+    (bag().extra || []).forEach(n => { if (!n.major || n.major === mn) out.push(n); });
+    return out;
+  }
+  function indexOf(nodes) { const m = {}; nodes.forEach(n => { m[n.id] = n; }); return m; }
 
-    // SVG 连线
+  function nodeState(n) {
+    const heat = Store.get().heat || {};
+    const h = heat[n.id] || {};
+    const score = (h.score == null ? null : h.score);
+    const mastered = score != null ? score : (h.level === 2 ? 80 : h.level === 1 ? 55 : 0);
+    const lockBy = (n.deps || []).filter(d => {
+      const dh = heat[d] || {};
+      return dh.score != null && dh.score < 60;
+    });
+    return { score, mastered, tested: score != null || h.level > 0, locked: lockBy.length > 0, lockBy };
+  }
+
+  // 全部上游前置（含间接）
+  function ancestorSet(id, byId) {
+    const out = {}, stack = [id];
+    let guard = 0;
+    while (stack.length && guard++ < 500) {
+      const cur = byId[stack.pop()];
+      if (!cur) continue;
+      (cur.deps || []).forEach(d => { if (!out[d]) { out[d] = 1; stack.push(d); } });
+    }
+    return out;
+  }
+  // 直接后继
+  function childSet(id, nodes) {
+    const out = {};
+    nodes.forEach(n => { if ((n.deps || []).indexOf(id) >= 0) out[n.id] = 1; });
+    return out;
+  }
+  // 全部下游（含间接，用于级联删除）
+  function descendantSet(id, nodes) {
+    const out = {};
+    let changed = true, guard = 0;
+    while (changed && guard++ < 60) {
+      changed = false;
+      nodes.forEach(n => {
+        if (out[n.id]) return;
+        if ((n.deps || []).some(d => d === id || out[d])) { out[n.id] = 1; changed = true; }
+      });
+    }
+    return out;
+  }
+
+  // 为新节点找一个不重叠的落点（已弃用，保留兼容）
+  function placeNear(existing, parent) {
+    let bx = parent ? parent.x + NW + 22 : 60;
+    let by = parent ? parent.y : 40;
+    const hit = (x, y) => existing.some(o => Math.abs(o.x - x) < NW + 14 && Math.abs(o.y - y) < NH + 14);
+    let guard = 0;
+    while (guard++ < 400 && hit(bx, by)) {
+      by += NH + 18;
+      if (by > 1040) { by = 40; bx += NW + 22; }
+    }
+    return { x: bx, y: by };
+  }
+
+  /* ---------------- 自动分层布局（Sugiyama 简化版） ----------------
+   * 解决 AI 重建专业后节点坐标重叠/连线交叉问题。
+   * 三步：① 拓扑分层（最长路径定层）② 层内排序（重心法降交叉）③ 坐标分配
+   * 返回新数组（每个节点带 _lx/_ly 布局坐标），不修改原节点 x/y。
+   */
+  function autoLayout(rawNodes) {
+    if (!rawNodes || !rawNodes.length) return [];
+    const nodes = rawNodes.map(n => ({ ...n })); // 浅拷贝，_lx/_ly 写在副本上
+    const byId = {};
+    nodes.forEach(n => { byId[n.id] = n; });
+
+    // ---- Step 1: 层分配（rank = 从根出发的最长路径长度）----
+    const rank = {}; // id -> layer number (0-based)
+    const inDegree = {}; // id -> 未访问的前置计数
+    nodes.forEach(n => {
+      inDegree[n.id] = (n.deps || []).filter(d => byId[d]).length;
+      rank[n.id] = 0;
+    });
+    // BFS 拓扑排序，同时累加最长路径
+    const queue = nodes.filter(n => inDegree[n.id] === 0).map(n => n.id);
+    queue.forEach(id => { rank[id] = 0; }); // 根节点层=0
+    let qi = 0;
+    while (qi < queue.length) {
+      const cur = queue[qi++];
+      const curR = rank[cur];
+      // 所有以 cur 为前置的后继节点
+      nodes.forEach(n => {
+        if ((n.deps || []).indexOf(cur) >= 0) {
+          rank[n.id] = Math.max(rank[n.id], curR + 1);
+          inDegree[n.id]--;
+          if (inDegree[n.id] === 0) queue.push(n.id);
+        }
+      });
+    }
+    // 处理环或孤立节点（安全兜底）
+    nodes.forEach(n => { if (rank[n.id] == null) rank[n.id] = 0; });
+
+    // ---- Step 2: 按 layer 分组 ----
+    const layers = {}; // layerNum -> [node]
+    nodes.forEach(n => {
+      const r = rank[n.id];
+      if (!layers[r]) layers[r] = [];
+      layers[r].push(n);
+    });
+    const layerKeys = Object.keys(layers).map(Number).sort((a, b) => a - b);
+
+    // ---- Step 3: 层内排序（重心法，迭代 3 轮减少边交叉）----
+    for (let iter = 0; iter < 3; iter++) {
+      layerKeys.forEach(li => {
+        const layer = layers[li];
+        if (layer.length <= 1) return;
+        // 计算每个节点的"重心"=相邻节点在上/下层中的平均位置索引
+        const center = {};
+        layer.forEach(n => {
+          let sum = 0, cnt = 0;
+          // 看上层邻居的位置
+          (n.deps || []).forEach(d => {
+            const pn = byId[d]; if (!pn) return;
+            const pl = layers[rank[pn.id]];
+            if (pl) { sum += pl.indexOf(pn); cnt++; }
+          });
+          // 看下层邻居的位置
+          nodes.forEach(succ => {
+            if ((succ.deps || []).indexOf(n.id) >= 0) {
+              const sl = layers[rank[succ.id]];
+              if (sl) { sum += sl.indexOf(succ); cnt++; }
+            }
+          });
+          center[n.id] = cnt > 0 ? sum / cnt : layer.indexOf(n);
+        });
+        // 按重心排序
+        layer.sort((a, b) => (center[a.id] || 0) - (center[b.id] || 0));
+      });
+    }
+
+    // ---- Step 4: 分配坐标 ----
+    const VGAP = NH + 28;       // 层间垂直间距
+    const HGAP = NW + 24;       // 同层水平间距
+    const MARGIN_X = 50;        // 左边距
+    const MARGIN_Y = 36;        // 上边距
+
+    // 先算每层的宽度（取最宽的层）
+    let maxLayerW = 0;
+    layerKeys.forEach(li => {
+      const w = layers[li].length * HGAP;
+      maxLayerW = Math.max(maxLayerW, w);
+    });
+
+    layerKeys.forEach((li, idx) => {
+      const layer = layers[li];
+      const layerW = layer.length * HGAP;
+      // 层内居中偏移（让整图大致居中）
+      const offsetX = Math.max(0, (maxLayerW - layerW) / 2);
+      layer.forEach((n, ni) => {
+        n._lx = MARGIN_X + offsetX + ni * HGAP;
+        n._ly = MARGIN_Y + li * VGAP;
+      });
+    });
+
+    return nodes;
+  }
+
+  /* ---------------- 渲染 ---------------- */
+  function paint() { if (lastEl) render(lastEl); }
+
+  function svgGraph(nodes, byId) {
+    // 自动布局：返回带 _lx/_ly 的新数组
+    const laid = autoLayout(nodes);
+    const anc = sel ? ancestorSet(sel, byId) : {};
+    const kids = sel ? childSet(sel, nodes) : {};
+
+    let maxX = 780, maxY = 470;
+    laid.forEach(n => {
+      maxX = Math.max(maxX, (n._lx || 0) + NW + 30);
+      maxY = Math.max(maxY, (n._ly || 0) + NH + 30);
+    });
+
     let edges = '';
-    nodes.forEach(n => (n.deps || []).forEach(d => {
-      const p = byId[d];
-      if (!p) return;
-      const locked = nodeState(n).locked;
-      edges += '<line x1="' + (p.x + 70) + '" y1="' + (p.y + 22) + '" x2="' + (n.x) + '" y2="' + (n.y + 22)
-        + '" stroke="' + (locked ? '#d9d9d9' : '#8c8c8c') + '" stroke-width="1.5" marker-end="url(#arr)"/>';
+    laid.forEach(n => (n.deps || []).forEach(d => {
+      const p = byId[d]; if (!p) return;
+      const lp = laid.find(x => x.id === d); if (!lp) return;
+      const upstream = !!sel && (n.id === sel || anc[n.id]) && (anc[d] || d === sel);
+      const downstream = !!sel && d === sel;
+      const col = upstream ? '#2f54eb' : downstream ? '#722ed1' : nodeState(n).locked ? '#d9d9d9' : '#8c8c8c';
+      const dx = n._lp - lp._lx, dy = n._ly - lp._ly;
+      let x1, y1, x2, y2;
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        x1 = lp._lx + NW / 2; y1 = lp._ly + (dy > 0 ? NH : 0);
+        x2 = n._lx + NW / 2; y2 = n._ly + (dy > 0 ? 0 : NH);
+      } else {
+        x1 = lp._lx + (dx > 0 ? NW : 0); y1 = lp._ly + NH / 2;
+        x2 = n._lx + (dx > 0 ? 0 : NW); y2 = n._ly + NH / 2;
+      }
+      const mk = upstream ? 'cm-arr-hl' : downstream ? 'cm-arr-dn' : 'cm-arr';
+      edges += '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2
+        + '" stroke="' + col + '" stroke-width="' + (upstream || downstream ? 2.4 : 1.5) + '"'
+        + (downstream ? ' stroke-dasharray="5,4"' : '')
+        + ' marker-end="url(#' + mk + ')"/>';
     }));
 
-    let svgNodes = '';
-    nodes.forEach(n => {
+    let gs = '';
+    laid.forEach(n => {
       const st = nodeState(n);
-      const untested = (st.score == null && st.level === 0);
-      const color = st.locked ? '#bfbfbf' : untested ? '#8c8c8c' : st.mastered >= 80 ? '#237804' : st.mastered >= 50 ? '#d48806' : '#cf1322';
-      svgNodes += '<g class="cm-node" data-id="' + n.id + '" style="cursor:pointer">'
-        + '<rect x="' + n.x + '" y="' + n.y + '" width="150" height="44" rx="8" fill="#fff" stroke="' + color + '" stroke-width="2"/>'
-        + '<text x="' + (n.x + 75) + '" y="' + (n.y + 20) + '" text-anchor="middle" font-size="12" fill="#262626">' + (st.locked ? '🔒 ' : '') + U.esc(n.name) + '</text>'
-        + '<text x="' + (n.x + 75) + '" y="' + (n.y + 36) + '" text-anchor="middle" font-size="11" fill="' + color + '">' + (st.locked ? '未解锁' : untested ? '未测' : st.mastered + '%') + '</text>'
+      const color = st.locked ? '#bfbfbf' : !st.tested ? '#8c8c8c'
+        : st.mastered >= 80 ? '#237804' : st.mastered >= 50 ? '#d48806' : '#cf1322';
+      const isSel = n.id === sel;
+      const onPath = !!sel && (anc[n.id] || kids[n.id]);
+      const nm = n.name.length > 9 ? n.name.slice(0, 9) + '…' : n.name;
+      gs += '<g class="cm-node" data-id="' + U.esc(n.id) + '" data-name="' + U.esc(n.name) + '">'
+        + '<rect x="' + n._lx + '" y="' + n._ly + '" width="' + NW + '" height="' + NH + '" rx="8" '
+        + 'fill="' + (isSel ? '#f0f5ff' : onPath ? '#fafafa' : '#fff') + '" '
+        + 'stroke="' + (isSel ? '#2f54eb' : color) + '" stroke-width="' + (isSel ? 3 : 2) + '"'
+        + (n.ai ? ' stroke-dasharray="6,3"' : '') + '/>'
+        + '<text x="' + (n._lx + NW / 2) + '" y="' + (n._ly + 19) + '" text-anchor="middle" font-size="12" fill="#262626">'
+        + (st.locked ? '🔒 ' : '') + U.esc(nm) + '</text>'
+        + '<text x="' + (n._lx + NW / 2) + '" y="' + (n._ly + 35) + '" text-anchor="middle" font-size="11" fill="' + color + '">'
+        + (st.locked ? '未解锁' : !st.tested ? '未测' : st.mastered + '%') + '</text>'
+        + (n.ai ? '<text x="' + (n._lx + NW - 7) + '" y="' + (n._ly + 13) + '" text-anchor="end" font-size="9" fill="#722ed1">AI</text>' : '')
+        + (nBag(n.id).explain ? '<text x="' + (n._lx + 7) + '" y="' + (n._ly + 13) + '" font-size="9" fill="#2f54eb">已讲解</text>' : '')
         + '</g>';
     });
 
-    var _major = DB.getActiveMajor();
-    var _mods = (_major && _major.modules && _major.modules.length) ? _major.modules : DB.SUBJECTS.ctrl.modules;
-    var _modDesc = (_mods && _mods.length) ? ('按章节分列：' + _mods.join('、') + '。') : '';
-    el.innerHTML =
-      '<div class="card"><div class="card-title">' + String.fromCodePoint(0x1F5FA) + String.fromCodePoint(0xFE0F) + ' ' + U.esc(_major.name || DB.SUBJECTS.ctrl.short) + '概念依赖图谱</div>'
-      + '<div class="muted-sm">前置节点掌握度 &lt; 60% → 后继节点锁定。点击节点查看推荐任务与「工程↔学术」术语桥。' + U.esc(_modDesc) + '</div>'
-      + '<div class="cm-scroll"><svg viewBox="0 0 780 470" width="100%" height="470" xmlns="http://www.w3.org/2000/svg">'
-      + '<defs><marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#8c8c8c"/></marker></defs>'
-      + edges + svgNodes
-      + '</svg></div>'
-      + '<div class="legend"><span class="lg lg-green"></span>≥80 掌握 <span class="lg lg-yellow"></span>50-79 薄弱 <span class="lg lg-red"></span>&lt;50 危险 <span class="lg" style="background:#bfbfbf"></span>🔒 锁定</div>'
+    function marker(id, col) {
+      return '<marker id="' + id + '" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">'
+        + '<path d="M0,0 L8,4 L0,8" fill="none" stroke="' + col + '"/></marker>';
+    }
+    // 缩放平移变换：所有内容包在 <g transform> 里
+    const tf = 'translate(' + cmPanX + ',' + cmPanY + ') scale(' + cmZoom + ')';
+    // 固定 viewBox 为布局边界，高度不截断（让容器自然滚动）
+    const vbW = Math.max(maxX, 800), vbH = Math.max(maxY, 520);
+    return '<div class="cm-scroll" id="cm-canvas-wrap">'
+      + '<div class="cm-zoom-bar">'
+      + '<button class="btn btn-ghost btn-sm" id="cm-z-in" title="放大">＋</button>'
+      + '<span id="cm-z-lbl">' + Math.round(cmZoom * 100) + '%</span>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-z-out" title="缩小">－</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-z-fit" title="适应画布">适应</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-z-reset" title="重置">1:1</button>'
       + '</div>'
-
-      + '<div class="card" id="cm-detail"><div class="card-title">节点详情</div><div class="empty">点击上方节点查看依赖、推荐任务与术语桥</div></div>';
-
-    bind(el);
+      + '<svg id="cm-svg" viewBox="0 0 ' + vbW + ' ' + vbH + '" width="100%" height="' + vbH + '" xmlns="http://www.w3.org/2000/svg"'
+      + ' style="cursor:grab;user-select:none;-webkit-user-select:none;">'
+      + '<defs>' + marker('cm-arr', '#8c8c8c') + marker('cm-arr-hl', '#2f54eb') + marker('cm-arr-dn', '#722ed1') + '</defs>'
+      + '<g transform="' + tf + '">' + edges + gs + '</g></svg></div>';
   }
 
-  function bind(el) {
+  function pathCard() {
+    const p = bag().path;
+    if (!p || p.major !== majorName() || !p.order || !p.order.length) {
+      return '<div class="card"><div class="card-title">🧭 AI 攻克路线</div>'
+        + '<div class="muted-sm">结合依赖关系、你的掌握度与剩余备考天数，让 AI 排出「先打哪个、投多少天」的最优顺序。</div>'
+        + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary btn-sm" id="cm-path">'
+        + (busy === 'path' ? '规划中…' : '生成攻克路线') + '</button></div></div>';
+    }
+    let rows = '';
+    p.order.forEach((it, i) => {
+      const n = indexOf(allNodes())[it.id];
+      const st = n ? nodeState(n) : null;
+      rows += '<div class="cm-path-row"' + (it.id ? ' data-goto="' + U.esc(it.id) + '"' : '') + '>'
+        + '<span class="cm-path-no">' + (i + 1) + '</span>'
+        + '<span class="cm-path-name">' + U.esc(it.name) + '</span>'
+        + '<span class="tag tag-mod">' + (it.days || '?') + '天</span>'
+        + '<span class="cm-path-why">' + U.esc(it.reason || '') + '</span>'
+        + (st ? '<span class="muted-sm">' + (st.score == null ? '未测' : st.score + '%') + '</span>' : '')
+        + '</div>';
+    });
+    return '<div class="card"><div class="card-title">🧭 AI 攻克路线 <span class="muted-sm">'
+      + U.esc((p.at || '').slice(5, 10)) + ' 生成</span></div>'
+      + '<div class="alert alert-ok">' + U.esc(p.strategy || '') + '</div>'
+      + rows
+      + '<div class="btn-row" style="margin-top:10px">'
+      + '<button class="btn btn-primary btn-sm" id="cm-path-land">前3项加入任务中心</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-path">' + (busy === 'path' ? '规划中…' : '重新规划') + '</button>'
+      + '</div></div>';
+  }
+
+  function explainHtml(n) {
+    const e = nBag(n.id).explain;
+    if (busy === 'explain:' + n.id) return '<div class="cm-ai"><div class="muted-sm">🤖 AI 正在讲透「' + U.esc(n.name) + '」…</div></div>';
+    if (!e) return '';
+    const li = a => (a || []).map(x => '<li>' + Tex.renderInline(x) + '</li>').join('');
+    return '<div class="cm-ai">'
+      + '<div class="cm-ai-h">本质</div><div class="cm-ai-b">' + Tex.renderInline(e.core || '') + '</div>'
+      + (e.exam ? '<div class="cm-ai-h">考研怎么考</div><div class="cm-ai-b">' + Tex.renderInline(e.exam) + '</div>' : '')
+      + (e.steps && e.steps.length ? '<div class="cm-ai-h">标准流程</div><ol class="cm-ai-l">' + li(e.steps) + '</ol>' : '')
+      + (e.traps && e.traps.length ? '<div class="cm-ai-h">失分陷阱</div><ul class="cm-ai-l cm-ai-trap">' + li(e.traps) + '</ul>' : '')
+      + (e.link ? '<div class="cm-ai-h">依赖关系</div><div class="cm-ai-b">' + Tex.renderInline(e.link) + '</div>' : '')
+      + (e.mnemonic ? '<div class="cm-ai-key">💡 ' + Tex.renderInline(e.mnemonic) + '</div>' : '')
+      + '<div class="muted-sm" style="margin-top:8px">生成于 ' + U.esc((e.at || '').slice(0, 16).replace('T', ' ')) + '</div>'
+      + '</div>';
+  }
+
+  function quizHtml(n) {
+    if (busy === 'quiz:' + n.id) return '<div class="cm-ai"><div class="muted-sm">🤖 正在出 3 道速测题…</div></div>';
+    if (!quizState || quizState.id !== n.id) return '';
+    let h = '<div class="cm-ai">';
+    quizState.items.forEach((it, i) => {
+      h += '<div class="cm-q">'
+        + '<div class="cm-q-t">' + (i + 1) + '. ' + Tex.renderInline(it.q) + '</div>'
+        + (it.show ? '<div class="cm-q-a">' + Tex.renderInline(it.a) + '</div>' : '')
+        + '<div class="btn-row" style="margin-top:6px">'
+        + '<button class="btn btn-ghost btn-sm" data-qshow="' + i + '">' + (it.show ? '收起答案' : '看答案') + '</button>'
+        + '<button class="btn ' + (it.ok === true ? 'btn-primary' : 'btn-ghost') + ' btn-sm" data-qok="' + i + '">做对了</button>'
+        + '<button class="btn ' + (it.ok === false ? 'btn-danger' : 'btn-ghost') + ' btn-sm" data-qng="' + i + '">做错了</button>'
+        + '</div></div>';
+    });
+    const done = quizState.items.filter(x => x.ok != null).length;
+    h += '<div class="btn-row" style="margin-top:8px">'
+      + '<button class="btn btn-primary btn-sm" id="cm-q-submit"' + (done < quizState.items.length ? ' disabled' : '')
+      + '>提交自评并回写掌握度（' + done + '/' + quizState.items.length + '）</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-q-drop">放弃本次</button></div>';
+    return h + '</div>';
+  }
+
+  function detailCard(nodes, byId) {
+    if (!sel || !byId[sel]) {
+      return '<div class="card" id="cm-detail"><div class="card-title">节点详情</div>'
+        + '<div class="empty">点击上方节点：查看依赖链、AI 深度讲解、速测与术语桥</div></div>';
+    }
+    const n = byId[sel];
+    const st = nodeState(n);
+    const lockNames = st.lockBy.map(d => byId[d] && byId[d].name).filter(Boolean).join('、');
+    const kids = Object.keys(childSet(n.id, nodes)).map(id => byId[id].name);
+    const gloss = (n.glossary || []).concat(nBag(n.id).gloss || []);
+    const glossHtml = gloss.length
+      ? gloss.map(g => '<div class="gloss-row"><span class="gloss-eng">' + U.esc(g[0]) + '</span>'
+        + '<span class="gloss-arrow">↔</span><span>' + U.esc(g[1]) + '</span></div>').join('')
+      : '<div class="muted-sm">暂无术语桥，可让 AI 补全</div>';
+
+    return '<div class="card" id="cm-detail">'
+      + '<div class="card-title">' + (st.locked ? '🔒 ' : '') + U.esc(n.name)
+      + (n.ai ? ' <span class="tag tag-new">AI 扩展</span>' : '')
+      + ' <span class="muted-sm">掌握度 ' + (st.score == null ? '未测' : st.mastered + '%') + '</span></div>'
+      + (n.why ? '<div class="muted-sm">' + U.esc(n.why) + '</div>' : '')
+      + (st.locked
+        ? '<div class="alert alert-danger">🔒 未解锁：需先把 <b>' + U.esc(lockNames) + '</b> 练到 60% 以上<br>推荐任务：' + U.esc(n.book || ('查阅' + textbook() + '对应章节')) + '</div>'
+        : '<div class="alert alert-ok">' + (st.score == null ? '尚未测评，可用「AI 速测」快速定位水平。' : '已解锁。')
+          + ' 推荐任务：' + U.esc(n.book || ('查阅' + textbook() + '对应章节')) + '</div>')
+      + '<div class="muted-sm" style="margin-top:8px">前置：' + U.esc((n.deps || []).map(d => byId[d] && byId[d].name).filter(Boolean).join('、') || '无')
+      + ' ｜ 后继：' + U.esc(kids.join('、') || '无') + '</div>'
+
+      + '<div class="btn-row" style="margin-top:10px">'
+      + '<button class="btn btn-primary btn-sm" id="cm-explain">🤖 ' + (nBag(n.id).explain ? '重新讲解' : 'AI 讲透这个考点') + '</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-quiz">🧠 AI 速测3题</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-split">➕ AI 拆子考点</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-gloss">🔤 AI 补术语桥</button>'
+      + '</div>'
+      + explainHtml(n)
+      + quizHtml(n)
+      + (busy === 'split:' + n.id ? '<div class="cm-ai"><div class="muted-sm">🤖 正在拆分子考点…</div></div>' : '')
+
+      + '<div class="card-title-sm">复试术语桥（工程 ↔ 学术）'
+      + (busy === 'gloss:' + n.id ? ' <span class="muted-sm">补全中…</span>' : '') + '</div>' + glossHtml
+
+      + '<div class="btn-row" style="margin-top:12px">'
+      + (st.locked
+        ? '<button class="btn btn-ghost btn-sm" id="cm-go-dep">去提升前置</button>'
+        : '<button class="btn btn-ghost btn-sm" id="cm-add-task">加入任务中心</button>')
+      + '<button class="btn btn-ghost btn-sm" id="cm-set-score">录入掌握度</button>'
+      + (n.ai ? '<button class="btn btn-danger btn-sm" id="cm-del">删除此 AI 节点</button>' : '')
+      + '</div></div>';
+  }
+
+  function render(el) {
+    lastEl = el;
+    const nodes = allNodes();
+    const byId = indexOf(nodes);
+
+    let tested = 0, good = 0, locked = 0;
+    nodes.forEach(n => {
+      const st = nodeState(n);
+      if (st.tested) tested++;
+      if (st.mastered >= 80) good++;
+      if (st.locked) locked++;
+    });
+    const pct = nodes.length ? Math.round(good / nodes.length * 100) : 0;
+    const aiCnt = (bag().extra || []).filter(n => !n.major || n.major === majorName()).length;
+
+    const mods = (DB.getActiveMajor() && DB.getActiveMajor().modules) || DB.SUBJECTS.ctrl.modules || [];
+
+    el.innerHTML =
+      '<div class="card"><div class="card-title">🗺️ ' + U.esc(majorName()) + '概念依赖图谱</div>'
+      + '<div class="muted-sm">前置掌握度 &lt; 60% → 后继锁定。点击节点看依赖链（蓝=前置链，紫虚线=后继）与 AI 深度讲解。'
+      + (mods.length ? '按章节分列：' + U.esc(mods.join('、')) + '。' : '') + '</div>'
+      + '<div class="stat-row">'
+      + '<div class="stat"><div class="stat-num">' + nodes.length + '</div><div class="stat-label">考点</div></div>'
+      + '<div class="stat"><div class="stat-num">' + tested + '</div><div class="stat-label">已测评</div></div>'
+      + '<div class="stat"><div class="stat-num">' + good + '</div><div class="stat-label">已掌握</div></div>'
+      + '<div class="stat"><div class="stat-num">' + locked + '</div><div class="stat-label">锁定中</div></div>'
+      + '</div>'
+      + '<div class="cm-bar"><div class="cm-bar-in" style="width:' + pct + '%"></div></div>'
+      + '<div class="muted-sm">图谱掌握率 ' + pct + '%'
+      + (aiCnt ? ' ｜ AI 扩展节点 ' + aiCnt + ' 个' : '') + '</div>'
+      + '<input class="input" id="cm-search" placeholder="搜索考点名，快速定位…" style="margin-top:10px">'
+      + svgGraph(nodes, byId)
+      + '<div class="legend"><span class="lg lg-green"></span>≥80 掌握 <span class="lg lg-yellow"></span>50-79 薄弱 '
+      + '<span class="lg lg-red"></span>&lt;50 危险 <span class="lg" style="background:#bfbfbf"></span>🔒 锁定 '
+      + '<span class="lg" style="background:#fff;border:1px dashed #722ed1"></span>AI 扩展</div>'
+      + (aiCnt ? '<div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="cm-clear-ai">清空本专业 AI 扩展节点</button></div>' : '')
+      + '</div>'
+      + pathCard()
+      + detailCard(nodes, byId);
+
+    bind(el, nodes, byId);
+  }
+
+  /* ---------------- 轻量搜索（不重渲染，避免中文输入法抖动） ---------------- */
+  function applyFilterLight(el) {
+    const q = kw.trim().toLowerCase();
+    el.querySelectorAll('.cm-node').forEach(g => {
+      const nm = (g.getAttribute('data-name') || '').toLowerCase();
+      if (q && nm.indexOf(q) < 0) g.classList.add('cm-dim');
+      else g.classList.remove('cm-dim');
+    });
+  }
+
+  /* ---------------- AI 动作统一入口 ---------------- */
+  function runAI(key, fn) {
+    if (typeof AI === 'undefined' || !AI.configured()) {
+      Toast.warn('请先在「设置 → 云端AI配置」填写 API');
+      return;
+    }
+    if (busy) { Toast.warn('AI 正在处理中，请稍候'); return; }
+    busy = key; paint();
+    fn().then(() => { busy = ''; paint(); })
+      .catch(e => {
+        busy = ''; paint();
+        Toast.danger('AI 调用失败：' + ((e && e.message) || '未知错误'));
+      });
+  }
+
+  function aiSys() {
+    return '你是「' + majorName() + '」考研专业课辅导老师，只讲考研真正用得上的东西，不说空话。只输出JSON，不要任何多余文字。';
+  }
+
+  // ① 讲透节点
+  function aiExplain(n, nodes, byId) {
+    const pre = (n.deps || []).map(d => byId[d] && byId[d].name).filter(Boolean).join('、') || '无';
+    const next = nodes.filter(x => (x.deps || []).indexOf(n.id) >= 0).map(x => x.name).join('、') || '无';
+    const st = nodeState(n);
+    const user = '考点：' + n.name
+      + '\n前置考点：' + pre + '\n后继考点：' + next
+      + '\n教材定位：' + (n.book || textbook())
+      + '\n考生当前掌握度：' + (st.score == null ? '未测评' : st.score + '%')
+      + '\n请输出JSON：{"core":"用2-3句话讲透本质，说清它到底解决什么问题（数学式用$...$包裹）",'
+      + '"exam":"考研中怎么考：常见题型与设问方式，2-3条，用；分隔",'
+      + '"steps":["标准解题流程，3-5步，每步不超过22字"],'
+      + '"traps":["高频失分陷阱，2-4条，每条不超过26字"],'
+      + '"link":"与前置/后继考点的逻辑关系，1-2句，说清为什么必须先掌握前置",'
+      + '"mnemonic":"一句话记忆抓手或口诀，不超过20字"}';
+    return AI.chatJSON(aiSys(), user).then(o => {
+      if (!o || !o.core) throw new Error('返回内容不完整');
+      o.at = new Date().toISOString();
+      bagUpdate(b => {
+        b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { explain: o });
+      });
+      Toast.success('已生成「' + n.name + '」深度讲解');
+    });
+  }
+
+  // ② 3 题速测
+  function aiQuiz(n) {
+    const user = '针对考点「' + n.name + '」出 3 道考研风格小题，依次覆盖：①概念辨析 ②标准计算或推导 ③易错陷阱。'
+      + '教材定位：' + (n.book || textbook()) + '。难度贴近真题，不要出送分题。'
+      + '只输出JSON：{"items":[{"q":"题干（数学式用$...$包裹）","a":"答案+关键步骤，不超过90字"}]}';
+    return AI.chatJSON(aiSys(), user).then(o => {
+      const arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
+      if (!arr || !arr.length) throw new Error('未生成有效题目');
+      quizState = {
+        id: n.id,
+        items: arr.slice(0, 3).map(it => ({ q: String(it.q || ''), a: String(it.a || ''), show: false, ok: null }))
+      };
+      bagUpdate(b => {
+        b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { quiz: { items: quizState.items, at: new Date().toISOString() } });
+      });
+    });
+  }
+
+  // ③ 拆分子考点
+  function aiSplit(n, nodes) {
+    const existed = Object.keys(childSet(n.id, nodes)).map(id => indexOf(nodes)[id].name).join('、') || '无';
+    const user = '把考点「' + n.name + '」拆成 3 个考研会单独出题的更细子考点（要能对应具体题型，不要泛泛而谈）。'
+      + '教材定位：' + (n.book || textbook()) + '。已有子考点：' + existed + '（不要重复）。'
+      + '只输出JSON数组：[{"name":"子考点名，不超过8字","book":"教材或例题定位，可为空",'
+      + '"why":"为什么值得单列，不超过20字","glossary":[["工程口语说法","学术术语 English"]]}]';
+    return AI.chatJSON(aiSys(), user).then(o => {
+      const arr = Array.isArray(o) ? o : (o && (o.items || o.list));
+      if (!arr || !arr.length) throw new Error('未生成子考点');
+      const mn = majorName();
+      const created = [];
+      let pool = allNodes();
+      arr.slice(0, 4).forEach(it => {
+        const nm = String(it.name || '').trim().slice(0, 10);
+        if (!nm) return;
+        if (pool.some(x => x.name === nm)) return;
+        const pos = placeNear(pool, n);
+        const node = {
+          id: 'cx-' + U.uid(), name: nm, x: pos.x, y: pos.y, deps: [n.id],
+          book: String(it.book || '').slice(0, 60),
+          why: String(it.why || '').slice(0, 40),
+          glossary: Array.isArray(it.glossary) ? it.glossary.filter(g => Array.isArray(g) && g.length >= 2).slice(0, 4) : [],
+          major: mn, ai: true, createdAt: new Date().toISOString()
+        };
+        created.push(node);
+        pool = pool.concat([node]);
+      });
+      if (!created.length) throw new Error('子考点均已存在');
+      bagUpdate(b => { created.forEach(c => b.extra.push(c)); });
+      Toast.success('已挂载 ' + created.length + ' 个子考点：' + created.map(c => c.name).join('、'));
+    });
+  }
+
+  // ④ 补术语桥
+  function aiGloss(n) {
+    const had = (n.glossary || []).concat(nBag(n.id).gloss || []).map(g => g[0]).join('、') || '无';
+    const user = '为「' + majorName() + '」考点「' + n.name + '」生成 6 组复试答辩用的「工程口语说法 ↔ 学术标准术语」对照，'
+      + '学术侧要给中文术语并附英文。已有：' + had + '（不要重复）。'
+      + '只输出JSON数组：[["工程口语说法","学术术语 English"]]';
+    return AI.chatJSON(aiSys(), user).then(o => {
+      const arr = Array.isArray(o) ? o : (o && (o.items || o.list));
+      const ok = (arr || []).filter(g => Array.isArray(g) && g.length >= 2).slice(0, 8);
+      if (!ok.length) throw new Error('未生成术语');
+      bagUpdate(b => {
+        const cur = (b.nodes[n.id] && b.nodes[n.id].gloss) || [];
+        b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { gloss: cur.concat(ok).slice(0, 20) });
+      });
+      Toast.success('已补充 ' + ok.length + ' 组术语桥');
+    });
+  }
+
+  // ⑤ 全图攻克路线
+  function aiPath(nodes, byId) {
+    const lines = nodes.map(n => {
+      const st = nodeState(n);
+      const pre = (n.deps || []).map(d => byId[d] && byId[d].name).filter(Boolean).join('/');
+      return '- ' + n.name + ' 掌握' + (st.score == null ? '未测' : st.score + '%')
+        + (pre ? ' 前置:' + pre : ' 前置:无') + (st.locked ? ' [锁定]' : '');
+    }).join('\n');
+    const user = '距离考研还有 ' + daysLeft() + ' 天。以下是「' + majorName() + '」概念依赖图谱与考生掌握度：\n' + lines
+      + '\n请规划最优攻克顺序：只挑最该优先攻克的 6-8 个考点（掌握度≥80 的不要列），'
+      + '必须满足依赖先后——前置没过关就要先排前置。总投入天数要和剩余天数匹配。'
+      + '\n只输出JSON：{"strategy":"总体策略2-3句，说清主攻方向与该放弃什么",'
+      + '"order":[{"name":"考点名，必须与上面列表中的名称完全一致","days":建议投入天数(数字),"reason":"为什么排这个位置，不超过20字"}]}';
+    return AI.chatJSON(aiSys(), user).then(o => {
+      const arr = (o && o.order) || (Array.isArray(o) ? o : null);
+      if (!arr || !arr.length) throw new Error('未生成有效路线');
+      const byName = {}; nodes.forEach(n => { byName[n.name] = n.id; });
+      const order = arr.slice(0, 10).map(it => ({
+        id: byName[String(it.name || '').trim()] || '',
+        name: String(it.name || '').trim(),
+        days: parseInt(it.days, 10) || 0,
+        reason: String(it.reason || '').slice(0, 30)
+      })).filter(x => x.name);
+      bagUpdate(b => {
+        b.path = { major: majorName(), strategy: String((o && o.strategy) || ''), order, at: new Date().toISOString() };
+      });
+      Toast.success('攻克路线已生成');
+    });
+  }
+
+  /* ---------------- 事件绑定 ---------------- */
+  function addTask(text) {
+    Store.update(s => {
+      s.tasks.push({
+        id: U.uid(), subject: 'ctrl', text: '【图谱】' + text,
+        done: false, createdAt: new Date().toISOString()
+      });
+    });
+  }
+
+  function bind(el, nodes, byId) {
+    // 节点点击 → 选中并高亮依赖链
     el.querySelectorAll('.cm-node').forEach(g => {
       g.addEventListener('click', () => {
         const id = g.getAttribute('data-id');
-        const n = DB.CONCEPT_GRAPH.find(x => x.id === id);
-        const st = nodeState(n);
-        const heat = Store.get().heat;
-        const byId = {}; DB.CONCEPT_GRAPH.forEach(x => byId[x.id] = x);
-        const lockNames = st.lockBy.map(d => byId[d].name).join('、');
-
-        let gloss = (n.glossary || []).map(g2 =>
-          '<div class="gloss-row"><span class="gloss-eng">' + U.esc(g2[0]) + '</span><span class="gloss-arrow">↔</span><span>' + U.esc(g2[1]) + '</span></div>'
-        ).join('') || '<div class="muted-sm">暂无术语桥</div>';
-
-        document.getElementById('cm-detail').innerHTML =
-          '<div class="card-title">' + (st.locked ? '🔒 ' : '') + U.esc(n.name) + ' <span class="muted-sm">掌握度 ' + (st.score == null ? '未测' : st.mastered + '%') + '</span></div>'
-          + (st.locked
-            ? '<div class="alert alert-danger">🔒 未解锁：需先完成 <b>' + U.esc(lockNames) + '</b>（掌握度≥60%）<br>推荐任务：' + U.esc(n.book || '查阅' + (DB.getActiveMajor().textbook || '专业课教材') + '对应章节') + '</div>'
-            : (st.score == null
-              ? '<div class="alert alert-ok">尚未测评。可直接添加任务开练，或先录入掌握度评估优先级。</div>'
-              : '<div class="alert alert-ok">已解锁。推荐任务：' + U.esc(n.book || '查阅' + (DB.getActiveMajor().textbook || '专业课教材') + '对应章节') + '</div>'))
-          + '<div class="card-title-sm">复试术语桥（工程 ↔ 学术）</div>' + gloss
-          + '<div class="btn-row" style="margin-top:10px">'
-          + (st.locked
-            ? '<button class="btn btn-ghost" id="cm-go-dep">去提升前置：' + U.esc(byId[st.lockBy[0]].name) + '</button>'
-            : '<button class="btn btn-primary" id="cm-add-task">添加相关任务到任务中心</button>')
-          + '<button class="btn btn-ghost" id="cm-set-score">录入掌握度</button>'
-          + '</div>';
-
-        const depBtn = document.getElementById('cm-go-dep');
-        if (depBtn) depBtn.onclick = () => Toast.show('先去热力图把「' + byId[st.lockBy[0]].name + '」练到60%以上', 'info', 4000);
-        const addBtn = document.getElementById('cm-add-task');
-        if (addBtn) addBtn.onclick = () => {
-          Store.update(s => {
-            s.tasks.push({ id: U.uid(), subject: 'ctrl', text: '【图谱】' + n.name + '：' + (n.book || '查阅' + ((DB.getActiveMajor().textbook) || '专业课教材') + '对应章节'), done: false, createdAt: new Date().toISOString() });
-          });
-          Toast.success('已加入任务中心');
-        };
-        document.getElementById('cm-set-score').onclick = () => {
-          Modal.open({
-            title: '录入「' + n.name + '」掌握度',
-            html: '<input id="cm-score" class="input" type="number" min="0" max="100" value="' + (st.score != null ? st.score : '') + '" placeholder="自测正确率%">',
-            actions: [{ label: '取消' }, {
-              label: '保存', kind: 'btn-primary', onClick: close => {
-                const v = parseFloat(document.getElementById('cm-score').value);
-                Store.update(s => {
-                  s.heat[id] = { level: !isNaN(v) ? (v >= 80 ? 2 : v >= 50 ? 1 : 0) : 0, score: isNaN(v) ? null : v, updatedAt: new Date().toISOString() };
-                });
-                close(); App.refresh();
-              }
-            }]
-          });
-          setTimeout(() => document.getElementById('cm-score').focus(), 50);
-        };
+        sel = (sel === id) ? null : id;
+        if (!quizState || quizState.id !== sel) quizState = null;
+        paint();
+        const d = lastEl && lastEl.querySelector('#cm-detail');
+        if (d && sel) d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     });
+
+    // 搜索：轻量淡出，不重渲染
+    const sIn = el.querySelector('#cm-search');
+    if (sIn) {
+      sIn.value = kw;
+      let composing = false;
+      sIn.addEventListener('compositionstart', () => { composing = true; });
+      sIn.addEventListener('compositionend', () => { composing = false; kw = sIn.value; applyFilterLight(el); });
+      sIn.addEventListener('input', () => {
+        if (composing) return;
+        kw = sIn.value; applyFilterLight(el);
+      });
+      if (kw) applyFilterLight(el);
+    }
+
+    // ---- 缩放 / 拖拽平移 ----
+    const svgEl = el.querySelector('#cm-svg');
+    const zLbl = el.querySelector('#cm-z-lbl');
+    const wrap = el.querySelector('#cm-canvas-wrap');
+
+    function applyZoom() {
+      cmZoom = Math.max(0.3, Math.min(3, cmZoom));
+      if (zLbl) zLbl.textContent = Math.round(cmZoom * 100) + '%';
+      // 更新 <g> 的 transform
+      const g = svgEl && svgEl.querySelector('g[transform]');
+      if (g) g.setAttribute('transform', 'translate(' + cmPanX + ',' + cmPanY + ') scale(' + cmZoom + ')');
+    }
+    function zoomTo(z, px, py) {
+      // 以 (px, py) 为中心缩放（px/py 为 SVG 坐标系）
+      if (px == null) { px = 400; py = 260; } // 默认画布中心
+      const newZ = Math.max(0.3, Math.min(3, z));
+      const k = newZ / cmZoom;
+      cmPanX = px - (px - cmPanX) * k;
+      cmPanY = py - (py - cmPanY) * k;
+      cmZoom = newZ;
+      applyZoom();
+    }
+
+    // 缩放按钮
+    const zIn = el.querySelector('#cm-z-in');
+    const zOut = el.querySelector('#cm-z-out');
+    const zFit = el.querySelector('#cm-z-fit');
+    const zReset = el.querySelector('#cm-z-reset');
+    if (zIn) zIn.onclick = () => zoomTo(cmZoom * 1.25);
+    if (zOut) zOut.onclick = () => zoomTo(cmZoom / 1.25);
+    if (zReset) zReset.onclick = () => { cmZoom = 1; cmPanX = 0; cmPanY = 0; applyZoom(); };
+    if (zFit) zFit.onclick = () => {
+      // 自动计算"适应画布"的缩放：让整图刚好填满可视区域
+      if (!svgEl || !wrap) return;
+      const rect = wrap.getBoundingClientRect();
+      const pad = 40;
+      const availW = rect.width - pad * 2, availH = Math.min(rect.height - 60, 560);
+      // 获取布局后的实际边界
+      const laid = autoLayout(nodes);
+      let minX = Infinity, minY = Infinity, maxX2 = 0, maxY2 = 0;
+      laid.forEach(n => {
+        minX = Math.min(minX, n._lx); minY = Math.min(minY, n._ly);
+        maxX2 = Math.max(maxX2, n._lx + NW); maxY2 = Math.max(maxY2, n._ly + NH);
+      });
+      const gw = maxX2 - minX, gh = maxY2 - minY;
+      if (gw > 0 && gh > 0) {
+        cmZoom = Math.min(availW / gw, availH / gh);
+        cmZoom = Math.max(0.3, Math.min(3, cmZoom));
+        cmPanX = -minX + (availW - gw * cmZoom) / 2 / cmZoom;
+        cmPanY = -minY + (availH - gh * cmZoom) / 2 / cmZoom;
+      } else {
+        cmZoom = 1; cmPanX = 0; cmPanY = 0;
+      }
+      applyZoom();
+    };
+
+    // 滚轮缩放
+    if (svgEl) {
+      svgEl.addEventListener('wheel', e => {
+        e.preventDefault();
+        const rect = svgEl.getBoundingClientRect();
+        // 鼠标位置 → SVG 内部坐标
+        const pt = svgEl.createSVGPoint();
+        pt.x = e.clientX - rect.left; pt.y = e.clientY - rect.top;
+        const svgP = pt.matrixTransform(svgEl.getScreenCTM().inverse());
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        zoomTo(cmZoom * delta, svgP.x, svgP.y);
+      }, { passive: false });
+    }
+
+    // 拖拽平移
+    if (svgEl) {
+      let dragging = false, sx = 0, sy = 0, spx = 0, spy = 0;
+      svgEl.addEventListener('mousedown', e => {
+        // 只响应左键且不在节点上
+        if (e.button !== 0) return;
+        if (e.target.closest('.cm-node')) return;
+        dragging = true; sx = e.clientX; sy = e.clientY; spx = cmPanX; spy = cmPanY;
+        svgEl.style.cursor = 'grabbing';
+        e.preventDefault();
+      });
+      document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        const dx = (e.clientX - sx) / cmZoom;
+        const dy = (e.clientY - sy) / cmZoom;
+        cmPanX = spx + dx; cmPanY = spy + dy;
+        applyZoom();
+      });
+      document.addEventListener('mouseup', () => {
+        if (dragging) { dragging = false; if (svgEl) svgEl.style.cursor = 'grab'; }
+      });
+    }
+
+    // 攻克路线
+    const pBtn = el.querySelector('#cm-path');
+    if (pBtn) pBtn.onclick = () => runAI('path', () => aiPath(nodes, byId));
+    const lBtn = el.querySelector('#cm-path-land');
+    if (lBtn) lBtn.onclick = () => {
+      const p = bag().path;
+      if (!p || !p.order || !p.order.length) return;
+      p.order.slice(0, 3).forEach(it => {
+        const n = it.id && byId[it.id];
+        addTask(it.name + '：' + (n && n.book ? n.book : '查阅' + textbook() + '对应章节')
+          + (it.days ? '（建议' + it.days + '天）' : ''));
+      });
+      Toast.success('已加入任务中心');
+    };
+    el.querySelectorAll('[data-goto]').forEach(r => {
+      r.addEventListener('click', () => {
+        const id = r.getAttribute('data-goto');
+        if (!id || !byId[id]) { Toast.warn('该考点不在当前图谱中'); return; }
+        sel = id; quizState = null; paint();
+      });
+    });
+
+    // 清空 AI 扩展
+    const cBtn = el.querySelector('#cm-clear-ai');
+    if (cBtn) cBtn.onclick = () => {
+      Modal.confirm('清空 AI 扩展节点', '将删除本专业下所有 AI 生成的子考点（掌握度记录保留）。确定？', '清空', () => {
+        const mn = majorName();
+        bagUpdate(b => { b.extra = (b.extra || []).filter(n => n.major && n.major !== mn); });
+        sel = null; paint(); Toast.success('已清空');
+      }, true);
+    };
+
+    if (!sel || !byId[sel]) return;
+    const n = byId[sel];
+
+    const eB = el.querySelector('#cm-explain');
+    if (eB) eB.onclick = () => runAI('explain:' + n.id, () => aiExplain(n, nodes, byId));
+    const qB = el.querySelector('#cm-quiz');
+    if (qB) qB.onclick = () => runAI('quiz:' + n.id, () => aiQuiz(n));
+    const spB = el.querySelector('#cm-split');
+    if (spB) spB.onclick = () => runAI('split:' + n.id, () => aiSplit(n, nodes));
+    const gB = el.querySelector('#cm-gloss');
+    if (gB) gB.onclick = () => runAI('gloss:' + n.id, () => aiGloss(n));
+
+    // 速测交互
+    el.querySelectorAll('[data-qshow]').forEach(b => b.onclick = () => {
+      const i = +b.getAttribute('data-qshow');
+      quizState.items[i].show = !quizState.items[i].show; paint();
+    });
+    el.querySelectorAll('[data-qok]').forEach(b => b.onclick = () => {
+      const i = +b.getAttribute('data-qok');
+      quizState.items[i].ok = quizState.items[i].ok === true ? null : true; paint();
+    });
+    el.querySelectorAll('[data-qng]').forEach(b => b.onclick = () => {
+      const i = +b.getAttribute('data-qng');
+      quizState.items[i].ok = quizState.items[i].ok === false ? null : false; paint();
+    });
+    const sub = el.querySelector('#cm-q-submit');
+    if (sub) sub.onclick = () => {
+      const items = quizState.items;
+      const okN = items.filter(x => x.ok === true).length;
+      const score = Math.round(okN / items.length * 100);
+      Store.update(s => {
+        s.heat[n.id] = {
+          level: score >= 80 ? 2 : score >= 50 ? 1 : 0, score,
+          updatedAt: new Date().toISOString()
+        };
+      });
+      quizState = null; paint();
+      Toast.success('已回写掌握度 ' + score + '%' + (score < 60 ? '（后继考点将保持锁定）' : ''));
+    };
+    const drop = el.querySelector('#cm-q-drop');
+    if (drop) drop.onclick = () => { quizState = null; paint(); };
+
+    // 常规操作
+    const dep = el.querySelector('#cm-go-dep');
+    if (dep) dep.onclick = () => {
+      const st = nodeState(n);
+      const first = byId[st.lockBy[0]];
+      sel = first ? first.id : sel; quizState = null; paint();
+      Toast.show('已跳到前置「' + (first ? first.name : '') + '」，练到 60% 以上即可解锁', 'info', 4000);
+    };
+    const at = el.querySelector('#cm-add-task');
+    if (at) at.onclick = () => {
+      addTask(n.name + '：' + (n.book || '查阅' + textbook() + '对应章节'));
+      Toast.success('已加入任务中心');
+    };
+    el.querySelector('#cm-set-score').onclick = () => {
+      const st = nodeState(n);
+      Modal.open({
+        title: '录入「' + n.name + '」掌握度',
+        html: '<input id="cm-score" class="input" type="number" min="0" max="100" value="'
+          + (st.score != null ? st.score : '') + '" placeholder="自测正确率 %">',
+        actions: [{ label: '取消' }, {
+          label: '保存', kind: 'btn-primary', onClick: close => {
+            const v = parseFloat(document.getElementById('cm-score').value);
+            Store.update(s => {
+              s.heat[n.id] = {
+                level: !isNaN(v) ? (v >= 80 ? 2 : v >= 50 ? 1 : 0) : 0,
+                score: isNaN(v) ? null : v, updatedAt: new Date().toISOString()
+              };
+            });
+            close(); paint();
+          }
+        }]
+      });
+      setTimeout(() => { const i = document.getElementById('cm-score'); if (i) i.focus(); }, 50);
+    };
+    const del = el.querySelector('#cm-del');
+    if (del) del.onclick = () => {
+      const desc = descendantSet(n.id, nodes);
+      const cascade = Object.keys(desc).filter(id => byId[id] && byId[id].ai);
+      const blocked = Object.keys(desc).filter(id => byId[id] && !byId[id].ai);
+      if (blocked.length) { Toast.warn('该节点被内置考点依赖，无法删除'); return; }
+      Modal.confirm('删除 AI 节点',
+        '将删除「' + U.esc(n.name) + '」' + (cascade.length ? ' 及其 ' + cascade.length + ' 个下游 AI 子节点' : '') + '。确定？',
+        '删除', () => {
+          const kill = {}; kill[n.id] = 1; cascade.forEach(id => { kill[id] = 1; });
+          bagUpdate(b => { b.extra = (b.extra || []).filter(x => !kill[x.id]); });
+          sel = null; quizState = null; paint(); Toast.success('已删除');
+        }, true);
+    };
   }
 
   window.ConceptMapModule = { render };
@@ -10568,11 +11617,24 @@ function bind(el, next) {
   }
 
   // ---------- AI 提取（文字/拍照共用） ----------
-  var EXTRACT_SYS = '你是考研英语词汇整理专家，只输出JSON数组，不要多余文字。';
-  function extractPrompt() {
+  var EXTRACT_SYS = '你是考研英语词汇整理专家。你的输出必须是且只能是一个合法 JSON 数组，'
+    + '以 [ 开头、以 ] 结尾，前后不加任何解释、标题或 markdown 围栏。'
+    + '所有字符串必须用英文双引号；字符串内部不得出现未转义的双引号或换行；'
+    + '英文缩写里的撇号（don\'t、it\'s）照常写即可。';
+  // simple=true：精简模式（不要例句），用于首次失败后的自动重试，大幅降低被截断的概率
+  function extractPrompt(simple) {
+    if (simple) {
+      return '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成 JSON 数组，每项只含 3 个字段：'
+        + '{"word":"单词或短语(转原形)","pos":"词性缩写如v./n./adj./phr.","meaning":"中文释义(考研常考义优先)"}。'
+        + '要求：跳过过于基础的词(如 a/the/good)；最多 10 个；不要例句、不要音标；'
+        + '务必输出完整闭合的 JSON 数组，只输出数组本身。';
+    }
     return '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成JSON数组，每项：'
       + '{"word":"单词或短语(单词转原形)","phonetic":"音标(可空)","pos":"词性缩写如v./n./adj./phr.","meaning":"中文释义(考研常考义优先,多义用；分隔)","example":"英文例句(考研难度,可空)","exampleCn":"例句翻译(可空)"}。'
-      + '要求：优先考研高频词、熟词僻义词、核心动词短语；跳过过于基础的词(如a/the/good)；最多20个；只输出JSON数组。';
+      + '要求：优先考研高频词、熟词僻义词、核心动词短语；跳过过于基础的词(如a/the/good)；最多12个。'
+      + '硬性约束：①只输出 JSON 数组本身，不要任何前言/后记/markdown 围栏；'
+      + '②数组必须完整闭合（宁可少给几个词，也绝不能输出到一半被截断）；'
+      + '③例句务必简短（不超过 15 个词），字段可留空字符串但不能省略引号。';
   }
   function normalizeExtracted(arr) {
     var list = Array.isArray(arr) ? arr : (arr && arr.words) || [];
@@ -10592,10 +11654,13 @@ function bind(el, next) {
   // 是否还留在单词本页：App 所有页面复用同一个 #view 容器，必须用当前路由判断
   function onPage() { return !!(window.App && App.current === 'wordbook' && lastEl && document.body.contains(lastEl)); }
 
-  function startExtract(source, userText, imageDataUrl) {
-    if (extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); return; }
-    extractJob = { status: 'running', source: source, startedAt: Date.now(), thumb: imageDataUrl || '' };
-    AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl).then(function (arr) {
+  // fallbackText：首次失败时用的「精简格式」提示词，自动重试一次（不要例句 → 输出短得多，
+  // 大幅降低被 max_tokens 截断导致 JSON 不闭合的概率）。retrying 内部标记，防止无限重试。
+  function startExtract(source, userText, imageDataUrl, fallbackText, retrying) {
+    if (!retrying && extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); return; }
+    extractJob = { status: 'running', source: source + (retrying ? '·精简重试' : ''), startedAt: Date.now(), thumb: imageDataUrl || '' };
+    // 提取要求“每次都重新看图”，跳过响应缓存，避免命中旧的坏结果
+    AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl, { cache: false }).then(function (arr) {
       var items = normalizeExtracted(arr);
       if (!items.length) throw new Error('AI 未提取到有效词条');
       extractJob = { status: 'done', source: source, items: items };
@@ -10607,9 +11672,17 @@ function bind(el, next) {
         Toast.show('📚 单词本 AI 提取完成：' + items.length + ' 个词条，回「单词本」确认导入', 'success', 8000);
       }
     }).catch(function (e) {
-      extractJob = { status: 'error', source: source, error: (e && e.message) || '未知错误' };
+      var msg = (e && e.message) || '未知错误';
+      // 自动降级重试：仅针对「格式/解析」类失败，网络与鉴权错误直接报错不浪费一次调用
+      if (!retrying && fallbackText && /JSON|json|解析|格式|未提取到/.test(msg)) {
+        if (onPage()) render(lastEl);
+        Toast.show('⚠️ AI 返回格式有误，正在用精简格式自动重试…', 'warn', 4000);
+        startExtract(source, fallbackText, imageDataUrl, null, true);
+        return;
+      }
+      extractJob = { status: 'error', source: source, error: msg };
       if (onPage()) render(lastEl);
-      else Toast.show('📚 单词本 AI 提取失败：' + extractJob.error, 'warn', 8000);
+      else Toast.show('📚 单词本 AI 提取失败：' + msg, 'warn', 8000);
     });
     if (onPage()) render(lastEl); // 立即显示「进行中」横幅
   }
@@ -11094,7 +12167,10 @@ function bind(el, next) {
     if (aiExtract) aiExtract.onclick = function () {
       var raw = el.querySelector('#vb-ai-raw').value.trim();
       if (!raw) { Toast.warn('请先粘贴材料'); return; }
-      startExtract('文字整理', extractPrompt() + '\n材料：\n' + raw.slice(0, 3000));
+      startExtract('文字整理',
+        extractPrompt() + '\n材料：\n' + raw.slice(0, 3000),
+        null,
+        extractPrompt(true) + '\n材料：\n' + raw.slice(0, 3000));
     };
 
     // ---- 收录：拍照 AI 整理（后台任务，不阻塞页面） ----
@@ -11107,7 +12183,10 @@ function bind(el, next) {
       var stEl = document.getElementById('vb-photo-status');
       if (stEl) stEl.innerHTML = '<div class="muted-sm" style="margin-top:8px">⏳ 压缩图片中…</div>';
       compressImage(f, function (dataUrl) {
-        startExtract('拍照识别', extractPrompt() + '\n请识别图片中的英语单词并整理。', dataUrl);
+        startExtract('拍照识别',
+          extractPrompt() + '\n请识别图片中的英语单词并整理。',
+          dataUrl,
+          extractPrompt(true) + '\n请识别图片中的英语单词并整理。');
       });
       fileInput.value = '';
     };
@@ -13158,13 +14237,9 @@ function bind(el, next) {
   function tryParseRepair(jsonStr) {
     // 直接解析
     try { return Tex.repairMangledLatex(JSON.parse(jsonStr)); } catch (e) {}
-    // 去注释/尾逗号/单引号后重试
-    var fixed = jsonStr
-      .replace(/\/\/[^\n]*/g, '')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/,\s*([}\]])/g, '$1')
-      .replace(/'/g, '"');
-    try { return Tex.repairMangledLatex(JSON.parse(fixed)); } catch (e) {}
+    // 安全修复后重试（AI.repairJsonSafely：注释/尾逗号/裸换行/单引号串，
+    // 但只在字符串外替换，不会破坏英文里的 don't / it's 撇号）
+    try { return Tex.repairMangledLatex(JSON.parse(AI.repairJsonSafely(jsonStr))); } catch (e) {}
     return null;
   }
 
