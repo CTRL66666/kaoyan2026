@@ -280,6 +280,12 @@ textarea.input { resize: vertical; }
 .mis-subj { font-size: 12px; color: var(--text-secondary); }
 .mis-date { margin-left: auto; font-size: 12px; color: var(--text-muted); }
 .mis-desc { font-size: 13px; margin-top: 4px; }
+.mis-desc-collapsed { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mis-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.mis-detail-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.mis-detail-section { margin-bottom: 8px; }
+.tag-ghost { background: var(--surface); border: 1px solid var(--line); color: var(--text-secondary); font-size: 11px; }
+.mis-ai-analysis { margin: 8px 0; padding: 10px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: var(--r-btn); }
 .drill-row { display: flex; justify-content: space-between; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 12px; margin-bottom: 8px; font-size: 13px; gap: 8px; }
 
 /* ---------- 红线 ---------- */
@@ -371,6 +377,13 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
   position: absolute; top: 8px; right: 8px; z-index: 5; font-size: 12px; user-select: none; }
 .cm-zoom-bar .btn { padding: 2px 8px; font-size: 14px; line-height: 1.2; min-width: auto; }
 .cm-zoom-bar span { min-width: 42px; text-align: center; font-weight: 500; color: var(--text-secondary); }
+/* 移动端：接管触摸手势，避免拖拽图谱时页面跟着滚动 */
+#cm-svg { touch-action: none; -webkit-tap-highlight-color: transparent; }
+@media (max-width: 640px) {
+  .cm-zoom-bar { top: 4px; right: 4px; padding: 4px 6px; gap: 2px; }
+  .cm-zoom-bar .btn { padding: 4px 8px; font-size: 15px; }
+  .cm-zoom-bar span { min-width: 38px; font-size: 11px; }
+}
 .cm-node { transition: opacity 120ms; cursor: pointer; }
 .cm-node:hover { opacity: .8; }
 .cm-dim { opacity: .18; }
@@ -556,6 +569,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 .quiz-pick { width: 100%; text-align: left; cursor: pointer; font-family: inherit; }
 .quiz-pick:active { transform: scale(.99); }
 .quiz-stem { font-size: 15px; line-height: 1.8; padding: 6px 0; }
+.quiz-review-stem { margin: 10px 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); }
 .math-inline {
   font-family: ui-monospace, "Cambria Math", Georgia, serif;
   font-style: italic; background: var(--surface-muted);
@@ -4451,20 +4465,27 @@ body.cp-lock { overflow: hidden; }
   }
 
   // 单接口一次请求（_noKwArgs：400 时的极简重试模式）
-  function rawChatOnce(api, messages, _noKwArgs) {
+  function rawChatOnce(api, messages, _noKwArgs, opts) {
     _noKwArgs = !!_noKwArgs;
+    opts = opts || {};
     const a = Store.get().ai;
     // _noKwArgs 重试模式：极简 body
     const body = _noKwArgs
       ? { model: api.model, messages: messages }
       : { model: api.model, messages: messages, temperature: 0.6 };
     // 思考模式控制 Thinking 扩展：
+    //   opts.noThink === true  → 强制 enable_thinking:false（结构化 JSON 场景）
     //   thinkingMode === true  → 发 enable_thinking:true（让支持思考的模型进入思考）
     //   thinkingMode === false → 发 enable_thinking:false（显式关闭）
     //   未设置(undefined)     → 不发送 chat_template_kwargs（兼容非 DeepSeek 接口）
     //   _noKwArgs=true        → 强制跳过（400 自动重试时使用）
-    if (!_noKwArgs && (a.thinkingMode === true || a.thinkingMode === false)) {
-      body.chat_template_kwargs = { enable_thinking: a.thinkingMode };
+    if (!_noKwArgs) {
+      if (opts.noThink) {
+        body.chat_template_kwargs = { enable_thinking: false };
+      } else if (a.thinkingMode === true || a.thinkingMode === false) {
+        body.chat_template_kwargs = { enable_thinking: a.thinkingMode };
+      }
+      if (opts.maxTokens) body.max_tokens = opts.maxTokens;
     }
     var jsonBody = JSON.stringify(body);
     console.log('[AI] rawChat 请求 接口=' + (api.name || '') + ' endpoint=' + (api.endpoint || '').slice(0, 60) + ' model=' + api.model
@@ -4479,7 +4500,7 @@ body.cp-lock { overflow: hidden; }
         if (r.status === 400 && !_noKwArgs) {
           console.error('[AI] rawChat 400！原始body前300字:', jsonBody.slice(0, 300));
           console.warn('[AI] 自动用极简请求体重试…');
-          return rawChatOnce(api, messages, true);
+          return rawChatOnce(api, messages, true, opts);
         }
         return httpError(r, '请求被拒绝');
       }
@@ -4504,7 +4525,7 @@ body.cp-lock { overflow: hidden; }
       var hit = cacheGet(ck);
       if (hit != null) return Promise.resolve(hit);
     }
-    return withFailover(function (api) { return rawChatOnce(api, messages, false); })
+    return withFailover(function (api) { return rawChatOnce(api, messages, false, opts); })
       .then(function (txt) { cachePut(ck, txt); return txt; });
   }
 
@@ -4519,8 +4540,18 @@ body.cp-lock { overflow: hidden; }
   // 底层走流式管线（SSE）：响应头先到即视为连接正常，30 秒超时只管“连不上”，
   // 之后可等待云端慢慢生成（长材料/图片识别不再被“30秒无响应”误杀）；
   // 厂商不支持流式时由 400 极简重试自动降级为非流式。
+  // 【重要】默认强制关闭思考模式（noThink）：
+  //   开启思考时模型先吐 reasoning_content，会吃掉服务端默认的 max_tokens 预算，
+  //   轮到正式 JSON 输出时往往被腰斩 → 表现为「AI未返回有效JSON / 解析失败」。
+  //   结构化提取本就不需要模型「思考」，故此处默认关闭；
+  //   确需思考的调用方可显式传 { noThink:false } 覆盖。
+  //   同时给一个较大的 maxTokens 兜底，避免长列表（如单词本一次几十条）被截断。
   function chatJSON(systemPrompt, userText, imageDataUrl, opts) {
-    return chatStream(systemPrompt, userText, null, imageDataUrl, opts)
+    opts = opts || {};
+    const o = Object.assign({}, opts);
+    if (o.noThink === undefined) o.noThink = true;
+    if (!o.maxTokens) o.maxTokens = 4096;
+    return chatStream(systemPrompt, userText, null, imageDataUrl, o)
       .then(txt => extractRobustJSON(txt));
   }
 
@@ -4667,8 +4698,11 @@ body.cp-lock { overflow: hidden; }
   }
 
   // 流式单接口一次请求（_noKwArgs：400 时的极简重试模式，此时非流式、整体返回）
-  function chatStreamOnce(api, messages, onChunk, _noKwArgs) {
+  // opts.noThink   ：强制关闭思考（结构化 JSON 提取场景用，避免 reasoning 吃掉输出预算）
+  // opts.maxTokens ：显式指定输出上限，防止长列表被服务端默认值截断
+  function chatStreamOnce(api, messages, onChunk, _noKwArgs, opts) {
     _noKwArgs = !!_noKwArgs;
+    opts = opts || {};
     const a = Store.get().ai;
     // _noKwArgs 重试模式：极简 body（只保留 model + messages，去掉 stream/temperature 等可选字段）
     // stream_options.include_usage：让流式响应末尾携带 usage（OpenAI/DeepSeek 均支持）
@@ -4677,8 +4711,15 @@ body.cp-lock { overflow: hidden; }
       ? { model: api.model, messages: messages }
       : { model: api.model, stream: true, stream_options: { include_usage: true }, messages: messages };
     // 思考模式控制（同 rawChat 逻辑：仅在显式设置时发送；_noKwArgs 强制跳过）
-    if (!_noKwArgs && (a.thinkingMode === true || a.thinkingMode === false)) {
-      body.chat_template_kwargs = { enable_thinking: a.thinkingMode };
+    // noThink=true 时无条件发 enable_thinking:false —— 结构化 JSON 提取一旦让模型思考，
+    // reasoning_content 会占满 max_tokens，正式 JSON 被腰斩，表现为「解析失败」。
+    if (!_noKwArgs) {
+      if (opts.noThink) {
+        body.chat_template_kwargs = { enable_thinking: false };
+      } else if (a.thinkingMode === true || a.thinkingMode === false) {
+        body.chat_template_kwargs = { enable_thinking: a.thinkingMode };
+      }
+      if (opts.maxTokens) body.max_tokens = opts.maxTokens;
     }
     var jsonBody = JSON.stringify(body);
     // 调试日志：400 时可在控制台看到完整请求体（帮助定位问题）
@@ -4694,7 +4735,7 @@ body.cp-lock { overflow: hidden; }
         if (r.status === 400 && !_noKwArgs) {
           console.error('[AI] chatStream 400！原始body前300字:', jsonBody.slice(0, 300));
           console.warn('[AI] 自动用极简请求体重试…');
-          return chatStreamOnce(api, messages, onChunk, true);
+          return chatStreamOnce(api, messages, onChunk, true, opts);
         }
         return httpError(r, '请求被拒绝');
       }
@@ -4760,7 +4801,7 @@ body.cp-lock { overflow: hidden; }
         return Promise.resolve(hit);
       }
     }
-    return withFailover(function (api) { return chatStreamOnce(api, messages, onChunk, false); })
+    return withFailover(function (api) { return chatStreamOnce(api, messages, onChunk, false, opts); })
       .then(function (full) { cachePut(ck, full); return full; });
   }
 
@@ -7598,6 +7639,7 @@ function bind(el, next) {
   var subjF = 'all';
   var composing = false;
   var searchTimer = null;
+  var expandedId = null;       // 当前展开的错题 id（手风琴，同时只展开一条）
 
   // 轻量筛选：仅切换行显隐，不重建 DOM（搜索框与输入法会话始终存活，杜绝闪/失焦）
   function applyFilterLight(el) {
@@ -7637,6 +7679,7 @@ function bind(el, next) {
     if (list.length === 0) rows = '<div class="empty">还没有错题记录。错题不可怕，重复错才可怕。</div>';
     list.forEach(m => {
       const t = DB.MISTAKE_TYPES[m.type] || DB.MISTAKE_TYPES.other;
+      const subj = (DB.SUBJECTS[m.subject] || {}).name || m.subject;
       // 复习计划进度（艾宾浩斯 1/3/7/15 天）
       let rvHtml = '';
       if (m.reviewPlan) {
@@ -7648,15 +7691,49 @@ function bind(el, next) {
           return '<span class="rvd-stage rvd-click' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '" data-rvd-id="' + m.id + '" data-rvd-stage="' + st + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
         }).join(' ') + '</div>';
       }
-      rows += '<div class="mis-row" style="border-left-color:' + t.color + '">'
-        + '<div class="mis-head"><span class="tag" style="background:' + t.color + '">' + t.name + '</span>'
-        + '<span class="mis-subj">' + ((DB.SUBJECTS[m.subject] || {}).name || m.subject) + '</span>'
+      // 描述预览（折叠时只显示一行）
+      const descPreview = m.desc.length > 80 ? m.desc.slice(0, 80) + '…' : m.desc;
+      const isExpanded = expandedId === m.id;
+      rows += '<div class="mis-row" data-mis-id="' + m.id + '" style="border-left-color:' + t.color + '">'
+        // ---- 折叠头部（始终可见，点击展开/收起）----
+        + '<div class="mis-head" style="cursor:pointer">'
+        + '<span class="mis-expand-hint" style="font-size:11px;color:var(--text-muted);margin-right:4px">' + (isExpanded ? '▼' : '▶') + '</span>'
+        + '<span class="tag" style="background:' + t.color + '">' + t.name + '</span>'
+        + '<span class="mis-subj">' + subj + '</span>'
         + '<span class="mis-date">' + U.esc(m.date || '') + '</span></div>'
-        + '<div class="mis-desc">' + U.esc(m.desc) + '</div>'
-        + rvHtml
-        + '<div class="mis-actions"><button class="btn btn-sm btn-ghost mis-variant" data-id="' + m.id + '">🔄 重练变式题</button>'
-        + (m.reviewPlan ? '' : '<button class="btn btn-sm btn-ghost mis-review" data-id="' + m.id + '">📅 复习计划</button>')
-        + '</div>'
+        + '<div class="mis-desc' + (isExpanded ? '' : ' mis-desc-collapsed') + '">' + U.esc(isExpanded ? m.desc : descPreview) + '</div>'
+        // ---- 展开详情区 ----
+        + (isExpanded
+          ? '<div class="mis-detail">'
+            // 错因分析标签
+            + '<div class="mis-detail-meta"><span class="tag tag-ghost">科目：' + subj + '</span>'
+            + '<span class="tag tag-ghost">类型：' + t.name + '</span>'
+            + '<span class="tag tag-ghost">记录于：' + (m.createdAt || '').slice(0, 10) + '</span></div>'
+            // 完整描述（TeX渲染）
+            + '<div class="mis-detail-section"><div class="card-title-sm">题目/错误描述</div><div class="report">' + Tex.renderInline(U.esc(m.desc)) + '</div></div>'
+            // AI解析区（如果有）
+            + (m.aiAnalysis
+              ? '<div class="mis-ai-analysis">'
+                + (m.aiAnalysis.question ? '<div class="mis-detail-section"><div class="card-title-sm">AI还原原题</div><div class="report">' + Tex.renderInline(U.esc(m.aiAnalysis.question)) + '</div></div>' : '')
+                + (m.aiAnalysis.answer ? '<div class="mis-detail-section"><div class="card-title-sm">标准答案</div><div class="report">' + Tex.renderInline(U.esc(m.aiAnalysis.answer)) + '</div></div>' : '')
+                + (m.aiAnalysis.solution ? '<div class="mis-detail-section"><div class="card-title-sm">详细解析</div><div class="report">' + Tex.renderInline(U.esc(m.aiAnalysis.solution)) + '</div></div>' : '')
+                + (m.aiAnalysis.trap ? '<div class="alert alert-warn" style="margin-top:6px">易错点：' + U.esc(m.aiAnalysis.trap) + '</div>' : '')
+                + '</div>'
+              : '')
+            + rvHtml
+            // 操作按钮行
+            + '<div class="mis-actions">'
+            + '<button class="btn btn-sm btn-primary mis-variant" data-id="' + m.id + '">重练变式题</button>'
+            + (!m.aiAnalysis ? '<button class="btn btn-sm btn-ghost mis-ai-explain" data-id="' + m.id + '" style="color:#2f54eb">AI生成解析</button>' : '')
+            + (m.reviewPlan ? '' : '<button class="btn btn-sm btn-ghost mis-review" data-id="' + m.id + '">复习计划</button>')
+            + '<button class="btn btn-sm btn-ghost mis-del" data-id="' + m.id + '" style="color:var(--danger)">删除</button>'
+            + '</div></div>'
+          // ---- 折叠时的操作按钮（精简）----
+          : '<div class="mis-actions">'
+            + '<button class="btn btn-sm btn-ghost mis-variant" data-id="' + m.id + '">🔄 重练变式题</button>'
+            + '<button class="btn btn-sm btn-ghost mis-del" data-id="' + m.id + '" style="color:var(--danger)">🗑</button>'
+            + '</div>'
+        )
         + '</div>';
     });
 
@@ -7684,7 +7761,7 @@ function bind(el, next) {
       +   '<option value="math">' + DB.SUBJECTS.math.name + '</option><option value="ctrl">' + DB.SUBJECTS.ctrl.short + '</option><option value="eng">' + DB.SUBJECTS.eng.name + '</option></select></label>'
       + '<label class="fld"><span>错误类型</span><select id="ms-type" class="input input-sel">'
       +   Object.keys(DB.MISTAKE_TYPES).map(k => '<option value="' + k + '">' + DB.MISTAKE_TYPES[k].name + '</option>').join('') + '</select></label>'
-      + '<label class="fld fld-full"><span>题目描述</span><input id="ms-desc" class="input" placeholder="如：定积分换元法负号处理"></label>'
+      + '<label class="fld fld-full"><span>题目描述</span><input id="ms-desc" class="input" placeholder="建议录入原题题干（如：求极限lim(x→0)(e^x-1-x)/x²）。若只有错误原因也可，后续可用AI补全原题"></label>'
       + '</div>'
       + '<button class="btn btn-primary" id="ms-add">提交</button>'
       + '</div>'
@@ -7702,7 +7779,7 @@ function bind(el, next) {
       + '<div class="mis-search"><input id="ms-search" class="input input-sm" placeholder="搜索描述 / 科目…" value="' + U.esc(q) + '">'
       + '<span class="mis-count">显示 <span id="ms-count">' + list.length + '</span> 条</span>'
       + '<select id="ms-subjf" class="input input-sm" style="max-width:120px"><option value="all">全部科目</option>' + ['math', 'ctrl', 'eng', 'pol'].map(function (k) { return '<option value="' + k + '"' + (subjF === k ? ' selected' : '') + '>' + ((DB.SUBJECTS[k] || {}).short || k) + '</option>'; }).join('') + '</select></div>'
-      + rows + '</div>';
+      + '<div class="mis-list-wrap">' + rows + '</div></div>';
 
     bind(el);
     // 关键词轻量筛选：保证跨 re-render（如切科目）后搜索词仍生效，输入焦点不受影响
@@ -7794,6 +7871,35 @@ function bind(el, next) {
         Store.update(s => { const d = s.mistakeDrills.find(x => x.id === id); if (d) d.status = 'done'; });
         Toast.success('重练完成 +1');
         App.refresh();
+      };
+    });
+
+    // 错题卡片展开/折叠（手风琴：点头部切换）
+    el.querySelectorAll('.mis-head').forEach(head => {
+      head.onclick = () => {
+        const row = head.closest('.mis-row');
+        if (row) {
+          const mid = row.getAttribute('data-mis-id');
+          expandedId = (expandedId === mid) ? null : mid;
+          // 局部重渲染列表区（不刷新整个页面，保留搜索词/科目筛选状态）
+          reRenderList(el);
+        }
+      };
+    });
+
+    // 删除错题
+    el.querySelectorAll('.mis-del').forEach(b => {
+      b.onclick = (ev) => {
+        ev.stopPropagation();  // 防止触发展开
+        const id = b.getAttribute('data-id');
+        const m = Store.get().mistakes.find(x => x.id === id);
+        if (!m) return;
+        Modal.confirm('删除错题', '<p>确定删除这条错题？</p><div class="muted-sm" style="margin-top:6px">' + U.esc(m.desc.slice(0, 100)) + '</div>', '确认删除', () => {
+          Store.update(s => { s.mistakes = s.mistakes.filter(x => x.id !== id); });
+          Toast.success('已删除');
+          expandedId = null;
+          App.refresh();
+        }, true);
       };
     });
 
@@ -7903,6 +8009,158 @@ function bind(el, next) {
       }
     });
     App.refresh();
+  }
+
+  // ---------- 局部重渲染列表（保留搜索/筛选状态，用于展开折叠和删除）----------
+  function reRenderList(el) {
+    const s = Store.get();
+    let list = U.clone(s.mistakes);
+    if (subjF !== 'all') list = list.filter(m => m.subject === subjF);
+    list = list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).slice(0, 50);
+    let rows = '';
+    if (list.length === 0) rows = '<div class="empty">还没有错题记录。错题不可怕，重复错才可怕。</div>';
+    list.forEach(m => {
+      const t = DB.MISTAKE_TYPES[m.type] || DB.MISTAKE_TYPES.other;
+      const subj = (DB.SUBJECTS[m.subject] || {}).name || m.subject;
+      let rvHtml = '';
+      if (m.reviewPlan) {
+        const stages = [1, 3, 7, 15];
+        const diff = Math.floor((Date.parse(U.dkey()) - Date.parse(m.reviewPlan.start)) / U.DAY_MS);
+        rvHtml = '<div class="rvd-progress">复习进度（点节点标记完成）：' + stages.map(function (st) {
+          const done = m.reviewPlan.done && m.reviewPlan.done['d' + st];
+          const due = !done && diff >= st;
+          return '<span class="rvd-stage rvd-click' + (done ? ' rvd-stage-done' : due ? ' rvd-stage-due' : '') + '" data-rvd-id="' + m.id + '" data-rvd-stage="' + st + '">D' + st + (done ? '✓' : due ? '·到期' : '') + '</span>';
+        }).join(' ') + '</div>';
+      }
+      const descPreview = m.desc.length > 80 ? m.desc.slice(0, 80) + '…' : m.desc;
+      const isExpanded = expandedId === m.id;
+      rows += '<div class="mis-row" data-mis-id="' + m.id + '" style="border-left-color:' + t.color + '">'
+        + '<div class="mis-head" style="cursor:pointer">'
+        + '<span class="mis-expand-hint" style="font-size:11px;color:var(--text-muted);margin-right:4px">' + (isExpanded ? '▼' : '▶') + '</span>'
+        + '<span class="tag" style="background:' + t.color + '">' + t.name + '</span>'
+        + '<span class="mis-subj">' + subj + '</span>'
+        + '<span class="mis-date">' + U.esc(m.date || '') + '</span></div>'
+        + '<div class="mis-desc' + (isExpanded ? '' : ' mis-desc-collapsed') + '">' + U.esc(isExpanded ? m.desc : descPreview) + '</div>'
+        + (isExpanded
+          ? '<div class="mis-detail">'
+            + '<div class="mis-detail-meta"><span class="tag tag-ghost">科目：' + subj + '</span>'
+            + '<span class="tag tag-ghost">类型：' + t.name + '</span>'
+            + '<span class="tag tag-ghost">记录于：' + (m.createdAt || '').slice(0, 10) + '</span></div>'
+            + '<div class="mis-detail-section"><div class="card-title-sm">题目/错误描述</div><div class="report">' + Tex.renderInline(U.esc(m.desc)) + '</div></div>'
+            // AI解析区
+            + (m.aiAnalysis
+              ? '<div class="mis-ai-analysis">'
+                + (m.aiAnalysis.question ? '<div class="mis-detail-section"><div class="card-title-sm">AI还原原题</div><div class="report">' + Tex.renderInline(U.esc(m.aiAnalysis.question)) + '</div></div>' : '')
+                + (m.aiAnalysis.answer ? '<div class="mis-detail-section"><div class="card-title-sm">标准答案</div><div class="report">' + Tex.renderInline(U.esc(m.aiAnalysis.answer)) + '</div></div>' : '')
+                + (m.aiAnalysis.solution ? '<div class="mis-detail-section"><div class="card-title-sm">详细解析</div><div class="report">' + Tex.renderInline(U.esc(m.aiAnalysis.solution)) + '</div></div>' : '')
+                + (m.aiAnalysis.trap ? '<div class="alert alert-warn" style="margin-top:6px">易错点：' + U.esc(m.aiAnalysis.trap) + '</div>' : '')
+                + '</div>'
+              : '')
+            + rvHtml
+            + '<div class="mis-actions">'
+            + '<button class="btn btn-sm btn-primary mis-variant" data-id="' + m.id + '">重练变式题</button>'
+            + (!m.aiAnalysis ? '<button class="btn btn-sm btn-ghost mis-ai-explain" data-id="' + m.id + '" style="color:#2f54eb">AI生成解析</button>' : '')
+            + (m.reviewPlan ? '' : '<button class="btn btn-sm btn-ghost mis-review" data-id="' + m.id + '">复习计划</button>')
+            + '<button class="btn btn-sm btn-ghost mis-del" data-id="' + m.id + '" style="color:var(--danger)">删除</button>'
+            + '</div></div>'
+          : '<div class="mis-actions">'
+            + '<button class="btn btn-sm btn-ghost mis-variant" data-id="' + m.id + '">🔄 重练变式题</button>'
+            + '<button class="btn btn-sm btn-ghost mis-del" data-id="' + m.id + '" style="color:var(--danger)">🗑</button>'
+            + '</div>'
+        )
+        + '</div>';
+    });
+    var listEl = el.querySelector('.mis-list-wrap');
+    if (listEl) { listEl.innerHTML = rows; bindListEvents(el); }
+  }
+
+  // 只绑定列表区内的事件（避免重复绑外部按钮）
+  function bindListEvents(el) {
+    el.querySelectorAll('.mis-head').forEach(head => {
+      head.onclick = () => {
+        const row = head.closest('.mis-row');
+        if (row) { const mid = row.getAttribute('data-mis-id'); expandedId = (expandedId === mid) ? null : mid; reRenderList(el); }
+      };
+    });
+    el.querySelectorAll('.mis-del').forEach(b => {
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        const id = b.getAttribute('data-id');
+        const m = Store.get().mistakes.find(x => x.id === id);
+        if (!m) return;
+        Modal.confirm('删除错题', '<p>确定删除这条错题？</p><div class="muted-sm" style="margin-top:6px">' + U.esc(m.desc.slice(0, 100)) + '</div>', '确认删除', () => {
+          Store.update(s => { s.mistakes = s.mistakes.filter(x => x.id !== id); });
+          Toast.success('已删除'); expandedId = null; App.refresh();
+        }, true);
+      };
+    });
+    el.querySelectorAll('.mis-variant').forEach(b => {
+      b.onclick = () => {
+        const id = b.getAttribute('data-id');
+        const m = Store.get().mistakes.find(x => x.id === id);
+        if (!m) return;
+        if (window.QuizModule && QuizModule.startVariant) { App.go('quiz'); setTimeout(() => QuizModule.startVariant(m), 50); }
+        else Toast.warn('AI测验模块未就绪');
+      };
+    });
+    el.querySelectorAll('.mis-review').forEach(b => {
+      b.onclick = () => {
+        const id = b.getAttribute('data-id');
+        Store.update(s => { const m = s.mistakes.find(x => x.id === id); if (m && !m.reviewPlan) m.reviewPlan = { start: U.dkey(), done: {} }; });
+        Toast.success('已加入复习计划'); App.refresh();
+      };
+    });
+    // AI生成解析：根据错题描述生成原题+答案+解析
+    el.querySelectorAll('.mis-ai-explain').forEach(b => {
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        const id = b.getAttribute('data-id');
+        const m = Store.get().mistakes.find(x => x.id === id);
+        if (!m) return;
+        if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+        // 按钮状态反馈
+        b.disabled = true; b.textContent = '⏳ 生成中…';
+        const errType = (DB.MISTAKE_TYPES[m.type] || {}).name || m.type;
+        const subjName = (DB.SUBJECTS[m.subject] || {}).name || m.subject;
+        const sysPrompt = '你是考研解题专家。学生记录了一条错题（只有错误描述/原因，没有完整原题），请帮其：'
+          + '\n1) 根据错误描述【反推可能的原始题目】（给出最可能的原题题干）'
+          + '\n2) 给出【标准答案】'
+          + '\n3) 给出【详细解析】（分步骤，公式用LaTeX的$...$格式）'
+          + '\n4) 指出【易错点/陷阱】'
+          + '\n要求：JSON格式输出，字段为 {question, answer, solution, trap}。如果无法反推原题，question字段写"无法还原"，但仍然给出同类知识点的例题和解析。';
+        AI.chatJSON(sysPrompt,
+          '【错题信息】\n科目：' + subjName + '\n错误类型：' + errType + '\n错误描述：' + m.desc
+          + '\n\n请基于以上错题信息，生成原题、答案、解析和易错点。',
+          null, { cache: false, noThink: true, maxTokens: 4096 }
+        ).then(function(result) {
+          if (result && (result.question || result.answer || result.solution)) {
+            Store.update(s => {
+              const item = s.mistakes.find(x => x.id === id);
+              if (item) item.aiAnalysis = {
+                question: result.question || '',
+                answer: result.answer || '',
+                solution: result.solution || '',
+                trap: result.trap || '',
+                generatedAt: new Date().toISOString()
+              };
+            });
+            Toast.success('AI解析已生成');
+            reRenderList(document.getElementById('view')); // 局部刷新显示解析
+          } else {
+            Toast.warn('AI未能生成有效解析，可重试');
+            b.disabled = false; b.textContent = '🤖 AI生成解析';
+          }
+        }).catch(function(e) {
+          Toast.warn('AI解析失败：' + e.message);
+          b.disabled = false; b.textContent = '🤖 AI生成解析';
+        });
+      };
+    });
+    el.querySelectorAll('.rvd-stage[data-rvd-id]').forEach(sp => {
+      sp.onclick = () => markReview(sp.getAttribute('data-rvd-id'), parseInt(sp.getAttribute('data-rvd-stage'), 10));
+    });
+    // 搜索词仍然生效
+    applyFilterLight(el);
   }
 
   window.MistakesModule = { render };
@@ -8253,6 +8511,55 @@ function bind(el, next) {
   let difficulty = 'auto';   // auto|easy|medium|real|hard —— auto按掌握度推荐
   let customReq = '';        // 用户自定义出题要求（备注，追加到 prompt 尾部）
   let variantOf = null;      // 错题变式复现：{topicName, errorType, originDesc}
+  let qaHistory = [];         // 追问AI多轮对话历史 [{role:'user'|'assistant', content}]
+
+  // ---- AI回复渲染（完整管线：先提取公式→再处理markdown→直接输出HTML）----
+  // 注意：不能先把 ** 转成 <b> 再交给 Tex.renderInline，因为后者对非公式段调 esc()
+  // 会把 <b> 转义成 &lt;b&gt; 文本。必须自己控管整条管线。
+  function renderAIReply(raw) {
+    if (!raw) return '';
+    var s = String(raw);
+    var mathBlocks = [];   // 占位符 → 渲染后的HTML
+    var mi = 0;
+
+    // ① 提取 $...$ 块级公式（display math）
+    s = s.replace(/\$\$([\s\S]+?)\$\$/g, function(_, f) {
+      var ph = '\x00M' + (mi++) + '\x00';
+      mathBlocks.push('<div style="margin:8px 0;text-align:center;overflow-x:auto">' + Tex.render(f.trim()) + '</div>');
+      return ph;
+    });
+
+    // ② 提取 $...$ 行内公式
+    s = s.replace(/\$([^\$\n]+?)\$/g, function(_, f) {
+      var ph = '\x00M' + (mi++) + '\x00';
+      mathBlocks.push(Tex.render(f.trim()));
+      return ph;
+    });
+
+    // ③ 安全转义剩余文本（公式已提取，不会误伤）
+    s = U.esc(s);
+
+    // ④ Markdown → HTML（在转义后的文本上操作）
+    // ### 标题
+    s = s.replace(/^#{1,3}\s+(.+)$/gm,
+      '<div style="font-weight:500;font-size:14px;margin:10px 0 4px;color:var(--text-primary);border-bottom:1px solid var(--line);padding-bottom:3px">$1</div>');
+    // **粗体**
+    s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    // *斜体*
+    s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    // `行内代码`
+    s = s.replace(/`([^`]+)`/g,
+      '<code style="background:var(--surface);padding:1px 5px;border-radius:3px;font-size:12px;font-family:monospace">$1</code>');
+    // 换行
+    s = s.replace(/\n/g, '<br>');
+
+    // ⑤ 回填公式
+    s = s.replace(/\x00M(\d+)\x00/g, function(_, n) {
+      return mathBlocks[parseInt(n)] || '';
+    });
+
+    return s;
+  }
 
   const DIFFS = {
     easy: { name: '简单', icon: '🟢', prompt: '单一考点、直接套公式、计算量小的基础题，确保零失误拿分' },
@@ -8325,10 +8632,30 @@ function bind(el, next) {
 
     let ask;
     if (variantOf) {
-      ask = '这是一道需要变式复现的错题。原题/考点：' + variantOf.originDesc +
-        '；学生错误类型：' + (DB.MISTAKE_TYPES[variantOf.errorType] || {}).name +
-        '。请出一道【同源变式题】：同一知识点、保留同样的陷阱（' + userWeak + '），但更换数字、情境或问法，' +
-        '难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）。用于验证学生是否真正掌握。';
+      // 构建错题完整上下文，让AI精准举一反三
+      var errType = (DB.MISTAKE_TYPES[variantOf.errorType] || {}).name || variantOf.errorType || '未知';
+      var vSubj = (variantOf.subject && DB.SUBJECTS[variantOf.subject]) ? DB.SUBJECTS[variantOf.subject].name : '';
+      var weakCtx = '本周高频错误：' + userWeak + '；';
+      if (vSubj) weakCtx += '科目：' + vSubj + '；';
+      // 若错题有refId（关联到具体考点），注入考点上下文
+      var refTopic = null;
+      if (variantOf.refId) refTopic = allTopics().find(t => t.id === variantOf.refId);
+      if (refTopic) weakCtx += '关联考点：' + refTopic.group + '·' + refTopic.name + '（层级' + (DB.TIERS[refTopic.tier]||{}).name + '）；';
+
+      ask = '【举一反三 · 错题变式训练】\n'
+        + '\n== 学生错题信息 =='
+        + '\n原题/考点描述：' + (variantOf.originDesc || '（缺失）')
+        + '\n错误类型：' + errType
+        + (vSubj ? '\n科目：' + vSubj : '')
+        + '\n' + weakCtx
+        + '\n\n== 出题要求 =='
+        + '\n请先分析这道错题的【典型错误根因】（为什么学生会在这里出错？是概念模糊/计算失误/审题遗漏/方法选错？），'
+        + '然后基于这个根因出一道【举一反三变式题】，要求：'
+        + '\n1) 同一知识点体系内，但换一个角度/数字/情境/问法来考'
+        + '2) 保留同类陷阱（特别是导致本题做错的那个陷阱的"变种"）'
+        + '3) 难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）'
+        + '\n4) 目的：验证学生是否真正掌握了这个知识点，而不仅仅是背下了这一道题'
+        + '\n\n请直接输出 JSON 题目（stem/type/options/answer/solution/trap/diagram）。';
     } else {
       ask = '考点：' + topic.group + '·' + topic.name + '；层级：' + DB.TIERS[topic.tier].name +
         '（' + DB.TIERS[topic.tier].range + '）；难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）；' +
@@ -8640,8 +8967,43 @@ function bind(el, next) {
           + '<div class="card-title-sm" style="margin-top:12px">答案</div><div class="report">' + U.esc(q.answer) + '</div>'
           + '<div class="card-title-sm">解析</div><div class="report">' + formatStem(q.solution || '') + '</div>'
           + (q.trap ? '<div class="alert alert-warn" style="margin-top:8px">💣 陷阱：' + U.esc(q.trap) + '</div>' : ''),
-        actions: [{ label: '关闭', kind: 'btn-primary' }]
+        actions: [
+          { label: '追问AI', kind: 'btn-ghost', id: 'bank-ask' },
+          { label: '关闭', kind: 'btn-primary' }
+        ]
       });
+      // 题库追问AI
+      var bankAskBtn = document.getElementById('bank-ask');
+      if (bankAskBtn) bankAskBtn.onclick = function() {
+        if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+        var bqCtx = '【原题】' + (q.stem || '') + '\n【答案】' + (q.answer || '') + '\n【解析】' + (q.solution || '') + (q.trap ? '\n【陷阱】' + q.trap : '');
+        Modal.open({
+          title: '追问 AI', wide: true,
+          html: '<div class="muted-sm" style="margin-bottom:8px">针对这道收藏题提问：</div>'
+            + '<div class="form-grid"><input id="bqa-input" class="input" placeholder="你的问题…"></div>'
+            + '<div id="bqa-out" class="pm-ai-body" style="margin-top:8px;min-height:60px"></div>',
+          actions: [{ label: '发送', kind: 'btn-primary', id: 'bqa-send' }, { label: '关闭' }]
+        });
+        var bInput = document.getElementById('bqa-input'); var bOut = document.getElementById('bqa-out');
+        function doBankAsk() {
+          var qText = (bInput && bInput.value.trim()) || '';
+          if (!qText) { Toast.warn('请输入问题'); return; }
+          if (bOut) bOut.innerHTML = '<div class="skl-line"></div><div class="skl-line skl-w80"></div>';
+          var sBtn = document.querySelector('#modal-overlay [data-act="0"]');
+          if (sBtn) { sBtn.disabled = true; sBtn.textContent = '思考中…'; }
+          AI.chatStream(
+            '你是考研辅导老师。基于下面的题目上下文回答学生追问。公式用LaTeX，简明扼要。',
+            '【题目上下文】\n' + bqCtx + '\n\n【追问】' + qText,
+            function(full){ if(bOut) bOut.innerHTML = renderAIReply(full||'') + '<span class="ai-cursor"></span>'; }
+          ).then(function(full){
+            if(bOut) bOut.innerHTML = renderAIReply(full||'');
+            if(sBtn){sBtn.disabled=false;sBtn.textContent='发送';}
+            if(bInput)bInput.value='';
+          }).catch(function(e){if(bOut)bOut.textContent='失败:'+e.message;if(sBtn){sBtn.disabled=false;sBtn.textContent='发送';}});
+        }
+        if(bInput) bInput.onkeydown = function(ev){if(ev.key==='Enter'){ev.preventDefault();doBankAsk();}};
+        var sBtn2 = document.querySelector('#modal-overlay [data-act="0"]'); if(sBtn2) sBtn2.onclick = doBankAsk;
+      };
     });
     el.querySelectorAll('.bank-del').forEach(b => b.onclick = () => {
       const id = b.getAttribute('data-id');
@@ -8794,7 +9156,14 @@ function bind(el, next) {
 
     el.innerHTML =
       '<div class="card"><div class="card-title-row"><span class="card-title">📋 判卷结果</span>'
-      + '<span class="tag ' + (judge.source === 'ai' ? 'tag-ok' : '') + '">' + (judge.source === 'ai' ? 'AI精判' : '本地判') + '</span></div>'
+      + '<span class="tag ' + (judge.source === 'ai' ? 'tag-ok' : '') + '">' + (judge.source === 'ai' ? 'AI精判' : '本地判')       + '</span></div>'
+
+      // ---- 原题回顾（看解析时能看到题目）----
+      + '<div class="quiz-review-stem"><div class="card-title-sm">原题</div><div class="quiz-stem">' + formatStem(quiz.stem || '') + '</div>'
+      + (quiz.type === 'choice' && quiz.options
+        ? '<div style="margin-top:6px">' + (quiz.options || []).map(function(o){ return '<div class="muted-sm" style="font-size:12px;margin:2px 0">' + formatStem(o) + '</div>'; }).join('') + '</div>' : '')
+      + '</div>'
+
       + '<div class="risk-card risk-bg-' + cls + '"><div class="risk-score">' + judge.score + '<span class="risk-max">/100</span></div>'
       + '<div class="risk-label">' + (judge.score >= 80 ? '🟢 ' : judge.score >= 50 ? '🟡 ' : '🔴 ') + U.esc(judge.verdict) + '</div></div>'
 
@@ -8811,6 +9180,7 @@ function bind(el, next) {
 
       + '<div class="btn-row" style="margin-top:14px">'
       + '<button class="btn btn-primary" id="quiz-next">再来一题（同考点）</button>'
+      + '<button class="btn btn-ghost" id="quiz-ask">🤔 追问AI</button>'
       + '<button class="btn btn-ghost" id="quiz-save">⭐ 加入本地题库</button>'
       + '<button class="btn btn-ghost" id="quiz-back">返回选题</button>'
       + '</div></div>';
@@ -8830,24 +9200,187 @@ function bind(el, next) {
       });
       Toast.success('已存入本地题库（共 ' + Store.get().quizBank.length + ' 题）');
     };
+
+    // ---- 追问AI：针对这道题继续提问（多轮对话+排版修复）----
+    var askBtn = el.querySelector('#quiz-ask');
+    if (askBtn) askBtn.onclick = () => {
+      if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+      // 构建题目上下文（固定不变的部分）
+      var qCtx = '【原题】' + (quiz.stem || '')
+        + '\n【题型】' + (quiz.type === 'choice' ? '选择题' : '解答题')
+        + (quiz.type === 'choice' && quiz.options ? '\n【选项】' + (quiz.options || []).join('\n') : '')
+        + '\n【标准答案】' + (quiz.answer || '')
+        + '\n【解析】' + (quiz.solution || '')
+        + (quiz.trap ? '\n【陷阱】' + quiz.trap : '')
+        + '\n【我的得分】' + judge.score + '/100'
+        + '\n【判卷评语】' + (judge.verdict || '');
+      if (judge.comment) qCtx += '\n【AI点评】' + judge.comment;
+      if (judge.steps.length) qCtx += '\n【采分点】' + judge.steps.map(function(s){ return (s.got ? '✓' : '✗') + ' ' + s.point + (s.note ? '（' + s.note + '）' : ''); }).join('；');
+
+      // 重置本轮对话历史
+      qaHistory = [];
+
+      Modal.open({
+        title: '🤔 追问 AI', wide: true,
+        html: '<div class="muted-sm" style="margin-bottom:8px">针对这道题，你可以问任何细节：解题思路、易错变式、知识点关联、类似考法…支持连续追问。</div>'
+          + '<div class="quiz-review-stem" style="margin-bottom:10px;padding:8px;background:var(--surface);border-radius:var(--r-btn);max-height:120px;overflow:auto"><div class="muted-sm" style="font-size:11px">题目上下文</div><div style="font-size:12px">' + formatStem((quiz.stem || '').slice(0, 200)) + '</div></div>'
+          // 对话历史区
+          + '<div id="qa-chat" class="pm-ai-body" style="margin-top:8px;min-height:120px;max-height:360px;overflow-y:auto"></div>'
+          + '<div class="form-grid" style="margin-top:8px"><input id="qa-input" class="input" placeholder="例如：这道题如果换成曲线积分怎么做？为什么这里要取绝对值？"></div>',
+        actions: [
+          { label: '发送提问', kind: 'btn-primary', id: 'qa-send' },
+          { label: '📤 发给AI教练', kind: 'btn-ghost', id: 'qa-to-coach' },
+          { label: '关闭' }
+        ]
+      });
+
+      var input = document.getElementById('qa-input');
+      var chatEl = document.getElementById('qa-chat');
+
+      function renderChat() {
+        if (!chatEl) return;
+        var html = '';
+        qaHistory.forEach(function(h) {
+          if (h.role === 'user') {
+            html += '<div style="margin:8px 0;padding:8px 10px;background:#e6f4ff;border-radius:8px;max-width:85%;margin-left:auto;text-align:left">'
+              + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:2px">你</div>'
+              + '<div style="font-size:13px">' + U.esc(h.content) + '</div></div>';
+          } else {
+            html += '<div style="margin:8px 0;padding:8px 10px;background:var(--surface);border-radius:8px;max-width:85%">'
+              + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:2px">AI老师</div>'
+              + '<div style="font-size:13px">' + renderAIReply(h.content) + '</div></div>';
+          }
+        });
+        chatEl.innerHTML = html;
+        if (chatEl.scrollHeight > chatEl.clientHeight) chatEl.scrollTop = chatEl.scrollHeight;
+      }
+
+      function doAsk() {
+        var question = (input && input.value.trim()) || '';
+        if (!question) { Toast.warn('请输入问题'); return; }
+
+        // 加入用户消息到历史
+        qaHistory.push({ role: 'user', content: question });
+        renderChat();
+        if (input) input.value = '';
+
+        var sendBtn = document.querySelector('#modal-overlay [data-act="0"]');
+        if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '思考中…'; }
+
+        // 构建多轮messages：系统prompt + 题目上下文(首条) + 历史问答
+        var messages = [];
+        // 系统指令
+        messages.push({ role: 'system', content: '你是考研辅导老师。学生刚做完一道题，现在连续追问细节。'
+          + '下面是完整的题目上下文（题干+答案+解析+得分+采分点），请基于这些信息准确回答学生的每次追问。'
+          + '回答要求：①直接针对问题，不要复述已知信息 ②公式用 LaTeX 格式（$...$ 包裹）③简明扼要 ④如果追问涉及变式/扩展，给出一道同类例题。'
+          + '⑤保持上下文连贯，可以引用之前的问答。' });
+        // 首条消息带完整题目上下文
+        messages.push({ role: 'user', content: '【题目上下文（请记住这些信息，后续追问都基于此题）】\n' + qCtx });
+        // 历史问答
+        qaHistory.forEach(function(h) {
+          messages.push({ role: h.role, content: h.content });
+        });
+
+        // 用 chatStream 的多消息模式（需要检查是否支持）
+        // 当前 chatStream(systemPrompt, userText) 只接受两个参数
+        // 改为把历史拼接到 userText 中
+        var userText = '';
+        for (var i = 1; i < messages.length; i++) {
+          var prefix = messages[i].role === 'user' ? '【学生】' : '【老师】';
+          userText += prefix + messages[i].content + '\n\n';
+        }
+        // 最后一条是刚问的，加提示
+        userText += '【请回答学生最新的一条追问】';
+
+        AI.chatStream(messages[0].content, userText, function(full) {
+          // 流式中：显示加载动画 + 已有历史
+          if (chatEl) {
+            var tmpHist = qaHistory.slice();
+            tmpHist.push({ role: 'assistant', content: full || '…' });
+            var html = '';
+            tmpHist.forEach(function(h) {
+              if (h.role === 'user') {
+                html += '<div style="margin:8px 0;padding:8px 10px;background:#e6f4ff;border-radius:8px;max-width:85%;margin-left:auto">'
+                  + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:2px">你</div>'
+                  + '<div style="font-size:13px">' + U.esc(h.content) + '</div></div>';
+              } else {
+                html += '<div style="margin:8px 0;padding:8px 10px;background:var(--surface);border-radius:8px;max-width:85%">'
+                  + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:2px">AI老师</div>'
+                  + '<div style="font-size:13px">' + renderAIReply(h.content) + '<span class="ai-cursor"></span></div></div>';
+              }
+            });
+            chatEl.innerHTML = html;
+            if (chatEl.scrollHeight > chatEl.clientHeight) chatEl.scrollTop = chatEl.scrollHeight;
+          }
+        }, null, { cache: false }).then(function(full) {
+          // 完成：保存助手回复
+          qaHistory.push({ role: 'assistant', content: full || '（无回复）' });
+          renderChat();
+          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送提问'; }
+        }).catch(function(e) {
+          qaHistory.push({ role: 'assistant', content: '抱歉，回答失败：' + e.message });
+          renderChat();
+          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '发送提问'; }
+        });
+      }
+
+      // 回车发送
+      if (input) input.onkeydown = function(ev) { if (ev.key === 'Enter') { ev.preventDefault(); doAsk(); } };
+      // Modal 组件用 data-act 索引创建按钮（不设置 id），必须用 data-act 定位
+      var sendBtn = document.querySelector('#modal-overlay [data-act="0"]');
+      if (sendBtn) sendBtn.onclick = doAsk;
+
+      // 发送给AI教练
+      var coachBtn = document.querySelector('#modal-overlay [data-act="1"]');
+      if (coachBtn) coachBtn.onclick = () => {
+        // 把题目上下文 + 已有追问历史打包
+        var summary = '【来自测验解析页的一道题】\n' + qCtx;
+        if (qaHistory.length > 0) {
+          summary += '\n\n【已有追问记录】\n';
+          qaHistory.forEach(function(h) {
+            summary += (h.role === 'user' ? '学生：' : '老师：') + h.content + '\n';
+          });
+        }
+        summary += '\n请帮我深入分析这道题，给出更详细的解题思路和扩展。';
+        // 尝试调用 AI 教练（Copilot）
+        if (window.Copilot && Copilot.open) {
+          Modal.close();
+          // 延迟一帧确保 Modal 关闭动画完成再打开 Copilot
+          setTimeout(function() { Copilot.open({ send: summary }); }, 350);
+        } else {
+          // 降级：复制到剪贴板 + 提示
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(summary).then(function() {
+              Toast.success('已复制题目上下文到剪贴板，请粘贴到AI教练对话框');
+            });
+          } else {
+            Toast.warn('AI教练模块未就绪，可手动复制题目内容去提问');
+          }
+        }
+      };
+    };
   }
 
-  // 错题变式复现入口：从错题本跳入，生成同源变式题
+  // 错题变式复现入口：从错题本跳入，AI举一反三精准出题
   function startVariant(mistake) {
-    // 根据错题科目猜考点：用错误类型映射到一个相关考点，或让用户在选题页确认
     variantOf = {
       topicName: mistake.desc || '综合',
       errorType: mistake.type,
-      originDesc: mistake.desc || '（原题描述缺失）'
+      originDesc: mistake.desc || '（原题描述缺失）',
+      subject: mistake.subject || 'math',
+      // 若错题有关联考点(refId)，优先用于精准出题
+      refId: mistake.refId || null
     };
-    // 找一个与错误类型最相关的考点作为默认（符号/分式→定积分换元，概念→对应科目首考点）
+    // 智能考点匹配：优先用错题自带的refId，其次按错误类型映射
     var subjTopics = DB.TOPICS[mistake.subject] || DB.TOPICS.math;
-    const guessTopic = mistake.type === 'sign' || mistake.type === 'fraction' ? 'm-subst'
-      : mistake.type === 'integral' ? 'm-ode' : (subjTopics[0] || DB.TOPICS.math[0]).id;
-    // 精准深链：若调用方显式指定 refId（如冲刺清单"去练这题"），优先命中该考点
-    topicId = (mistake.refId && allTopics().some(t => t.id === mistake.refId)) ? mistake.refId : guessTopic;
+    if (mistake.refId && allTopics().some(t => t.id === mistake.refId)) {
+      topicId = mistake.refId;
+    } else {
+      const guessTopic = mistake.type === 'sign' || mistake.type === 'fraction' ? 'm-subst'
+        : mistake.type === 'integral' ? 'm-ode' : (subjTopics[0] || DB.TOPICS.math[0]).id;
+      topicId = guessTopic;
+    }
     phase = 'pick';
-    // 直接进入出题（用变式）
     makeQuiz();
   }
 
@@ -9205,6 +9738,12 @@ function bind(el, next) {
   let quizState = null;         // {id, items:[{q,a,show,ok}]}
   let cmZoom = 1;               // 缩放比例（0.3 ~ 3）
   let cmPanX = 0, cmPanY = 0;   // 平移偏移
+  // document 级拖拽监听句柄：每次 render 前必须解绑，否则监听器会随重渲染无限叠加
+  let docMove = null, docUp = null;
+  function detachPanDoc() {
+    if (docMove) { document.removeEventListener('mousemove', docMove); docMove = null; }
+    if (docUp) { document.removeEventListener('mouseup', docUp); docUp = null; }
+  }
 
   /* ---------------- 存储层 ---------------- */
   function bag() {
@@ -9620,6 +10159,7 @@ function bind(el, next) {
     el.innerHTML =
       '<div class="card"><div class="card-title">🗺️ ' + U.esc(majorName()) + '概念依赖图谱</div>'
       + '<div class="muted-sm">前置掌握度 &lt; 60% → 后继锁定。点击节点看依赖链（蓝=前置链，紫虚线=后继）与 AI 深度讲解。'
+      + '<br>图谱可缩放：手机双指捏合缩放、单指拖动平移；电脑滚轮缩放、按住拖动。'
       + (mods.length ? '按章节分列：' + U.esc(mods.join('、')) + '。' : '') + '</div>'
       + '<div class="stat-row">'
       + '<div class="stat"><div class="stat-num">' + nodes.length + '</div><div class="stat-label">考点</div></div>'
@@ -9904,27 +10444,108 @@ function bind(el, next) {
       }, { passive: false });
     }
 
-    // 拖拽平移
+    // ---- 拖拽平移（鼠标 + 触摸）----
+    // 注意：document 级监听会随每次 render 重复叠加，必须先解绑旧的（见 detachPanDoc）
     if (svgEl) {
+      detachPanDoc();                       // 清掉上一次 render 留下的 document 监听
       let dragging = false, sx = 0, sy = 0, spx = 0, spy = 0;
+
+      /* ── 鼠标 ── */
       svgEl.addEventListener('mousedown', e => {
-        // 只响应左键且不在节点上
-        if (e.button !== 0) return;
-        if (e.target.closest('.cm-node')) return;
+        if (e.button !== 0) return;                 // 只响应左键
+        if (e.target.closest('.cm-node')) return;   // 点节点不拖拽
         dragging = true; sx = e.clientX; sy = e.clientY; spx = cmPanX; spy = cmPanY;
         svgEl.style.cursor = 'grabbing';
         e.preventDefault();
       });
-      document.addEventListener('mousemove', e => {
+      docMove = e => {
         if (!dragging) return;
-        const dx = (e.clientX - sx) / cmZoom;
-        const dy = (e.clientY - sy) / cmZoom;
-        cmPanX = spx + dx; cmPanY = spy + dy;
+        cmPanX = spx + (e.clientX - sx) / cmZoom;
+        cmPanY = spy + (e.clientY - sy) / cmZoom;
         applyZoom();
-      });
-      document.addEventListener('mouseup', () => {
+      };
+      docUp = () => {
         if (dragging) { dragging = false; if (svgEl) svgEl.style.cursor = 'grab'; }
-      });
+      };
+      document.addEventListener('mousemove', docMove);
+      document.addEventListener('mouseup', docUp);
+
+      /* ── 触摸：单指拖拽 + 双指捏合缩放 ── */
+      let tDrag = false;                    // 单指拖拽中
+      let pinch = null;                     // {d0, z0, cx, cy} 双指初始状态
+      let moved = false;                    // 是否发生过位移（用于区分点击/拖拽）
+
+      // 两指间距
+      const dist = t => {
+        const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+      };
+      // 屏幕坐标 → SVG 内部坐标
+      const toSvg = (cx, cy) => {
+        const rect = svgEl.getBoundingClientRect();
+        const pt = svgEl.createSVGPoint();
+        pt.x = cx - rect.left; pt.y = cy - rect.top;
+        try { return pt.matrixTransform(svgEl.getScreenCTM().inverse()); }
+        catch (err) { return { x: 0, y: 0 }; }
+      };
+
+      svgEl.addEventListener('touchstart', e => {
+        moved = false;
+        if (e.touches.length === 2) {
+          // 双指：进入捏合缩放，记录初始间距与中心点
+          tDrag = false;
+          const t = e.touches;
+          const mx = (t[0].clientX + t[1].clientX) / 2;
+          const my = (t[0].clientY + t[1].clientY) / 2;
+          const p = toSvg(mx, my);
+          pinch = { d0: dist(t), z0: cmZoom, cx: p.x, cy: p.y };
+          e.preventDefault();
+        } else if (e.touches.length === 1) {
+          // 单指：拖拽平移（节点上也允许拖，靠 moved 标志区分是不是点击）
+          pinch = null;
+          tDrag = true;
+          sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+          spx = cmPanX; spy = cmPanY;
+        }
+      }, { passive: false });
+
+      svgEl.addEventListener('touchmove', e => {
+        if (pinch && e.touches.length === 2) {
+          // 双指捏合：以两指中心为锚点缩放
+          const d = dist(e.touches);
+          if (pinch.d0 > 0) {
+            moved = true;
+            zoomTo(pinch.z0 * (d / pinch.d0), pinch.cx, pinch.cy);
+          }
+          e.preventDefault();
+        } else if (tDrag && e.touches.length === 1) {
+          const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+          if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+          if (moved) {
+            cmPanX = spx + dx / cmZoom;
+            cmPanY = spy + dy / cmZoom;
+            applyZoom();
+            e.preventDefault();          // 拖动图谱时阻止页面滚动
+          }
+        }
+      }, { passive: false });
+
+      const touchEnd = e => {
+        if (e.touches.length === 0) { tDrag = false; pinch = null; }
+        else if (e.touches.length === 1 && pinch) {
+          // 双指松掉一根 → 退回单指拖拽，重置基准避免跳变
+          pinch = null; tDrag = true;
+          sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+          spx = cmPanX; spy = cmPanY;
+        }
+      };
+      svgEl.addEventListener('touchend', touchEnd);
+      svgEl.addEventListener('touchcancel', touchEnd);
+
+      // 拖动过的手指抬起时不要误触发节点点击
+      svgEl.addEventListener('click', e => {
+        if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; }
+      }, true);
     }
 
     // 攻克路线
@@ -11622,16 +12243,19 @@ function bind(el, next) {
     + '所有字符串必须用英文双引号；字符串内部不得出现未转义的双引号或换行；'
     + '英文缩写里的撇号（don\'t、it\'s）照常写即可。';
   // simple=true：精简模式（不要例句），用于首次失败后的自动重试，大幅降低被截断的概率
+  // 说明：拍词表照片时一张图常有 30-50 个词，早期「最多12个」会漏掉大半，
+  //       现放宽到 40（精简档 60）；配合 chatJSON 的 maxTokens=8000 兜底防截断。
   function extractPrompt(simple) {
     if (simple) {
       return '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成 JSON 数组，每项只含 3 个字段：'
         + '{"word":"单词或短语(转原形)","pos":"词性缩写如v./n./adj./phr.","meaning":"中文释义(考研常考义优先)"}。'
-        + '要求：跳过过于基础的词(如 a/the/good)；最多 10 个；不要例句、不要音标；'
-        + '务必输出完整闭合的 JSON 数组，只输出数组本身。';
+        + '要求：把图片/文本里出现的词尽量都提出来，不要自行缩减数量；跳过过于基础的词(如 a/the/good)；'
+        + '最多 60 个；不要例句、不要音标；务必输出完整闭合的 JSON 数组，只输出数组本身。';
     }
     return '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成JSON数组，每项：'
       + '{"word":"单词或短语(单词转原形)","phonetic":"音标(可空)","pos":"词性缩写如v./n./adj./phr.","meaning":"中文释义(考研常考义优先,多义用；分隔)","example":"英文例句(考研难度,可空)","exampleCn":"例句翻译(可空)"}。'
-      + '要求：优先考研高频词、熟词僻义词、核心动词短语；跳过过于基础的词(如a/the/good)；最多12个。'
+      + '要求：优先考研高频词、熟词僻义词、核心动词短语；跳过过于基础的词(如a/the/good)；'
+      + '**如果材料里有很多词（如词表照片），请全部提取，不要只给前十几个**；最多40个。'
       + '硬性约束：①只输出 JSON 数组本身，不要任何前言/后记/markdown 围栏；'
       + '②数组必须完整闭合（宁可少给几个词，也绝不能输出到一半被截断）；'
       + '③例句务必简短（不超过 15 个词），字段可留空字符串但不能省略引号。';
@@ -11647,7 +12271,7 @@ function bind(el, next) {
         example: String(v.example || '').trim().slice(0, 500),
         exampleCn: String(v.exampleCn || '').trim().slice(0, 500)
       };
-    }).slice(0, 20);
+    }).slice(0, 80);   // 上限放宽到 80（原 20，拍词表照片时会把大半词条截掉）
   }
 
   // ---------- 后台 AI 提取任务（非阻塞：可离开本页去别处，完成后 Toast 提醒 + 横幅展示结果） ----------
@@ -11660,7 +12284,12 @@ function bind(el, next) {
     if (!retrying && extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); return; }
     extractJob = { status: 'running', source: source + (retrying ? '·精简重试' : ''), startedAt: Date.now(), thumb: imageDataUrl || '' };
     // 提取要求“每次都重新看图”，跳过响应缓存，避免命中旧的坏结果
-    AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl, { cache: false }).then(function (arr) {
+    // noThink：结构化提取强制关闭思考模式——开思考时 reasoning 会吃掉 max_tokens 预算，
+    //          导致正式 JSON 输出被腰斩（这正是「开思考模式必失败」的根因）
+    // maxTokens 8000：一次可能要输出 40+ 词条（含例句），默认预算不够
+    AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl, {
+      cache: false, noThink: true, maxTokens: 8000
+    }).then(function (arr) {
       var items = normalizeExtracted(arr);
       if (!items.length) throw new Error('AI 未提取到有效词条');
       extractJob = { status: 'done', source: source, items: items };
