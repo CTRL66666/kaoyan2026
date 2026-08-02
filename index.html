@@ -5333,7 +5333,13 @@ body.cp-lock { overflow: hidden; }
     for (var i = 0; i < s.length; i++) {
       var c = s.charAt(i);
       if (quote) {                                  // ── 字符串内部 ──
-        if (esc) { out += c; esc = false; continue; }
+        if (esc) {
+          // 标准JSON转义字符：" \ / b f n r t u → 原样保留；其余一律补为 \\X（LaTeX的 \begin/\frac/\end 等均属此类）
+          esc = false;
+          if ('"\\/bfnrt'.indexOf(c) >= 0 || c === 'u') { out += '\\' + c; }
+          else { out += '\\' + '\\' + c; }
+          continue;
+        }
         if (c === '\\') { out += c; esc = true; continue; }
         if (c === quote) { quote = ''; out += '"'; continue; }
         if (c === '"') { out += '\\"'; continue; }  // 单/中文引号串内的裸双引号需转义
