@@ -15966,40 +15966,6 @@ function bind(el, next) {
     App.refresh();
   }
 
-  // ---------- 从 AI 返回文本中提取 JSON ----------
-  function extractJSON(raw) {
-    var s = AI.stripThinking(raw || '').trim();
-    // 先试 markdown 代码块
-    var m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (m) { s = m[1].trim(); var r1 = tryParseRepair(s); if (r1) return r1; }
-    // 再找最外层 { ... }
-    var start = s.indexOf('{');
-    if (start === -1) return null;
-    var depth = 0, inStr = false, escape = false, end = -1;
-    for (var i = start; i < s.length; i++) {
-      var c = s.charAt(i);
-      if (escape) { escape = false; continue; }
-      if (c === '\\') { escape = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === '{') depth++;
-      else if (c === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
-    }
-    if (end <= start) return null;
-    var r2 = tryParseRepair(s.slice(start, end));
-    return r2 || null;
-  }
-
-  // 尝试 JSON.parse 并修复 LaTeX 转义吞字符问题
-  function tryParseRepair(jsonStr) {
-    // 直接解析
-    try { return Tex.repairMangledLatex(JSON.parse(jsonStr)); } catch (e) {}
-    // 安全修复后重试（AI.repairJsonSafely：注释/尾逗号/裸换行/单引号串，
-    // 但只在字符串外替换，不会破坏英文里的 don't / it's 撇号）
-    try { return Tex.repairMangledLatex(JSON.parse(AI.repairJsonSafely(jsonStr))); } catch (e) {}
-    return null;
-  }
-
   // 统一的 AI 生成弹窗：可关闭 + spinner + 实时计时 + 取消（abort 信号）
   // 解决"前端看起来阻塞、不知道是否在生成"& 长推理被误杀后无法取消的问题
   // 增强关闭后体验：弹窗关闭时若仍在生成，自动在状态栏注入轻量进度指示器（计时+可取消），
@@ -16101,16 +16067,15 @@ function bind(el, next) {
 
     var gen = openAiGenModal('🤖 AI 解析中…');
     var out = gen.out;
-    AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
-      gen.safeWrite((reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
-        + (text ? renderMath(text).replace(/\n/g, '<br>') : ''));
-    }, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 }).then(function (fullText) {
-      gen.stopTimer();
-      var analysis = extractJSON(fullText);
-      if (!analysis) {
-        gen.safeWrite('<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText));
-        analysis = { keySteps: fullText, errorCause: '', extractedQuestion: '', painPoint: '' };
-      }
+    // 直接复用与其他模块一致的 AI.chatJSON（内部走 AI.extractRobustJSON，已含思考块剥离 stripThinking），
+    // 思考模式下解析稳健，不再依赖本地脆弱的 extractJSON / 直接显示含 <think> 的原始流。
+    AI.chatJSON(systemPrompt, userPrompt, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 })
+      .then(function (analysis) {
+        gen.stopTimer();
+        gen.safeWrite('<div class="ai-ans">' + (analysis.keySteps ? renderMath(analysis.keySteps).replace(/\n/g, '<br>') : '（无解析）') + '</div>'
+          + (analysis.extractedQuestion ? '<div class="muted-sm" style="margin-top:8px"><b>识别题目：</b>' + U.esc(analysis.extractedQuestion) + '</div>' : '')
+          + (analysis.errorCause ? '<div class="muted-sm" style="margin-top:8px"><b>易错根因：</b>' + U.esc(analysis.errorCause) + '</div>' : '')
+          + (analysis.painPoint ? '<div class="muted-sm" style="margin-top:8px"><b>疑难点标签：</b>' + U.esc(analysis.painPoint) + '</div>' : ''));
       // 写回数据（含提取的题目）
       var wasEmpty = !photo.painPoint; // 解析前是否已标记过疑难点
       var autoPain = (analysis.painPoint || '').trim().slice(0, 20);
@@ -16169,16 +16134,13 @@ function bind(el, next) {
 
     var gen = openAiGenModal('🔄 AI 出题中…');
     var out = gen.out;
-    AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
-      gen.safeWrite((reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
-        + (text ? renderMath(text).replace(/\n/g, '<br>') : ''));
-    }, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 }).then(function (fullText) {
-      gen.stopTimer();
-      var result = extractJSON(fullText);
-      if (!result) {
-        gen.safeWrite('<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText));
-        result = { question: fullText, solution: '', trap: '' };
-      }
+    // 复用 AI.chatJSON（同其他模块的稳健 JSON 提取 + 思考块剥离）
+    AI.chatJSON(systemPrompt, userPrompt, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 })
+      .then(function (result) {
+        gen.stopTimer();
+        gen.safeWrite('<div class="ai-ans">' + (result.question ? renderMath(result.question).replace(/\n/g, '<br>') : '（无题目）') + '</div>'
+          + (result.solution ? '<div class="muted-sm" style="margin-top:8px"><b>解答：</b>' + U.esc(result.solution) + '</div>' : '')
+          + (result.trap ? '<div class="muted-sm" style="margin-top:8px"><b>易踩坑：</b>' + U.esc(result.trap) + '</div>' : ''));
       // 写回数据
       Store.update(function (st) {
         var photos = st.mistakePhotos || [];
@@ -16334,13 +16296,13 @@ function bind(el, next) {
 
     var userPrompt = ctx + '\n\n请基于以上信息生成该考生的薄弱点画像。';
 
-    AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
-      gen.safeWrite(text || (reasoning ? '🤔 ' + reasoning : '加载中…'));
-    }, null, { signal: gen.ac.signal, maxTokens: 8192 }).then(function (fullText) {
-      gen.stopTimer();
-      var res = extractJSON(fullText);
-      if (!res) { gen.safeWrite(fullText); res = { weakAreas: [], summary: fullText, advice: '' }; }
-      Store.update(function (st) {
+    // 复用 AI.chatJSON（同其他模块的稳健 JSON 提取 + 思考块剥离）
+    AI.chatJSON(systemPrompt, userPrompt, null, { signal: gen.ac.signal, maxTokens: 8192 })
+      .then(function (res) {
+        gen.stopTimer();
+        gen.safeWrite('<div class="ai-ans">' + (res.summary ? U.esc(res.summary) : '（无摘要）') + '</div>'
+          + (res.advice ? '<div class="muted-sm" style="margin-top:8px"><b>建议：</b>' + U.esc(res.advice) + '</div>' : ''));
+        Store.update(function (st) {
         st.weaknessProfile = {
           generatedAt: new Date().toISOString(),
           basedOn: painPoints,
