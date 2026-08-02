@@ -3071,6 +3071,26 @@ body.cp-lock { overflow: hidden; }
 #cloud-card a{color:#2f54eb}`;
     document.head.appendChild(s);
   }
+  // 确保同步badge最终嵌入顶部状态条（解决cloud初始化与DOM渲染的时序问题）
+  // 若状态条已存在直接挂入；否则用一次性 MutationObserver 监听其出现后挂入
+  var _badgeObserver = null;
+  function mountBadgeIntoStatusbar() {
+    if (!state.badge) return;
+    var sb = document.getElementById('statusbar');
+    if (sb) {
+      if (state.badge.parentNode !== sb) sb.appendChild(state.badge);
+      if (_badgeObserver) { _badgeObserver.disconnect(); _badgeObserver = null; }
+      return;
+    }
+    // 状态条尚未渲染：先挂到 body 占位，再监听其出现
+    if (state.badge.parentNode !== document.body) document.body.appendChild(state.badge);
+    if (_badgeObserver) return;
+    _badgeObserver = new MutationObserver(function () {
+      var el = document.getElementById('statusbar');
+      if (el) { el.appendChild(state.badge); _badgeObserver.disconnect(); _badgeObserver = null; }
+    });
+    _badgeObserver.observe(document.body, { childList: true, subtree: true });
+  }
   function renderBadge(text, type) {
     ensureStyle();
     if (!state.badge) {
@@ -3078,10 +3098,7 @@ body.cp-lock { overflow: hidden; }
       state.badge.id = 'cloud-badge';
       state.badge.onclick = openPanel;
     }
-    // 每次都尝试嵌入状态条（解决时序问题：cloud初始化早于DOM渲染）
-    var sb = document.getElementById('statusbar');
-    if (sb && state.badge.parentNode !== sb) sb.appendChild(state.badge);
-    else if (!sb && state.badge.parentNode !== document.body) document.body.appendChild(state.badge);
+    mountBadgeIntoStatusbar();
     let label = text;
     if (type === 'on' && state.gistId) label = '☁ #' + state.gistId.slice(0, 6);
     else if (type === 'on') label = '☁ 已同步';
@@ -3408,6 +3425,7 @@ body.cp-lock { overflow: hidden; }
   window.Cloud = {
     init, pull, push, schedulePush, openPanel,
     logout,
+    mountBadge: () => mountBadgeIntoStatusbar(),
     get isEnabled() { return state.enabled; },
     get isLoggedIn() { return !!state.token; },
     // 数据分析与管理（供设置模块调用）
@@ -17525,6 +17543,7 @@ function bind(el, next) {
       + '<span class="sb-item">✅ <b>' + done + '/' + total + '</b></span>'
       + (streak >= 2 ? '<span class="sb-item sb-streak">🔥 <b>' + streak + '</b>天</span>' : '')
       + (Store.mistakeCountToday('sign') > 0 ? '<span class="sb-item sb-warn">⚠️符号' + Store.mistakeCountToday('sign') + '</span>' : '');
+    if (window.Cloud && Cloud.mountBadge) Cloud.mountBadge();
   }
 
   function renderNav() {
