@@ -748,16 +748,18 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 /* ---------- 全局 AI 教练 Copilot ---------- */
 #copilot-fab {
   position: fixed; bottom: 76px; right: max(16px, calc(50% - 344px)); z-index: 90;
-  width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
+  width: 56px; height: 56px; border-radius: 50%; border: none; cursor: grab;
   background: linear-gradient(145deg, #f8faff, #e8ecf4);
   color: #fff; font-size: 24px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   transition: transform 150ms, opacity 150ms, box-shadow 200ms;
   box-shadow: 0 3px 14px rgba(99,102,241,.22), 0 1px 3px rgba(0,0,0,.08);
+  touch-action: none;
 }
 #copilot-fab:hover { box-shadow: 0 5px 20px rgba(99,102,241,.32), 0 2px 6px rgba(0,0,0,.1); }
-#copilot-fab:active { transform: scale(.92); }
-#copilot-fab svg { width: 34px; height: 34px; }
+#copilot-fab:active { transform: scale(.92); cursor: grabbing; }
+#copilot-fab.dragging { transition: none; transform: scale(1.08); cursor: grabbing; box-shadow: 0 8px 26px rgba(99,102,241,.4), 0 2px 8px rgba(0,0,0,.12); }
+#copilot-fab svg { width: 34px; height: 34px; pointer-events: none; }
 #copilot-fab.cp-hide { opacity: 0; pointer-events: none; transform: scale(.6); }
 #copilot-fab.cp-dot::after {
   content: ''; position: absolute; top: 4px; right: 4px;
@@ -16390,10 +16392,59 @@ function bind(el, next) {
     mounted = true;
     var fab = document.createElement('button');
     fab.id = 'copilot-fab';
-    fab.setAttribute('aria-label', 'AI教练');
+    fab.setAttribute('aria-label', 'AI教练（按住拖拽可移动位置）');
     fab.innerHTML = U.icon('copilot');
-    fab.onclick = function () { open(); };
     document.body.appendChild(fab);
+
+    // ---------- 拖拽：pointer events 同时支持鼠标/触摸 ----------
+    var DRAG_KEY = 'copilot_fab_pos';
+    try {
+      var sp = JSON.parse(localStorage.getItem(DRAG_KEY) || 'null');
+      if (sp && typeof sp.x === 'number' && typeof sp.y === 'number') {
+        fab.style.left = sp.x + 'px';
+        fab.style.top = sp.y + 'px';
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+      }
+    } catch (e) {}
+
+    var dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    fab.addEventListener('pointerdown', function (e) {
+      if (e.button != null && e.button !== 0) return;
+      dragging = true; moved = false;
+      sx = e.clientX; sy = e.clientY;
+      var r = fab.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      fab.classList.add('dragging');
+      try { fab.setPointerCapture(e.pointerId); } catch (e2) {}
+      e.preventDefault();
+    });
+    fab.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true;
+      var nx = ox + dx, ny = oy + dy;
+      nx = Math.max(4, Math.min(nx, window.innerWidth - fab.offsetWidth - 4));
+      ny = Math.max(4, Math.min(ny, window.innerHeight - fab.offsetHeight - 4));
+      fab.style.left = nx + 'px';
+      fab.style.top = ny + 'px';
+      fab.style.right = 'auto';
+      fab.style.bottom = 'auto';
+    });
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+      fab.classList.remove('dragging');
+      try {
+        localStorage.setItem(DRAG_KEY, JSON.stringify({ x: parseInt(fab.style.left, 10) || 0, y: parseInt(fab.style.top, 10) || 0 }));
+      } catch (e2) {}
+    }
+    fab.addEventListener('pointerup', function (e) {
+      var wasMoved = moved;
+      endDrag(e);
+      if (!wasMoved) open(); // 仅点击（未拖动）才打开
+    });
+    fab.addEventListener('pointercancel', endDrag);
 
     var panel = document.createElement('div');
     panel.id = 'copilot-panel';
