@@ -1076,6 +1076,31 @@ body.cp-lock { overflow: hidden; }
 }
 .dgm-fallback { border-style: dashed; opacity: 0.85; }
 
+/* ===== AI 生成中：非阻塞进度弹窗 ===== */
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  border: 2px solid #d9d9d9;
+  border-top-color: #333;
+  border-radius: 50%;
+  animation: kySpin 0.75s linear infinite;
+}
+@keyframes kySpin { to { transform: rotate(360deg); } }
+.pm-ai-gen {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid #eaeaea;
+  border-radius: 8px;
+  background: #fafafa;
+}
+.pm-ai-gen .muted-sm { margin-top: 6px; line-height: 1.6; }
+/* 软刷新：内容原地更新时的轻过渡，避免整页跳动感 */
+.view-soft-update { animation: kySoft 240ms ease; }
+@keyframes kySoft { from { opacity: 0.72; } to { opacity: 1; } }
+
 </style>
 </head>
 <body>
@@ -2055,6 +2080,10 @@ body.cp-lock { overflow: hidden; }
       opts = opts || {};
       const r = Store.migrate(remoteData);
       const local = Store.get();
+      // 变更前快照：计算各顶层字段哈希，供云同步「软刷新」判断哪些页面需要重建
+      const _hash = function (s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h.toString(36); };
+      const _beforeHash = {};
+      for (const k in local) { try { _beforeHash[k] = _hash(JSON.stringify(local[k])); } catch (e) { _beforeHash[k] = '0'; } }
       // 墓碑合并：任一侧标记删除的 id 都视为已删
       const tomb = Object.assign({}, local.taskTomb || {}, r.taskTomb || {});
       // 集合墓碑（题库/拍题/作文/单词本等）：任一侧删除都生效
@@ -2117,9 +2146,13 @@ body.cp-lock { overflow: hidden; }
         || (local.mistakes && local.mistakes.length > 0)
         || (local.tasks && local.tasks.length > 6);
       if (localOnboarded && out.settings) out.settings.onboarded = true;
+      // 计算变化的顶层字段（供云同步软刷新：仅相关页面才重建）
+      const changed = [];
+      for (const k in out) { try { if (_beforeHash[k] !== _hash(JSON.stringify(out[k]))) changed.push(k); } catch (e) {} }
       cache = out;
       Store.save();
       U.emit('store:change');
+      return changed;
     },
     resetAll() { cache = initialState(); Store.save(); U.emit('store:change'); },
     exportJSON() { return JSON.stringify(Store.get(), null, 2); },
@@ -2654,8 +2687,10 @@ body.cp-lock { overflow: hidden; }
 
   function mergeRemote(remoteObj, opts) {
     suppressPush = true;
-    try { window.Store.mergeFrom(remoteObj, opts || {}); } finally { suppressPush = false; }
-    if (window.App) App.refresh();
+    let changed = [];
+    try { changed = window.Store.mergeFrom(remoteObj, opts || {}) || []; } finally { suppressPush = false; }
+    // 软刷新：仅当变化的字段与当前页面相关才重建，避免无关页面抖动/丢失滚动位置
+    if (window.App) App.softRefresh(changed);
     if (window.Onboarding && Onboarding.dismissIfNeeded) Onboarding.dismissIfNeeded();
   }
 
@@ -5010,6 +5045,7 @@ body.cp-lock { overflow: hidden; }
 
   // 判定失败是否值得切换备用接口：网络错误/超时/鉴权/限流/服务端错误切；400（请求体问题）不切
   function isSwitchableError(err) {
+    if (err && err.noFailover) return false; // 连接/空闲超时、用户取消：不切备用接口（重来一遍无意义）
     var m = (err && err.message) || '';
     var hm = m.match(/^HTTP (\d{3})/);
     if (hm) {
@@ -5460,11 +5496,26 @@ body.cp-lock { overflow: hidden; }
     // 调试日志：400 时可在控制台看到完整请求体（帮助定位问题）
     console.log('[AI] chatStream 请求 接口=' + (api.name || '') + ' endpoint=' + api.endpoint + ' model=' + api.model
       + ' body前200字=' + jsonBody.slice(0, 200));
-    return fetchWithTimeout(api.endpoint, {
+    // 流式传输：连接超时(30s) + 逐块空闲超时(默认4分钟，每收到一块重置)双保险。
+    // 思考模型(reasoning)在吐首段正式内容前可能长时间“攒着”不出包，不能用“总时长”硬超时
+    // （原 30s 会把长推理直接腰斩 → 表现为“AI始终解析失败”）。改为：
+    //   · 连接超时 30s —— 只判定“连不上/首字节迟迟不来”；
+    //   · 空闲超时 4min —— 流式开始后，只要持续有数据流入就一直续期，真正“卡死”才杀。
+    const ctrl = new AbortController();
+    if (opts && opts.signal) {
+      if (opts.signal.aborted) throw new Error('已取消');
+      try { opts.signal.addEventListener('abort', function () { ctrl.abort(); }); } catch (e) {}
+    }
+    const CONNECT_MS = 30000;                          // 仅管“连不上”
+    const INACTIVITY_MS = (opts && opts.streamIdleMs) || 240000; // 流式空闲上限（思考长推理不被误杀）
+    let connectTimer = setTimeout(function () { ctrl.abort(); }, CONNECT_MS);
+    return fetch(api.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api.key },
-      body: jsonBody
+      body: jsonBody,
+      signal: ctrl.signal
     }).then(function (r) {
+      clearTimeout(connectTimer);
       if (!r.ok) {
         // 400 无条件安全网：首次失败时，用最精简的请求体重试一次（只保留 model+messages）
         if (r.status === 400 && !_noKwArgs) {
@@ -5487,14 +5538,17 @@ body.cp-lock { overflow: hidden; }
       const reader = r.body.getReader();
       const dec = new TextDecoder();
       let full = '', reasoning = '', buf = '';
+      let inact = setTimeout(function () { ctrl.abort(); }, INACTIVITY_MS);
       const emit = () => { if (onChunk) onChunk(full, reasoning); };
       function pump() {
-        return reader.read().then(({ done, value }) => {
-          if (done) { emit(); return full; }
-          buf += dec.decode(value, { stream: true });
+        return reader.read().then(function (res) {
+          if (res.done) { clearTimeout(inact); emit(); return full; }
+          // 每收到一块数据就重置空闲计时：思考模型长推理只要持续吐字就不会被误杀
+          clearTimeout(inact); inact = setTimeout(function () { ctrl.abort(); }, INACTIVITY_MS);
+          buf += dec.decode(res.value, { stream: true });
           const lines = buf.split('\n');
           buf = lines.pop();
-          lines.forEach(line => {
+          lines.forEach(function (line) {
             const t = line.trim();
             if (!t || t === 'data: [DONE]' || t.indexOf('data:') !== 0) return;
             try {
@@ -5511,9 +5565,25 @@ body.cp-lock { overflow: hidden; }
             } catch (e) { /* 忽略半行 */ }
           });
           return pump();
+        }, function (err) {
+          clearTimeout(inact); clearTimeout(connectTimer);
+          if (err && err.name === 'AbortError') {
+            const e = new Error('请求中断/超时：思考模型生成较慢，若频繁出现可在「设置」关闭 AI 思考模式后重试');
+            e.noFailover = true; // 连接/空闲超时或用户取消：不触发备用接口切换（重来一遍无意义）
+            throw e;
+          }
+          throw err;
         });
       }
       return pump();
+    }, function (err) {
+      clearTimeout(connectTimer);
+      if (err && err.name === 'AbortError') {
+        const e = new Error('连接超时：30 秒内未收到响应');
+        e.noFailover = true;
+        throw e;
+      }
+      throw err;
     });
   }
 
@@ -15830,6 +15900,42 @@ function bind(el, next) {
     return null;
   }
 
+  // 统一的 AI 生成弹窗：可关闭 + spinner + 实时计时 + 取消（abort 信号）
+  // 解决“前端看起来阻塞、不知道是否在生成”& 长推理被误杀后无法取消的问题
+  function openAiGenModal(title) {
+    var ac = new AbortController();
+    var cancelled = false;
+    var t0 = Date.now();
+    Modal.open({
+      title: title,
+      wide: true,
+      dismissable: true,   // 允许关闭，生成继续在后台，完成后自动保存
+      html: '<div class="pm-ai-gen">'
+        + '<div><span class="spinner"></span><b>AI 正在生成…</b><span id="pm-ai-elapsed" style="color:#888;margin-left:6px"> 0s</span></div>'
+        + '<div class="muted-sm">开启「AI 思考模式」时模型会先内部推理，首段文字可能要等一会儿，请耐心等待；此窗口可关闭，结果会在完成后自动保存。</div>'
+        + '</div>'
+        + '<pre class="report" id="pm-ai-out" style="white-space:pre-wrap;max-height:350px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">准备中…</pre>',
+      actions: [
+        { label: '取消', kind: 'btn-ghost', onClick: function () { cancelled = true; try { ac.abort(); } catch (e) {} Modal.close(); } },
+        { label: '关闭', kind: 'btn-ghost' }
+      ]
+    });
+    var out = document.getElementById('pm-ai-out');
+    var timer = setInterval(function () {
+      var el = document.getElementById('pm-ai-elapsed');
+      if (el) el.textContent = ' ' + Math.floor((Date.now() - t0) / 1000) + 's';
+    }, 1000);
+    return {
+      ac: ac, out: out, timer: timer,
+      cancelled: function () { return cancelled; },
+      stopTimer: function () { clearInterval(timer); },
+      // 仅当本弹窗仍是当前弹窗时才关闭：用户中途关掉后，后台完成不应误关别的窗口
+      closeIfMine: function () {
+        if (out && document.body.contains(out)) Modal.close();
+      }
+    };
+  }
+
   function analyzePhoto(id, el) {
     var s = Store.get();
     var photo = (s.mistakePhotos || []).find(function (p) { return p.id === id; });
@@ -15853,23 +15959,16 @@ function bind(el, next) {
       + (photo.note ? '\n考生备注：' + photo.note : '')
       + '\n科目：' + (DB.SUBJECTS[photo.subject] ? DB.SUBJECTS[photo.subject].name : photo.subject);
 
-    Modal.open({
-      title: '🤖 AI 解析中…',
-      wide: true, dismissable: false,
-      html: '<div class="muted-sm">正在调用 AI 识别题目并分析解题关键…</div>'
-        + '<pre class="report" id="pm-ai-out" style="white-space:pre-wrap;max-height:350px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">加载中…</pre>',
-      actions: [{ label: '关闭', kind: 'btn-ghost' }]
-    });
-
-    var out = document.getElementById('pm-ai-out');
+    var gen = openAiGenModal('🤖 AI 解析中…');
+    var out = gen.out;
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
-
       if (out) {
         out.innerHTML = (reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
           + (text ? renderMath(text).replace(/\n/g, '<br>') : '');
         out.scrollTop = out.scrollHeight;
       }
-    }, photo.imageBase64).then(function (fullText) {
+    }, photo.imageBase64, { signal: gen.ac.signal }).then(function (fullText) {
+      gen.stopTimer();
       var analysis = extractJSON(fullText);
       if (!analysis) {
         if (out) out.innerHTML += '<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText);
@@ -15896,8 +15995,11 @@ function bind(el, next) {
       if (window.AiMemory) {
         AiMemory.recordEvent('拍题错题解析', ((analysis.errorCause || autoPain || '已解析') + '').slice(0, 60));
       }
-      setTimeout(function () { Modal.close(); App.refresh(); }, 600);
+      if (window.App && App.current === 'photomistake') App.refresh();
+      setTimeout(function () { gen.closeIfMine(); }, 600);
     }).catch(function (err) {
+      gen.stopTimer();
+      if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
       if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
     });
   }
@@ -15928,22 +16030,16 @@ function bind(el, next) {
 
     var userPrompt = context + '\n\n请根据以上原题，出一道同类练习题（举一反三）。';
 
-    Modal.open({
-      title: '🔄 AI 出题中…',
-      wide: true, dismissable: false,
-      html: '<div class="muted-sm">正在根据原题生成同类练习题…</div>'
-        + '<pre class="report" id="pm-sim-out" style="white-space:pre-wrap;max-height:400px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">加载中…</pre>',
-      actions: [{ label: '关闭', kind: 'btn-ghost' }]
-    });
-
-    var out = document.getElementById('pm-sim-out');
+    var gen = openAiGenModal('🔄 AI 出题中…');
+    var out = gen.out;
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
       if (out) {
         out.innerHTML = (reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
           + (text ? renderMath(text).replace(/\n/g, '<br>') : '');
         out.scrollTop = out.scrollHeight;
       }
-    }, photo.imageBase64).then(function (fullText) {
+    }, photo.imageBase64, { signal: gen.ac.signal }).then(function (fullText) {
+      gen.stopTimer();
       var result = extractJSON(fullText);
       if (!result) {
         if (out) out.innerHTML += '<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText);
@@ -15962,8 +16058,11 @@ function bind(el, next) {
         }
       });
       Toast.success('✓ 举一反三题目已生成');
-      setTimeout(function () { Modal.close(); App.refresh(); }, 600);
+      if (window.App && App.current === 'photomistake') App.refresh();
+      setTimeout(function () { gen.closeIfMine(); }, 600);
     }).catch(function (err) {
+      gen.stopTimer();
+      if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
       if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
     });
   }
@@ -16072,14 +16171,8 @@ function bind(el, next) {
       Toast.warn('暂无错题数据，请先拍题并记录'); return;
     }
 
-    Modal.open({
-      title: '🧠 分析薄弱点中…',
-      wide: true, dismissable: false,
-      html: '<div class="muted-sm">正在依据你的疑难点标签生成薄弱点画像（主要用疑难点，省 token、更精准）…</div>'
-        + '<pre class="report" id="pm-weak-out" style="white-space:pre-wrap;max-height:320px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">加载中…</pre>',
-      actions: [{ label: '关闭', kind: 'btn-ghost' }]
-    });
-    var out = document.getElementById('pm-weak-out');
+    var gen = openAiGenModal('🧠 分析薄弱点中…');
+    var out = gen.out;
 
     var majorName = '';
     try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
@@ -16109,7 +16202,8 @@ function bind(el, next) {
 
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
       if (out) { out.textContent = text || (reasoning ? '🤔 ' + reasoning : '加载中…'); out.scrollTop = out.scrollHeight; }
-    }).then(function (fullText) {
+    }, null, { signal: gen.ac.signal }).then(function (fullText) {
+      gen.stopTimer();
       var res = extractJSON(fullText);
       if (!res) { if (out) out.textContent = fullText; res = { weakAreas: [], summary: fullText, advice: '' }; }
       Store.update(function (st) {
@@ -16122,8 +16216,11 @@ function bind(el, next) {
         };
       });
       Toast.success('✓ 薄弱点画像已生成');
-      setTimeout(function () { Modal.close(); render(el); }, 500);
+      if (window.App && App.current === 'photomistake') { try { render(el); } catch (e) {} }
+      setTimeout(function () { gen.closeIfMine(); }, 500);
     }).catch(function (err) {
+      gen.stopTimer();
+      if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
       if (out) out.textContent = '❌ 分析失败：' + (err && err.message ? err.message : err);
     });
   }
@@ -17565,6 +17662,43 @@ function bind(el, next) {
   const ALL = MAIN_TABS.concat(TOOL_TABS);
   let current = 'dashboard';
 
+  // 每页滚动位置缓存：切走再切回恢复，解决“切换页面不能保存状态”
+  const scrollCache = {};
+  function saveScroll(tab) {
+    const v = document.getElementById('view');
+    if (v) scrollCache[tab] = { top: v.scrollTop, winY: window.scrollY || window.pageYOffset || 0 };
+  }
+  function restoreScroll() {
+    const v = document.getElementById('view');
+    const s = scrollCache[current];
+    if (v && s) v.scrollTop = s.top;
+    if (s) window.scrollTo(0, s.winY);
+  }
+  // 每个 Tab 关心的 Store 顶层字段（云同步软刷新用）：仅这些字段变化时才重建该页面
+  //  '*' 表示“任意变化都刷新”（概览页/设置页）；未登记则保守刷新。
+  const TAB_DATA_KEYS = {
+    dashboard: '*',
+    scheduler: ['tasks', 'taskTomb', 'completions', 'taskArchive', 'studyHours', 'weeklyStats', 'focus', 'settings', 'alerts', 'decision'],
+    review: ['weeklyStats', 'progress', 'progressHistory', 'mistakes', 'mental', 'studyHours', 'taskArchive', 'completions', 'aiMemory', 'dailyBrief', 'weekPlan', 'deepReview', 'focus', 'heat'],
+    photomistake: ['mistakePhotos', 'weaknessProfile', 'ai', 'settings'],
+    quiz: ['quizBank', 'heat', 'dailyQuiz', 'dailyQuizHistory', 'mistakeDrills', 'ai', 'settings'],
+    essay: ['essays', 'ai', 'settings'],
+    mistakes: ['mistakes', 'heat', 'ai', 'settings'],
+    heatmap: ['heat', 'quizBank', 'mistakePhotos', 'settings'],
+    inspector: ['inspector', 'ai', 'settings'],
+    focus: ['focus', 'tasks', 'completions', 'studyHours', 'settings'],
+    concept: ['conceptAI', 'majorData', 'ai', 'settings'],
+    sprint: ['mistakePhotos', 'quizBank', 'heat', 'mistakeDrills', 'ai', 'settings', 'progress'],
+    decision: ['decision', 'progress', 'settings'],
+    mental: ['mental', 'settings'],
+    reading: ['reading', 'vocab', 'settings'],
+    wordbook: ['vocab', 'reading', 'settings'],
+    polrecite: ['polRecite', 'polReciteLog', 'settings'],
+    redline: ['settings', 'redline', 'mistakes', 'alerts'],
+    progress: ['progress', 'progressHistory', 'mistakeDrills', 'heat', 'settings'],
+    settings: '*'
+  };
+
   function rolloverIfNeeded() {
     const s = Store.get();
     const today = U.dkey();
@@ -17660,19 +17794,36 @@ function bind(el, next) {
         Toast.show('深度专注进行中，请先点「中断专注」结束再切换', 'warn', 3500);
         return;
       }
-      current = tab; render(true); scrollToTop();
+      if (tab !== current) saveScroll(current);
+      current = tab; render(true); restoreScroll();
     },
-    // 原地刷新：保留当前滚动位置 + <details> 展开状态（避免云同步/打卡等操作把页面滚回顶部、折叠面板收起）
+    // 原地刷新：保留滚动位置 + <details> 展开状态 + 表单未提交内容/焦点/光标
+    // （避免云同步、打卡等操作把页面滚回顶部、折叠面板收起、正在输入的文字被清空）
     refresh() {
       const view = document.getElementById('view');
       const y = view ? view.scrollTop : 0;
       const wy = window.scrollY || window.pageYOffset || 0;
-      // 收集当前所有已展开的 <details> 的 summary 文本（用于重建后恢复）
+      // 1) 收集当前所有已展开的 <details> 的 summary 文本（用于重建后恢复）
       const openSummaries = [];
       if (view) view.querySelectorAll('details[open]').forEach(function (d) {
         var s = d.querySelector('summary');
         if (s) openSummaries.push(s.textContent.trim());
       });
+      // 2) 收集表单状态（仅带 id 的控件，重建后可精确对位）
+      const formState = {};
+      let focusId = '', selS = 0, selE = 0;
+      if (view) {
+        const ae = document.activeElement;
+        if (ae && ae.id && view.contains(ae)) {
+          focusId = ae.id;
+          try { selS = ae.selectionStart; selE = ae.selectionEnd; } catch (e) {}
+        }
+        view.querySelectorAll('input[id],textarea[id],select[id]').forEach(function (n) {
+          if (n.type === 'file') return;
+          formState[n.id] = (n.type === 'checkbox' || n.type === 'radio')
+            ? { c: n.checked } : { v: n.value };
+        });
+      }
       DB.syncSubjects();
       render(false);
       // 恢复滚动位置
@@ -17688,6 +17839,37 @@ function bind(el, next) {
           }
         });
       }
+      // 恢复表单内容与焦点/光标（只在新控件为空、即"确属重建产生的丢失"时回填，避免覆盖模块主动写入的新值）
+      if (view) {
+        Object.keys(formState).forEach(function (id) {
+          var n = view.querySelector('#' + (window.CSS && CSS.escape ? CSS.escape(id) : id));
+          if (!n) return;
+          var st = formState[id];
+          if (st.c !== undefined) { n.checked = st.c; }
+          else if (st.v !== undefined && st.v !== '' && !n.value) { n.value = st.v; }
+        });
+        if (focusId) {
+          var f = view.querySelector('#' + (window.CSS && CSS.escape ? CSS.escape(focusId) : focusId));
+          if (f && typeof f.focus === 'function') {
+            try { f.focus({ preventScroll: true }); } catch (e) { try { f.focus(); } catch (e2) {} }
+            try { if (f.setSelectionRange) f.setSelectionRange(selS, selE); } catch (e) {}
+          }
+        }
+      }
+    },
+    // 云同步软刷新：仅当变化的字段与当前页面相关时才重建，避免无关页面抖动/丢失滚动
+    softRefresh(changedKeys) {
+      changedKeys = changedKeys || [];
+      if (!changedKeys.length) return;            // 无变化：完全不动
+      const rel = TAB_DATA_KEYS[current];
+      if (rel === '*' || !rel) { App.refresh(); return; } // 概览/设置页 或 未登记：保守刷新（已自带滚动保护）
+      const hit = changedKeys.some(function (k) { return rel.indexOf(k) >= 0; });
+      if (!hit) return;                            // 当前页面数据未变化：跳过重建，零抖动
+      App.refresh();                               // 相关：重建并保留滚动位置
+      // 云同步命中本页：轻量淡入提示"内容已更新"，不闪不动其他无关页面
+      const v = document.getElementById('view');
+      if (v) { v.classList.remove('view-soft-update'); void v.offsetWidth; v.classList.add('view-soft-update');
+        setTimeout(function () { v.classList.remove('view-soft-update'); }, 280); }
     },
     get current() { return current; },
   init() {
