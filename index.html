@@ -2989,8 +2989,9 @@ body.cp-lock { overflow: hidden; }
       meta.pushedHashes = Object.assign({ core: coreHash, manifest: manifestHash }, collHashes, heavyHashes);
       meta.legacyRemote = false;
       // 乐观推送完成：后台异步合并远端新增（不阻塞用户感知；远端无变化走 304，零流量零解析）
+      // 注意：常规拉取必须走 LWW（远端为准），否则 B 设备的修改会被本机本地副本盖掉、永远拉不下来
       if (state.gistId && !isRateLimited()) {
-        pull(false, { preserveLocal: true }).catch(e => { console.warn('[Cloud] 后台合并跳过', e); });
+        pull(false).catch(e => { console.warn('[Cloud] 后台合并跳过', e); });
       }
       state.lastPushedAt = Date.now(); state.lastSyncAt = Date.now();
       state.lastTransfer = transfer;
@@ -3039,9 +3040,9 @@ body.cp-lock { overflow: hidden; }
     state.pollTimer = setInterval(async () => {
       if (isRateLimited()) return;
       try {
-        // 周期拉取用 preserveLocal 深合并；ETag 命中(304)时零流量
-        // v6 追加同步：拉取只取核心 Gist + 未应用的 op 文件，几乎零流量
-        await pull(false, { preserveLocal: true });
+        // 周期拉取走 LWW（远端为准）：B 设备的修改必须能拉到本机，不能因 preserveLocal 被本地盖掉
+        // ETag 命中(304)时零流量；v6 追加同步：拉取只取核心 Gist + 未应用的 op 文件，几乎零流量
+        await pull(false);
         renderBadge('☁ 已同步', 'on');
       } catch (e) {
         if (e && e.status === 403) setRateLimitBackoff(0);
@@ -4309,7 +4310,7 @@ body.cp-lock { overflow: hidden; }
 
     // ---- 鲁棒 JSON 提取与修复 ----
     function extractJSON(raw) {
-      var s = (raw || '').trim();
+      var s = AI.stripThinking(raw || '').trim();
       var m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (m) return m[1].trim();
       var start = s.indexOf('{');
@@ -5311,17 +5312,15 @@ body.cp-lock { overflow: hidden; }
   // 底层走流式管线（SSE）：响应头先到即视为连接正常，30 秒超时只管“连不上”，
   // 之后可等待云端慢慢生成（长材料/图片识别不再被“30秒无响应”误杀）；
   // 厂商不支持流式时由 400 极简重试自动降级为非流式。
-  // 【重要】默认强制关闭思考模式（noThink）：
-  //   开启思考时模型先吐 reasoning_content，会吃掉服务端默认的 max_tokens 预算，
-  //   轮到正式 JSON 输出时往往被腰斩 → 表现为「AI未返回有效JSON / 解析失败」。
-  //   结构化提取本就不需要模型「思考」，故此处默认关闭；
-  //   确需思考的调用方可显式传 { noThink:false } 覆盖。
-  //   同时给一个较大的 maxTokens 兜底，避免长列表（如单词本一次几十条）被截断。
+  // 【重要·思考模式策略】不再默认强制关思考：
+  //   旧实现默认 noThink=true，等于“为不报错而偷偷剥夺用户思考能力”（治标）。
+  //   正确做法——尊重用户全局思考设置（a.thinkingMode），同时默认给较大 maxTokens 兜底，
+  //   让「reasoning_content + 正式 JSON」都能容纳、不被腰斩；这样开思考时质量更高、关思考时快速。
+  //   仅当调用方显式传 { noThink:true } 时才强制关闭（用于确实要快速、且用户接受降低质量的场合）。
   function chatJSON(systemPrompt, userText, imageDataUrl, opts) {
     opts = opts || {};
     const o = Object.assign({}, opts);
-    if (o.noThink === undefined) o.noThink = true;
-    if (!o.maxTokens) o.maxTokens = 4096;
+    if (!o.maxTokens) o.maxTokens = 8192; // 兜底预算：思考模式推理 + JSON 都在内，避免被截断
     return chatStream(systemPrompt, userText, null, imageDataUrl, o)
       .then(txt => extractRobustJSON(txt));
   }
@@ -5387,10 +5386,102 @@ body.cp-lock { overflow: hidden; }
     return items;
   }
 
+  // 截断对象抢救：最外层 { / [ 找到但没收尾（被 max_tokens 截断，思考模式最常见）。
+  // 尝试补缺失的收尾引号 + 去尾逗号 + 补缺失的 } / ]，让「已完整输出的字段」尽量被解析出来。
+  function repairTruncatedObject(s) {
+    if (!s || s.charAt(0) !== '{' && s.charAt(0) !== '[') return null;
+    var depth = 0, inStr = false, esc = false;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{' || c === '[') depth++;
+      else if (c === '}' || c === ']') { depth--; }
+    }
+    if (depth <= 0) return null; // 没截断，交给上层
+    var t = s;
+    if (inStr) t += '"';                       // 字符串被截断 → 补收尾引号
+    t = t.replace(/,\s*$/, '');                // 去尾逗号（如 "..." , 或 "..." ,"半截
+    var close = s.charAt(0) === '[' ? ']' : '}';
+    while (depth-- > 0) t += close;           // 补缺失的收尾括号
+    try { return JSON.parse(t); } catch (e) {}
+    try { return JSON.parse(repairJsonSafely(t)); } catch (e2) { return null; }
+  }
+
+  // 不区分大小写查找标签（如 'think' → <think>），返回下标；找不到返回 -1
+  function findTag(s, tag, from) {
+    var low = s.toLowerCase();
+    return low.indexOf('<' + tag.toLowerCase() + '>', from);
+  }
+
+  // 判断从 s 开头是否能切出一个“完整且闭合”的 JSON（{...} 或 [...]），能则返回该片段，否则 null
+  function tryGrabJson(s) {
+    s = s.trim();
+    if (!s || (s.charAt(0) !== '{' && s.charAt(0) !== '[')) return null;
+    var open = s.charAt(0), close = open === '{' ? '}' : ']';
+    var depth = 0, inStr = false, esc = false;
+    for (var k = 0; k < s.length; k++) {
+      var c = s.charAt(k);
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === open) depth++;
+      else if (c === close) { depth--; if (depth === 0) return s.slice(0, k + 1); }
+    }
+    return null; // 未闭合
+  }
+
+  // 剥离推理模型思考块（<think>…</think>），覆盖三类刁钻情况：
+  //  ① 闭合块 <think>…</think>（最常见，reasoning 文字里即便含 { [ } ] 也整体删掉）；
+  //  ② 未闭合块（思考被 max_tokens 截断、没有 </think>）：此时正常 JSON 在思考块之后，
+  //     必须跳过 reasoning 里零散的 { [ 一直找到“能完整解析的 JSON”为止（避免被 reasoning 括号误导成 JSON 起点）；
+  //  ③ 个别模型把正式答案直接写进思考块内（<think>{json}</think>）：命中可解析 JSON 即保留它。
+  // 思路：状态机扫描。遇到 <think> 进入丢弃态；丢弃态内优先看 </think>（正常结束），
+  // 没有 </think> 才在块内寻找第一个完整可解析（或经 repairTruncatedObject 可抢救）的 JSON 作为结果。
+  // 这样无论 reasoning 有没有括号、思考块收没收尾，正式 JSON 都能被正确分离。
+  function stripThinking(raw) {
+    var s = String(raw == null ? '' : raw);
+    var out = '', i = 0, n = s.length;
+    for (;;) {
+      var open = findTag(s, 'think', i);
+      if (open === -1) { out += s.slice(i); break; }
+      out += s.slice(i, open);
+      i = open + 7; // 跳过 '<think>'
+      for (;;) {
+        var close = findTag(s, '/think', i);
+        if (close !== -1) { i = close + 8; break; } // 正常结束思考块
+        // 无 </think> → 思考块被截断/未闭合：在块内寻找第一个完整可解析的 JSON
+        var b1 = s.indexOf('{', i), b2 = s.indexOf('[', i);
+        var cands = [];
+        if (b1 !== -1) cands.push(b1);
+        if (b2 !== -1) cands.push(b2);
+        if (!cands.length) { i = n; break; } // 无 JSON 起点 → 整段丢弃
+        var p = cands[0]; for (var q = 1; q < cands.length; q++) if (cands[q] < p) p = cands[q];
+        var grabbed = tryGrabJson(s.slice(p));
+        if (!grabbed) grabbed = repairTruncatedObject(s.slice(p)); // 截断的 JSON 也抢救
+        if (grabbed) {
+          out += (typeof grabbed === 'string') ? grabbed : JSON.stringify(grabbed);
+          var c2 = findTag(s, '/think', p + (typeof grabbed === 'string' ? grabbed.length : JSON.stringify(grabbed).length));
+          i = c2 === -1 ? n : c2 + 8;
+          break;
+        }
+        i = p + 1; // 推理文字里的零散括号，跳过继续
+      }
+    }
+    return out;
+  }
+
   // 通用稳健 JSON 提取器（供 chatJSON 和各模块复用）
   function extractRobustJSON(raw) {
     var str = String(raw == null ? '' : raw).replace(/^\uFEFF/, '');
-    str = str.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();   // 剥掉推理模型的思考块
+    // 先剥离推理模型的思考块（<think>…</think>，闭合/未闭合/答案写在思考块内都能正确处理）。
+    // 思考模式下 reasoning 可能混在 content 里（Qwen 等），若不剥离、或只按“首个 { [ ”粗暴截断，
+    // reasoning 文字里的括号会误导 JSON 起点 → 解析失败（即「API 返回格式错误」）。
+    str = stripThinking(str);
+    str = str.trim();
 
     // 第 1 层：markdown 代码块（取最长的一块，避免命中回复里的小示例）
     var best = null, reFence = /```(?:json|JSON)?\s*([\s\S]*?)```/g, mf;
@@ -5430,6 +5521,10 @@ body.cp-lock { overflow: hidden; }
       try { return JSON.parse(jsonStr); } catch (e) {}
       // 第 4 层：安全修复后重试（不破坏 don't / it's 这类撇号）
       try { return JSON.parse(repairJsonSafely(jsonStr)); } catch (e) {}
+    } else {
+      // 第 2.5 层：最外层 { / [ 找到但没匹配收尾（被 max_tokens 截断，思考模式最常见）→ 尝试补全括号/引号抢救
+      var rec = repairTruncatedObject(str.slice(start));
+      if (rec) return rec;
     }
 
     // 第 5 层：数组元素级抢救（截断 / 中间某条格式坏掉 都能救回其余部分）
@@ -5469,8 +5564,9 @@ body.cp-lock { overflow: hidden; }
   }
 
   // 流式单接口一次请求（_noKwArgs：400 时的极简重试模式，此时非流式、整体返回）
-  // opts.noThink   ：强制关闭思考（结构化 JSON 提取场景用，避免 reasoning 吃掉输出预算）
-  // opts.maxTokens ：显式指定输出上限，防止长列表被服务端默认值截断
+  // opts.noThink   ：强制关闭思考（仅用于用户明确要「快速无思考」时；结构化 JSON 场景勿硬编码，
+  //                  正确做法见下方注释：用 maxTokens 加大预算保留思考能力）
+  // opts.maxTokens ：显式指定输出上限，防止长列表/思考推理被服务端默认值截断（结构化提取场景建议 8192）
   function chatStreamOnce(api, messages, onChunk, _noKwArgs, opts) {
     _noKwArgs = !!_noKwArgs;
     opts = opts || {};
@@ -5482,8 +5578,10 @@ body.cp-lock { overflow: hidden; }
       ? { model: api.model, messages: messages }
       : { model: api.model, stream: true, stream_options: { include_usage: true }, messages: messages };
     // 思考模式控制（同 rawChat 逻辑：仅在显式设置时发送；_noKwArgs 强制跳过）
-    // noThink=true 时无条件发 enable_thinking:false —— 结构化 JSON 提取一旦让模型思考，
-    // reasoning_content 会占满 max_tokens，正式 JSON 被腰斩，表现为「解析失败」。
+    // 注意：结构化 JSON 提取场景「不要」硬编码 noThink 关思考（那是用牺牲推理质量换不报错）。
+    // 正确治本做法：传 opts.maxTokens 调大输出预算（如 8192），让 reasoning_content + 正式 JSON
+    // 都能容纳，从而保留思考模式（用户全局设置）的同时 JSON 不被腰斩。noThink 仅用于用户明确
+    // 要「快速无思考」的场合。
     if (!_noKwArgs) {
       if (opts.noThink) {
         body.chat_template_kwargs = { enable_thinking: false };
@@ -5623,6 +5721,8 @@ body.cp-lock { overflow: hidden; }
     useThinking() { return Store.get().ai.thinkingMode === true; },
     // 通用稳健 JSON 提取器（供各模块复用）
     extractRobustJSON,
+    // 剥离推理模型思考块 <think>…</think>（闭合/未闭合/答案写在块内均处理），供各模块本地 JSON 解析复用
+    stripThinking,
     // JSON 安全修复（只在字符串外替换，不破坏 don't / it's 撇号）+ 截断抢救
     repairJsonSafely, salvageObjects,
     // 动态出题提示词：每次访问按当前专业课生成（getter 保证换专业后即时生效）
@@ -6746,7 +6846,7 @@ body.cp-lock { overflow: hidden; }
 
   // 从 AI 返回中稳健提取每日一题 JSON（含修复常见格式问题）
   function extractDailyJSON(raw) {
-    var str = (raw || '').trim();
+    var str = AI.stripThinking(raw || '').trim();
 
     // 先试 markdown 代码块
     var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -8980,7 +9080,7 @@ function bind(el, next) {
             + (m.trap ? '\n易错点：' + m.trap : '');
         }
         userMsg += '\n\n请基于以上错题信息' + (hasStem ? '（含已带入的原题）' : '') + '，生成/完善原题、答案、解析和易错点。';
-        AI.chatJSON(sysPrompt, userMsg, null, { cache: false, noThink: true, maxTokens: 4096 }
+        AI.chatJSON(sysPrompt, userMsg, null, { cache: false, maxTokens: 8192 }
         ).then(function(result) {
           if (result && (result.question || result.answer || result.solution)) {
             Store.update(s => {
@@ -11859,7 +11959,7 @@ function bind(el, next) {
   }
 
   function extractJSON(txt) {
-    try { var m = txt.match(/\{[\s\S]*\}/); if (!m) return null; return JSON.parse(m[0]); }
+    try { var m = AI.stripThinking(txt || '').match(/\{[\s\S]*\}/); if (!m) return null; return JSON.parse(m[0]); }
     catch (e) { return null; }
   }
 
@@ -13139,11 +13239,11 @@ function bind(el, next) {
     if (!retrying && extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); return; }
     extractJob = { status: 'running', source: source + (retrying ? '·精简重试' : ''), startedAt: Date.now(), thumb: imageDataUrl || '' };
     // 提取要求“每次都重新看图”，跳过响应缓存，避免命中旧的坏结果
-    // noThink：结构化提取强制关闭思考模式——开思考时 reasoning 会吃掉 max_tokens 预算，
-    //          导致正式 JSON 输出被腰斩（这正是「开思考模式必失败」的根因）
-    // maxTokens 8000：一次可能要输出 40+ 词条（含例句），默认预算不够
+    // 思考模式：不再强制关闭——尊重用户全局思考设置；开思考时 reasoning 会占用预算，
+    //   故把 maxTokens 提到 12000 兜底（一次可能 40+ 词条含例句），避免「推理+JSON」被腰斩。
+    //   如用户全局关了思考，则自动走快速路径；如显式要快速可传 { noThink:true }。
     AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl, {
-      cache: false, noThink: true, maxTokens: 8000
+      cache: false, maxTokens: 12000
     }).then(function (arr) {
       var items = normalizeExtracted(arr);
       if (!items.length) throw new Error('AI 未提取到有效词条');
@@ -14702,7 +14802,7 @@ function bind(el, next) {
         if (text && cw) { cw.style.display = ''; cr.textContent = text; cr.scrollTop = cr.scrollHeight; }
       }).then(function (fullText) {
         // 尝试解析 JSON 并渲染为结构化卡片
-        var jsonStr = fullText;
+        var jsonStr = AI.stripThinking(fullText || '');
         var jm = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
         if (jm) jsonStr = jm[1];
         try {
@@ -15868,7 +15968,7 @@ function bind(el, next) {
 
   // ---------- 从 AI 返回文本中提取 JSON ----------
   function extractJSON(raw) {
-    var s = (raw || '').trim();
+    var s = AI.stripThinking(raw || '').trim();
     // 先试 markdown 代码块
     var m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (m) { s = m[1].trim(); var r1 = tryParseRepair(s); if (r1) return r1; }
@@ -15901,10 +16001,13 @@ function bind(el, next) {
   }
 
   // 统一的 AI 生成弹窗：可关闭 + spinner + 实时计时 + 取消（abort 信号）
-  // 解决“前端看起来阻塞、不知道是否在生成”& 长推理被误杀后无法取消的问题
+  // 解决"前端看起来阻塞、不知道是否在生成"& 长推理被误杀后无法取消的问题
+  // 增强关闭后体验：弹窗关闭时若仍在生成，自动在状态栏注入轻量进度指示器（计时+可取消），
+  //   用户随时知道后台还在跑；完成后自动消失并 Toast 通知结果。
   function openAiGenModal(title) {
     var ac = new AbortController();
     var cancelled = false;
+    var done = false;
     var t0 = Date.now();
     Modal.open({
       title: title,
@@ -15924,11 +16027,48 @@ function bind(el, next) {
     var timer = setInterval(function () {
       var el = document.getElementById('pm-ai-elapsed');
       if (el) el.textContent = ' ' + Math.floor((Date.now() - t0) / 1000) + 's';
+      // 状态栏全局进度指示器同步更新计时
+      updateGlobalProgress();
     }, 1000);
+
+    // ---------- 全局进度指示器：弹窗关闭后注入状态栏，完成后自动移除 ----------
+    var globalEl = null;
+    function ensureGlobalProgress() {
+      if (globalEl && document.body.contains(globalEl)) return;
+      if (done || cancelled) return;
+      var sb = document.getElementById('statusbar');
+      if (!sb) return;
+      globalEl = document.createElement('span');
+      globalEl.id = 'pm-global-progress';
+      globalEl.className = 'sb-item';
+      globalEl.style.cssText = 'background:#e8f0fe;color:#1a56c4;font-size:11px;padding:2px 8px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px';
+      globalEl.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>AI生成中<span id="pm-gp-elapsed"> 0s</span>';
+      globalEl.title = '点击取消';
+      globalEl.onclick = function () { cancelled = true; try { ac.abort(); } catch (e) {} removeGlobalProgress(); };
+      sb.appendChild(globalEl);
+    }
+    function updateGlobalProgress() {
+      if (!globalEl || !document.body.contains(globalEl)) { ensureGlobalProgress(); return; }
+      var el = document.getElementById('pm-gp-elapsed');
+      if (el) el.textContent = ' ' + Math.floor((Date.now() - t0) / 1000) + 's';
+    }
+    function removeGlobalProgress() {
+      if (globalEl && globalEl.parentNode) globalEl.parentNode.removeChild(globalEl);
+      globalEl = null;
+    }
+
+    // 监听弹窗关闭：若尚未完成则激活全局进度
+    var closeWatcher = setInterval(function () {
+      if (out && !document.body.contains(out) && !done && !cancelled) ensureGlobalProgress();
+      if (done || cancelled) { clearInterval(closeWatcher); }
+    }, 500);
+
     return {
       ac: ac, out: out, timer: timer,
       cancelled: function () { return cancelled; },
-      stopTimer: function () { clearInterval(timer); },
+      stopTimer: function () { clearInterval(timer); clearInterval(closeWatcher); done = true; removeGlobalProgress(); },
+      // 安全写入：仅当 out 仍在 DOM 中才写入（防止弹窗关闭后报错/静默失败）
+      safeWrite: function (html) { if (out && document.body.contains(out)) { out.innerHTML = html; out.scrollTop = out.scrollHeight; } },
       // 仅当本弹窗仍是当前弹窗时才关闭：用户中途关掉后，后台完成不应误关别的窗口
       closeIfMine: function () {
         if (out && document.body.contains(out)) Modal.close();
@@ -15962,16 +16102,13 @@ function bind(el, next) {
     var gen = openAiGenModal('🤖 AI 解析中…');
     var out = gen.out;
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
-      if (out) {
-        out.innerHTML = (reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
-          + (text ? renderMath(text).replace(/\n/g, '<br>') : '');
-        out.scrollTop = out.scrollHeight;
-      }
-    }, photo.imageBase64, { signal: gen.ac.signal }).then(function (fullText) {
+      gen.safeWrite((reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
+        + (text ? renderMath(text).replace(/\n/g, '<br>') : ''));
+    }, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 }).then(function (fullText) {
       gen.stopTimer();
       var analysis = extractJSON(fullText);
       if (!analysis) {
-        if (out) out.innerHTML += '<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText);
+        gen.safeWrite('<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText));
         analysis = { keySteps: fullText, errorCause: '', extractedQuestion: '', painPoint: '' };
       }
       // 写回数据（含提取的题目）
@@ -16000,7 +16137,7 @@ function bind(el, next) {
     }).catch(function (err) {
       gen.stopTimer();
       if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
-      if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
+      gen.safeWrite('❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。');
     });
   }
 
@@ -16033,16 +16170,13 @@ function bind(el, next) {
     var gen = openAiGenModal('🔄 AI 出题中…');
     var out = gen.out;
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
-      if (out) {
-        out.innerHTML = (reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
-          + (text ? renderMath(text).replace(/\n/g, '<br>') : '');
-        out.scrollTop = out.scrollHeight;
-      }
-    }, photo.imageBase64, { signal: gen.ac.signal }).then(function (fullText) {
+      gen.safeWrite((reasoning ? '<span style="color:#666">🤔 思考中…</span>\n\n' : '')
+        + (text ? renderMath(text).replace(/\n/g, '<br>') : ''));
+    }, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 }).then(function (fullText) {
       gen.stopTimer();
       var result = extractJSON(fullText);
       if (!result) {
-        if (out) out.innerHTML += '<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText);
+        gen.safeWrite('<br><br><span style="color:#c00">⚠️ AI 返回格式异常，原始回复如下：</span><br>' + U.esc(fullText));
         result = { question: fullText, solution: '', trap: '' };
       }
       // 写回数据
@@ -16063,7 +16197,7 @@ function bind(el, next) {
     }).catch(function (err) {
       gen.stopTimer();
       if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
-      if (out) out.textContent = '❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。';
+      gen.safeWrite('❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。');
     });
   }
 
@@ -16201,11 +16335,11 @@ function bind(el, next) {
     var userPrompt = ctx + '\n\n请基于以上信息生成该考生的薄弱点画像。';
 
     AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
-      if (out) { out.textContent = text || (reasoning ? '🤔 ' + reasoning : '加载中…'); out.scrollTop = out.scrollHeight; }
-    }, null, { signal: gen.ac.signal }).then(function (fullText) {
+      gen.safeWrite(text || (reasoning ? '🤔 ' + reasoning : '加载中…'));
+    }, null, { signal: gen.ac.signal, maxTokens: 8192 }).then(function (fullText) {
       gen.stopTimer();
       var res = extractJSON(fullText);
-      if (!res) { if (out) out.textContent = fullText; res = { weakAreas: [], summary: fullText, advice: '' }; }
+      if (!res) { gen.safeWrite(fullText); res = { weakAreas: [], summary: fullText, advice: '' }; }
       Store.update(function (st) {
         st.weaknessProfile = {
           generatedAt: new Date().toISOString(),
@@ -16221,7 +16355,7 @@ function bind(el, next) {
     }).catch(function (err) {
       gen.stopTimer();
       if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
-      if (out) out.textContent = '❌ 分析失败：' + (err && err.message ? err.message : err);
+      gen.safeWrite('❌ 分析失败：' + (err && err.message ? err.message : err));
     });
   }
 
