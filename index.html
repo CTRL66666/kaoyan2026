@@ -5301,7 +5301,7 @@ body.cp-lock { overflow: hidden; }
     opts = opts || {};
     const o = Object.assign({}, opts);
     if (o.noThink === undefined) o.noThink = true;
-    if (!o.maxTokens) o.maxTokens = 4096;
+    // maxTokens 不再强制默认 4096：不传则不设 max_tokens，使用服务端默认（出卷子等大输出场景需要）
     return chatStream(systemPrompt, userText, null, imageDataUrl, o)
       .then(txt => extractRobustJSON(txt));
   }
@@ -5497,7 +5497,7 @@ body.cp-lock { overflow: hidden; }
     const hasImage = messages.some(function (m) {
       return Array.isArray(m.content) && m.content.some(function (c) { return c.type === 'image_url'; });
     });
-    const reqTimeoutMs = hasImage ? 300000 : 30000;
+    const reqTimeoutMs = opts.timeout || (hasImage ? 300000 : 30000);
     // _noKwArgs 重试模式：极简 body（只保留 model + messages，去掉 stream/temperature 等可选字段）
     // stream_options.include_usage：让流式响应末尾携带 usage（OpenAI/DeepSeek 均支持）
     // 用于统计云端 prompt 缓存命中；不支持的厂商会在 400 后走分级重试自动去掉
@@ -12455,6 +12455,11 @@ function bind(el, next) {
   var SUBJ_ORDER = ['math', 'ctrl', 'eng', 'pol'];
   var fSubj = '', fPrio = '', fBalance = true, fShowMastered = false;
 
+  // 全局任务注册表：切换页面后 render 恢复按钮状态
+  // { trend: {status, error, at}, exam: {status, error, examId, at}, reason: {status, error, count, at} }
+  var activeTasks = {};
+  var currentEl = null;  // 当前渲染容器引用，AI 完成后如果还在当前页则自动刷新
+
   function subjName(s) { return (DB.SUBJECTS[s] && DB.SUBJECTS[s].short) || s; }
   function subjColor(s) { return (DB.SUBJECTS[s] && DB.SUBJECTS[s].color) || '#595959'; }
   function tierText(t, dep) {
@@ -12469,6 +12474,7 @@ function bind(el, next) {
 
   // ==================== 渲染 ====================
   function render(el) {
+    currentEl = el;
     var st = Store.get();
     var heat = st.heat || {};
     var dep = leverageMap();
@@ -12530,17 +12536,30 @@ function bind(el, next) {
       + (trends ? '<span class="tag" style="background:#096dd9;color:#fff">📈 AI趋势已分析</span>' : '')
       + '</div>'
 
-      // AI 工具栏
+      // AI 工具栏（根据 activeTasks 状态显示按钮文本/disabled）
       + '<div class="btn-row" style="margin:10px 0;flex-wrap:wrap">'
-      + '<button class="btn btn-primary btn-sm" id="sp-ai-trend">📈 AI 趋势分析</button>'
-      + '<button class="btn btn-ghost btn-sm" id="sp-ai-exam">📝 生成押题卷</button>'
-      + '<button class="btn btn-ghost btn-sm" id="sp-ai-reason">🧠 生成押题理由</button>'
+      + '<button class="btn btn-primary btn-sm" id="sp-ai-trend"' + (activeTasks.trend && activeTasks.trend.status === 'analyzing' ? ' disabled' : '') + '>' + (activeTasks.trend && activeTasks.trend.status === 'analyzing' ? '🔄 趋势分析中…' : '📈 AI 趋势分析') + '</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-ai-exam"' + (activeTasks.exam && activeTasks.exam.status === 'analyzing' ? ' disabled' : '') + '>' + (activeTasks.exam && activeTasks.exam.status === 'analyzing' ? '🔄 组卷中…' : '📝 生成押题卷') + '</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-ai-reason"' + (activeTasks.reason && activeTasks.reason.status === 'analyzing' ? ' disabled' : '') + '>' + (activeTasks.reason && activeTasks.reason.status === 'analyzing' ? '🔄 生成理由中…' : '🧠 生成押题理由') + '</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-rush-plan">🗺️ 冲刺路径</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-hit-track">🎯 命中追踪</button>'
       + '</div>'
 
       // AI 结果区域（非阻塞注入）
-      + '<div id="sp-ai-zone"></div>';
+      + '<div id="sp-ai-zone">';
+
+    // 恢复进行中任务的进度显示
+    var hasActive = false;
+    Object.keys(activeTasks).forEach(function (k) {
+      var t = activeTasks[k];
+      if (t && t.status === 'analyzing') {
+        hasActive = true;
+      }
+    });
+    if (hasActive) {
+      html += '<div class="card" style="background:var(--bg-muted)"><div class="muted-sm">🤖 AI 任务进行中…切换页面不会丢失进度，完成后自动刷新。</div><div class="skl-line"></div><div class="skl-line skl-w80"></div></div>';
+    }
+    html += '</div>';
 
     // ---- 趋势分析结果 ----
     if (trends) {
@@ -12627,10 +12646,9 @@ function bind(el, next) {
   // ==================== AI 趋势分析 ====================
   function aiTrend(el) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
-    var btn = document.getElementById('sp-ai-trend');
-    if (btn) { btn.disabled = true; btn.textContent = '🔄 分析中…'; }
-    var zone = document.getElementById('sp-ai-zone');
-    if (zone) zone.innerHTML = '<div class="card" style="background:var(--bg-muted)"><div class="muted-sm">🤖 AI 正在分析近 5 年考研命题趋势，预测今年热点…</div><div class="skl-line"></div><div class="skl-line skl-w80"></div><div class="skl-line"></div></div>';
+    if (activeTasks.trend && activeTasks.trend.status === 'analyzing') { Toast.show('趋势分析进行中…', 'info'); return; }
+    activeTasks.trend = { status: 'analyzing', at: new Date().toISOString() };
+    if (el) render(el);
 
     // 收集用户薄弱考点
     var st = Store.get();
@@ -12651,26 +12669,26 @@ function bind(el, next) {
     var usr = '考生情况：\n薄弱考点：' + weakTopics.slice(0, 20).join('、') + '\n专业课：' + (function () { try { return DB.getActiveMajor().name; } catch (e) { return '未指定'; } })()
       + '\n请预测2026考研命题趋势，重点关注数学科目（微积分/线代/概率）和专业课。';
 
-    AI.chatJSON(sys, usr, null, { cache: true, noThink: true, maxTokens: 4096 }).then(function (result) {
+    AI.chatJSON(sys, usr, null, { cache: true, noThink: true, timeout: 300000 }).then(function (result) {
       if (!result || !result.prediction) throw new Error('AI 未返回有效趋势分析');
       result.generatedAt = new Date().toISOString();
       Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.trends = result; });
+      activeTasks.trend = { status: 'done', at: new Date().toISOString() };
       Toast.success('AI 趋势分析完成');
-      render(el);
+      if (currentEl) render(currentEl);
     }).catch(function (e) {
-      if (zone) zone.innerHTML = '<div class="alert alert-error">趋势分析失败：' + U.esc(e.message) + '</div>';
+      activeTasks.trend = { status: 'error', error: e.message, at: new Date().toISOString() };
       Toast.warn('趋势分析失败：' + e.message);
-      if (btn) { btn.disabled = false; btn.textContent = '📈 AI 趋势分析'; }
+      if (currentEl) render(currentEl);
     });
   }
 
   // ==================== AI 押题理由 ====================
   function aiReasons(el) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
-    var btn = document.getElementById('sp-ai-reason');
-    if (btn) { btn.disabled = true; btn.textContent = '🔄 生成中…'; }
-    var zone = document.getElementById('sp-ai-zone');
-    if (zone) zone.innerHTML = '<div class="card" style="background:var(--bg-muted)"><div class="muted-sm">🧠 AI 正在为 Top 10 押题考点生成详细押题理由…</div><div class="skl-line"></div><div class="skl-line skl-w80"></div></div>';
+    if (activeTasks.reason && activeTasks.reason.status === 'analyzing') { Toast.show('押题理由生成中…', 'info'); return; }
+    activeTasks.reason = { status: 'analyzing', at: new Date().toISOString() };
+    if (el) render(el);
 
     var st = Store.get();
     var heat = st.heat || {};
@@ -12693,7 +12711,7 @@ function bind(el, next) {
       return subjName(r.subj) + ':' + r.name + '（ID:' + r.id + '，押题分' + r.score + '）';
     }).join('\n');
 
-    AI.chatJSON(sys, usr, null, { cache: true, noThink: true, maxTokens: 4096 }).then(function (result) {
+    AI.chatJSON(sys, usr, null, { cache: true, noThink: true, timeout: 300000 }).then(function (result) {
       if (!result || !result.reasons) throw new Error('AI 未返回有效押题理由');
       Store.update(function (s) {
         s.sprintData = s.sprintData || {};
@@ -12702,20 +12720,22 @@ function bind(el, next) {
           if (r.topicId) s.sprintData.reasons[r.topicId] = { reason: r.reason, confidence: r.confidence, lastYearTrend: r.lastYearTrend, at: new Date().toISOString() };
         });
       });
+      activeTasks.reason = { status: 'done', count: (result.reasons || []).length, at: new Date().toISOString() };
       Toast.success('已生成 ' + (result.reasons || []).length + ' 个考点的押题理由');
-      render(el);
+      if (currentEl) render(currentEl);
     }).catch(function (e) {
-      if (zone) zone.innerHTML = '<div class="alert alert-error">押题理由生成失败：' + U.esc(e.message) + '</div>';
+      activeTasks.reason = { status: 'error', error: e.message, at: new Date().toISOString() };
       Toast.warn('生成失败：' + e.message);
-      if (btn) { btn.disabled = false; btn.textContent = '🧠 生成押题理由'; }
+      if (currentEl) render(currentEl);
     });
   }
 
   // ==================== AI 押题卷生成 ====================
   function aiExam(el) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
-    var btn = document.getElementById('sp-ai-exam');
-    if (btn) { btn.disabled = true; btn.textContent = '🔄 组卷中…'; }
+    if (activeTasks.exam && activeTasks.exam.status === 'analyzing') { Toast.show('押题卷生成中…', 'info'); return; }
+    activeTasks.exam = { status: 'analyzing', at: new Date().toISOString() };
+    if (el) render(el);
 
     var st = Store.get();
     var heat = st.heat || {};
@@ -12743,7 +12763,7 @@ function bind(el, next) {
       + subjTopics.math.slice(0, 8).map(function (t, i) { return (i + 1) + '. ' + t.name + '（押题分' + t.score + '）'; }).join('\n')
       + '\n专业课：' + major;
 
-    AI.chatJSON(sys, usr, null, { cache: false, noThink: true, maxTokens: 8192 }).then(function (result) {
+    AI.chatJSON(sys, usr, null, { cache: false, noThink: true, timeout: 300000 }).then(function (result) {
       if (!result || !result.questions || !result.questions.length) throw new Error('AI 未返回有效押题卷');
       var exam = {
         id: U.uid(), title: result.title || 'AI 押题卷', subject: result.subject || 'math',
@@ -12753,12 +12773,15 @@ function bind(el, next) {
         timeLimit: result.timeLimit || 180, createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null
       };
       Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
+      activeTasks.exam = { status: 'done', examId: exam.id, at: new Date().toISOString() };
       Toast.success('押题卷已生成：' + exam.title + '（' + exam.questions.length + '题）');
-      viewExam(exam.id, el);
-      if (btn) { btn.disabled = false; btn.textContent = '📝 生成押题卷'; }
+      if (currentEl) render(currentEl);
+      // 自动打开押题卷
+      viewExam(exam.id, currentEl || el);
     }).catch(function (e) {
+      activeTasks.exam = { status: 'error', error: e.message, at: new Date().toISOString() };
       Toast.warn('组卷失败：' + e.message);
-      if (btn) { btn.disabled = false; btn.textContent = '📝 生成押题卷'; }
+      if (currentEl) render(currentEl);
     });
   }
 
