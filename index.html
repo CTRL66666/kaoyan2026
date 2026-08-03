@@ -1076,31 +1076,6 @@ body.cp-lock { overflow: hidden; }
 }
 .dgm-fallback { border-style: dashed; opacity: 0.85; }
 
-/* ===== AI 生成中：非阻塞进度弹窗 ===== */
-.spinner {
-  display: inline-block;
-  width: 13px;
-  height: 13px;
-  margin-right: 7px;
-  vertical-align: -2px;
-  border: 2px solid #d9d9d9;
-  border-top-color: #333;
-  border-radius: 50%;
-  animation: kySpin 0.75s linear infinite;
-}
-@keyframes kySpin { to { transform: rotate(360deg); } }
-.pm-ai-gen {
-  padding: 10px 12px;
-  margin-bottom: 8px;
-  border: 1px solid #eaeaea;
-  border-radius: 8px;
-  background: #fafafa;
-}
-.pm-ai-gen .muted-sm { margin-top: 6px; line-height: 1.6; }
-/* 软刷新：内容原地更新时的轻过渡，避免整页跳动感 */
-.view-soft-update { animation: kySoft 240ms ease; }
-@keyframes kySoft { from { opacity: 0.72; } to { opacity: 1; } }
-
 </style>
 </head>
 <body>
@@ -1930,7 +1905,20 @@ body.cp-lock { overflow: hidden; }
         redline: { items: null, checklist: null, keywords: '' },   // 为 null 时回退 data.js 默认；keywords 为额外分心源
         scheduler: { useAI: true, mathAccThreshold: 70, idleDays: 3, signWeekThreshold: 3, signForceCount: 5, polCap: 2 }, // 当日 AI 编排缓存已改为独立本地 key（见 data.js SCHED_PLAN_KEY），不进入云同步
         targetScores: { math: 130, prof: 135, eng: 70, pol: 65 } }, // 决策参谋目标分，按专业可调
-      alerts: { lastProfWarn: '', lastNovPush: '' }
+      alerts: { lastProfWarn: '', lastNovPush: '' },
+      // ---- 错题智能聚类（AI 语义分组 + 专项训练包 + 正确率追踪）----
+      mistakeClusters: [],        // [{id,label,desc,mistakeIds:[],createdAt,status:'active'|'archived',archivedAt,trainingSets:[{id,questions:[{stem,options,answer,solution,trap,diff}],createdAt,completedAt,accuracy}],overallAccuracy}]
+      // ---- 考点热力 AI 增强层 ----
+      topicExplain: {},           // topicId -> {core,exam,steps,traps,link,mnemonic,at} AI 知识点讲解缓存
+      topicQuiz: {},              // topicId -> [{stem,options,answer,solution,trap,diff,savedAt,source:'ai'}] 考点出题缓存
+      // ---- 智能押题 AI 增强层 ----
+      sprintData: {
+        trends: null,             // AI 趋势分析 {hotTopics:[],coldTopics:[],prediction:'',year,generatedAt}
+        mockExams: [],            // AI 押题卷 [{id,subject,title,questions:[{stem,type,options,answer,solution,diff,score}],timeLimit,createdAt,completedAt,score,duration}]
+        hitTracker: [],           // 命中追踪 [{examName,year,topics:[topicId],hit:[topicId],miss:[topicId],at}]
+        rushPlan: null,           // 冲刺路径 {days:[{date,tasks:[{subj,topicId,name,priority}]}],generatedAt}
+        reasons: {}               // topicId -> {reason,confidence,lastYearTrend,score,at} AI 押题理由缓存
+      }
     };
   }
 
@@ -2080,10 +2068,6 @@ body.cp-lock { overflow: hidden; }
       opts = opts || {};
       const r = Store.migrate(remoteData);
       const local = Store.get();
-      // 变更前快照：计算各顶层字段哈希，供云同步「软刷新」判断哪些页面需要重建
-      const _hash = function (s) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h.toString(36); };
-      const _beforeHash = {};
-      for (const k in local) { try { _beforeHash[k] = _hash(JSON.stringify(local[k])); } catch (e) { _beforeHash[k] = '0'; } }
       // 墓碑合并：任一侧标记删除的 id 都视为已删
       const tomb = Object.assign({}, local.taskTomb || {}, r.taskTomb || {});
       // 集合墓碑（题库/拍题/作文/单词本等）：任一侧删除都生效
@@ -2146,13 +2130,9 @@ body.cp-lock { overflow: hidden; }
         || (local.mistakes && local.mistakes.length > 0)
         || (local.tasks && local.tasks.length > 6);
       if (localOnboarded && out.settings) out.settings.onboarded = true;
-      // 计算变化的顶层字段（供云同步软刷新：仅相关页面才重建）
-      const changed = [];
-      for (const k in out) { try { if (_beforeHash[k] !== _hash(JSON.stringify(out[k]))) changed.push(k); } catch (e) {} }
       cache = out;
       Store.save();
       U.emit('store:change');
-      return changed;
     },
     resetAll() { cache = initialState(); Store.save(); U.emit('store:change'); },
     exportJSON() { return JSON.stringify(Store.get(), null, 2); },
@@ -2687,10 +2667,8 @@ body.cp-lock { overflow: hidden; }
 
   function mergeRemote(remoteObj, opts) {
     suppressPush = true;
-    let changed = [];
-    try { changed = window.Store.mergeFrom(remoteObj, opts || {}) || []; } finally { suppressPush = false; }
-    // 软刷新：仅当变化的字段与当前页面相关才重建，避免无关页面抖动/丢失滚动位置
-    if (window.App) App.softRefresh(changed);
+    try { window.Store.mergeFrom(remoteObj, opts || {}); } finally { suppressPush = false; }
+    if (window.App) App.refresh();
     if (window.Onboarding && Onboarding.dismissIfNeeded) Onboarding.dismissIfNeeded();
   }
 
@@ -2989,9 +2967,8 @@ body.cp-lock { overflow: hidden; }
       meta.pushedHashes = Object.assign({ core: coreHash, manifest: manifestHash }, collHashes, heavyHashes);
       meta.legacyRemote = false;
       // 乐观推送完成：后台异步合并远端新增（不阻塞用户感知；远端无变化走 304，零流量零解析）
-      // 注意：常规拉取必须走 LWW（远端为准），否则 B 设备的修改会被本机本地副本盖掉、永远拉不下来
       if (state.gistId && !isRateLimited()) {
-        pull(false).catch(e => { console.warn('[Cloud] 后台合并跳过', e); });
+        pull(false, { preserveLocal: true }).catch(e => { console.warn('[Cloud] 后台合并跳过', e); });
       }
       state.lastPushedAt = Date.now(); state.lastSyncAt = Date.now();
       state.lastTransfer = transfer;
@@ -3040,9 +3017,9 @@ body.cp-lock { overflow: hidden; }
     state.pollTimer = setInterval(async () => {
       if (isRateLimited()) return;
       try {
-        // 周期拉取走 LWW（远端为准）：B 设备的修改必须能拉到本机，不能因 preserveLocal 被本地盖掉
-        // ETag 命中(304)时零流量；v6 追加同步：拉取只取核心 Gist + 未应用的 op 文件，几乎零流量
-        await pull(false);
+        // 周期拉取用 preserveLocal 深合并；ETag 命中(304)时零流量
+        // v6 追加同步：拉取只取核心 Gist + 未应用的 op 文件，几乎零流量
+        await pull(false, { preserveLocal: true });
         renderBadge('☁ 已同步', 'on');
       } catch (e) {
         if (e && e.status === 403) setRateLimitBackoff(0);
@@ -4310,7 +4287,7 @@ body.cp-lock { overflow: hidden; }
 
     // ---- 鲁棒 JSON 提取与修复 ----
     function extractJSON(raw) {
-      var s = AI.stripThinking(raw || '').trim();
+      var s = (raw || '').trim();
       var m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (m) return m[1].trim();
       var start = s.indexOf('{');
@@ -5046,7 +5023,6 @@ body.cp-lock { overflow: hidden; }
 
   // 判定失败是否值得切换备用接口：网络错误/超时/鉴权/限流/服务端错误切；400（请求体问题）不切
   function isSwitchableError(err) {
-    if (err && err.noFailover) return false; // 连接/空闲超时、用户取消：不切备用接口（重来一遍无意义）
     var m = (err && err.message) || '';
     var hm = m.match(/^HTTP (\d{3})/);
     if (hm) {
@@ -5081,17 +5057,20 @@ body.cp-lock { overflow: hidden; }
 
   // 带超时的 fetch：超时（服务端一直不回响应头）即判定接口无响应，触发切换
   var REQUEST_TIMEOUT_MS = 30000;
-  function fetchWithTimeout(url, options) {
+  function fetchWithTimeout(url, options, timeoutMs) {
     if (typeof AbortController === 'undefined') return fetch(url, options);
     var ctrl = new AbortController();
     options.signal = ctrl.signal;
-    var timer = setTimeout(function () { ctrl.abort(); }, REQUEST_TIMEOUT_MS);
+    var ms = timeoutMs || REQUEST_TIMEOUT_MS;
+    var timer = setTimeout(function () { ctrl.abort(); }, ms);
     return fetch(url, options).then(
       function (r) { clearTimeout(timer); return r; },
       function (e) {
         clearTimeout(timer);
-        if (e && e.name === 'AbortError') throw new Error('请求超时（' + (REQUEST_TIMEOUT_MS / 1000) + '秒无响应）');
-        throw e;
+        if (e && e.name === 'AbortError') throw new Error('连接超时：' + Math.round(ms / 1000) + ' 秒内未收到响应（视觉模型+思考模式可能需要更长时间，请重试或暂时关闭思考模式）');
+        var msg = (e && e.message) || '网络错误';
+        if (/Failed to fetch|ERR_NETWORK|ERR_CONNECTION/i.test(msg)) msg = '网络连接失败（请检查网络或 API 地址是否可达）';
+        throw new Error(msg);
       }
     );
   }
@@ -5312,20 +5291,51 @@ body.cp-lock { overflow: hidden; }
   // 底层走流式管线（SSE）：响应头先到即视为连接正常，30 秒超时只管“连不上”，
   // 之后可等待云端慢慢生成（长材料/图片识别不再被“30秒无响应”误杀）；
   // 厂商不支持流式时由 400 极简重试自动降级为非流式。
-  // 【重要·思考模式策略】不再默认强制关思考：
-  //   旧实现默认 noThink=true，等于“为不报错而偷偷剥夺用户思考能力”（治标）。
-  //   正确做法——尊重用户全局思考设置（a.thinkingMode），同时默认给较大 maxTokens 兜底，
-  //   让「reasoning_content + 正式 JSON」都能容纳、不被腰斩；这样开思考时质量更高、关思考时快速。
-  //   仅当调用方显式传 { noThink:true } 时才强制关闭（用于确实要快速、且用户接受降低质量的场合）。
+  // 【重要】默认强制关闭思考模式（noThink）：
+  //   开启思考时模型先吐 reasoning_content，会吃掉服务端默认的 max_tokens 预算，
+  //   轮到正式 JSON 输出时往往被腰斩 → 表现为「AI未返回有效JSON / 解析失败」。
+  //   结构化提取本就不需要模型「思考」，故此处默认关闭；
+  //   确需思考的调用方可显式传 { noThink:false } 覆盖。
+  //   同时给一个较大的 maxTokens 兜底，避免长列表（如单词本一次几十条）被截断。
   function chatJSON(systemPrompt, userText, imageDataUrl, opts) {
     opts = opts || {};
     const o = Object.assign({}, opts);
-    if (!o.maxTokens) o.maxTokens = 8192; // 兜底预算：思考模式推理 + JSON 都在内，避免被截断
+    if (o.noThink === undefined) o.noThink = true;
+    if (!o.maxTokens) o.maxTokens = 4096;
     return chatStream(systemPrompt, userText, null, imageDataUrl, o)
       .then(txt => extractRobustJSON(txt));
   }
 
   // ── JSON 安全修复：逐字符扫描，只在「字符串外」做替换 ──
+  // 从文本中提取最外层 JSON 字符串（括号深度计数 + 尝试解析）
+  // 用于 reasoning_content 兜底：遍历每个 { 或 [，找到能成功 parse 的 JSON
+  // 避免 LaTeX 的 \frac{a}{b} 花括号被误认为 JSON
+  function extractJsonStr(text) {
+    var str = String(text || '');
+    for (var i = 0; i < str.length; i++) {
+      var ch = str.charAt(i);
+      if (ch !== '{' && ch !== '[') continue;
+      var openChar = ch;
+      var closeChar = openChar === '{' ? '}' : ']';
+      var depth = 0, inStr = false, esc = false, end = -1;
+      for (var j = i; j < str.length; j++) {
+        var c = str.charAt(j);
+        if (esc) { esc = false; continue; }
+        if (c === '\\') { esc = true; continue; }
+        if (c === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (c === openChar) depth++;
+        else if (c === closeChar) { depth--; if (depth === 0) { end = j + 1; break; } }
+      }
+      if (end > i) {
+        var candidate = str.slice(i, end);
+        try { JSON.parse(candidate); return candidate; } catch (e) {}
+        try { JSON.parse(repairJsonSafely(candidate)); return candidate; } catch (e) {}
+      }
+    }
+    return '';
+  }
+
   // 关键：绝不能全局把 ' 换成 "，否则英文例句里的 don't / it's / Tom's 会直接炸掉 JSON
   //（单词本拍照识别几乎每次例句都带撇号，这曾是「返回JSON格式错误」的主因）
   function repairJsonSafely(s) {
@@ -5334,11 +5344,13 @@ body.cp-lock { overflow: hidden; }
       var c = s.charAt(i);
       if (quote) {                                  // ── 字符串内部 ──
         if (esc) {
-          // 标准JSON转义字符：" \ / b f n r t u → 原样保留；其余一律补为 \\X（LaTeX的 \begin/\frac/\end 等均属此类）
-          esc = false;
-          if ('"\\/bfnrt'.indexOf(c) >= 0 || c === 'u') { out += '\\' + c; }
-          else { out += '\\' + '\\' + c; }
-          continue;
+          // LaTeX 转义修复：\sum \frac \infty \theta 等反斜杠命令在 JSON 中是非法转义
+          // 只有 \" \\ \/ \b \f \n \r \t \uXXXX 是合法 JSON 转义
+          // 但考研场景 \frac(\f) \nabla(\n) \theta(\t) \beta(\b) 几乎都是 LaTeX 而非 JSON 转义
+          // 安全做法：只保留 \" 和 \\，\u 保留(Unicode)，其余一律补 \ 使其成为字面量反斜杠
+          if (c === '"' || c === '\\' || c === 'u') { out += c; }
+          else { out += '\\' + c; }
+          esc = false; continue;
         }
         if (c === '\\') { out += c; esc = true; continue; }
         if (c === quote) { quote = ''; out += '"'; continue; }
@@ -5392,102 +5404,10 @@ body.cp-lock { overflow: hidden; }
     return items;
   }
 
-  // 截断对象抢救：最外层 { / [ 找到但没收尾（被 max_tokens 截断，思考模式最常见）。
-  // 尝试补缺失的收尾引号 + 去尾逗号 + 补缺失的 } / ]，让「已完整输出的字段」尽量被解析出来。
-  function repairTruncatedObject(s) {
-    if (!s || s.charAt(0) !== '{' && s.charAt(0) !== '[') return null;
-    var depth = 0, inStr = false, esc = false;
-    for (var i = 0; i < s.length; i++) {
-      var c = s.charAt(i);
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === '{' || c === '[') depth++;
-      else if (c === '}' || c === ']') { depth--; }
-    }
-    if (depth <= 0) return null; // 没截断，交给上层
-    var t = s;
-    if (inStr) t += '"';                       // 字符串被截断 → 补收尾引号
-    t = t.replace(/,\s*$/, '');                // 去尾逗号（如 "..." , 或 "..." ,"半截
-    var close = s.charAt(0) === '[' ? ']' : '}';
-    while (depth-- > 0) t += close;           // 补缺失的收尾括号
-    try { return JSON.parse(t); } catch (e) {}
-    try { return JSON.parse(repairJsonSafely(t)); } catch (e2) { return null; }
-  }
-
-  // 不区分大小写查找标签（如 'think' → <think>），返回下标；找不到返回 -1
-  function findTag(s, tag, from) {
-    var low = s.toLowerCase();
-    return low.indexOf('<' + tag.toLowerCase() + '>', from);
-  }
-
-  // 判断从 s 开头是否能切出一个“完整且闭合”的 JSON（{...} 或 [...]），能则返回该片段，否则 null
-  function tryGrabJson(s) {
-    s = s.trim();
-    if (!s || (s.charAt(0) !== '{' && s.charAt(0) !== '[')) return null;
-    var open = s.charAt(0), close = open === '{' ? '}' : ']';
-    var depth = 0, inStr = false, esc = false;
-    for (var k = 0; k < s.length; k++) {
-      var c = s.charAt(k);
-      if (esc) { esc = false; continue; }
-      if (c === '\\') { esc = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === open) depth++;
-      else if (c === close) { depth--; if (depth === 0) return s.slice(0, k + 1); }
-    }
-    return null; // 未闭合
-  }
-
-  // 剥离推理模型思考块（<think>…</think>），覆盖三类刁钻情况：
-  //  ① 闭合块 <think>…</think>（最常见，reasoning 文字里即便含 { [ } ] 也整体删掉）；
-  //  ② 未闭合块（思考被 max_tokens 截断、没有 </think>）：此时正常 JSON 在思考块之后，
-  //     必须跳过 reasoning 里零散的 { [ 一直找到“能完整解析的 JSON”为止（避免被 reasoning 括号误导成 JSON 起点）；
-  //  ③ 个别模型把正式答案直接写进思考块内（<think>{json}</think>）：命中可解析 JSON 即保留它。
-  // 思路：状态机扫描。遇到 <think> 进入丢弃态；丢弃态内优先看 </think>（正常结束），
-  // 没有 </think> 才在块内寻找第一个完整可解析（或经 repairTruncatedObject 可抢救）的 JSON 作为结果。
-  // 这样无论 reasoning 有没有括号、思考块收没收尾，正式 JSON 都能被正确分离。
-  function stripThinking(raw) {
-    var s = String(raw == null ? '' : raw);
-    var out = '', i = 0, n = s.length;
-    for (;;) {
-      var open = findTag(s, 'think', i);
-      if (open === -1) { out += s.slice(i); break; }
-      out += s.slice(i, open);
-      i = open + 7; // 跳过 '<think>'
-      for (;;) {
-        var close = findTag(s, '/think', i);
-        if (close !== -1) { i = close + 8; break; } // 正常结束思考块
-        // 无 </think> → 思考块被截断/未闭合：在块内寻找第一个完整可解析的 JSON
-        var b1 = s.indexOf('{', i), b2 = s.indexOf('[', i);
-        var cands = [];
-        if (b1 !== -1) cands.push(b1);
-        if (b2 !== -1) cands.push(b2);
-        if (!cands.length) { i = n; break; } // 无 JSON 起点 → 整段丢弃
-        var p = cands[0]; for (var q = 1; q < cands.length; q++) if (cands[q] < p) p = cands[q];
-        var grabbed = tryGrabJson(s.slice(p));
-        if (!grabbed) grabbed = repairTruncatedObject(s.slice(p)); // 截断的 JSON 也抢救
-        if (grabbed) {
-          out += (typeof grabbed === 'string') ? grabbed : JSON.stringify(grabbed);
-          var c2 = findTag(s, '/think', p + (typeof grabbed === 'string' ? grabbed.length : JSON.stringify(grabbed).length));
-          i = c2 === -1 ? n : c2 + 8;
-          break;
-        }
-        i = p + 1; // 推理文字里的零散括号，跳过继续
-      }
-    }
-    return out;
-  }
-
   // 通用稳健 JSON 提取器（供 chatJSON 和各模块复用）
   function extractRobustJSON(raw) {
     var str = String(raw == null ? '' : raw).replace(/^\uFEFF/, '');
-    // 先剥离推理模型的思考块（<think>…</think>，闭合/未闭合/答案写在思考块内都能正确处理）。
-    // 思考模式下 reasoning 可能混在 content 里（Qwen 等），若不剥离、或只按“首个 { [ ”粗暴截断，
-    // reasoning 文字里的括号会误导 JSON 起点 → 解析失败（即「API 返回格式错误」）。
-    str = stripThinking(str);
-    str = str.trim();
+    str = str.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();   // 剥掉推理模型的思考块
 
     // 第 1 层：markdown 代码块（取最长的一块，避免命中回复里的小示例）
     var best = null, reFence = /```(?:json|JSON)?\s*([\s\S]*?)```/g, mf;
@@ -5527,10 +5447,6 @@ body.cp-lock { overflow: hidden; }
       try { return JSON.parse(jsonStr); } catch (e) {}
       // 第 4 层：安全修复后重试（不破坏 don't / it's 这类撇号）
       try { return JSON.parse(repairJsonSafely(jsonStr)); } catch (e) {}
-    } else {
-      // 第 2.5 层：最外层 { / [ 找到但没匹配收尾（被 max_tokens 截断，思考模式最常见）→ 尝试补全括号/引号抢救
-      var rec = repairTruncatedObject(str.slice(start));
-      if (rec) return rec;
     }
 
     // 第 5 层：数组元素级抢救（截断 / 中间某条格式坏掉 都能救回其余部分）
@@ -5570,24 +5486,31 @@ body.cp-lock { overflow: hidden; }
   }
 
   // 流式单接口一次请求（_noKwArgs：400 时的极简重试模式，此时非流式、整体返回）
-  // opts.noThink   ：强制关闭思考（仅用于用户明确要「快速无思考」时；结构化 JSON 场景勿硬编码，
-  //                  正确做法见下方注释：用 maxTokens 加大预算保留思考能力）
-  // opts.maxTokens ：显式指定输出上限，防止长列表/思考推理被服务端默认值截断（结构化提取场景建议 8192）
+  // opts.noThink   ：强制关闭思考（结构化 JSON 提取场景用，避免 reasoning 吃掉输出预算）
+  // opts.maxTokens ：显式指定输出上限，防止长列表被服务端默认值截断
   function chatStreamOnce(api, messages, onChunk, _noKwArgs, opts) {
     _noKwArgs = !!_noKwArgs;
     opts = opts || {};
     const a = Store.get().ai;
+    // 有图片（多模态）时连接超时放宽到 90 秒：视觉模型需先上传并处理 base64 图片，
+    // 再启动思考推理，响应头可能 30+ 秒后才返回（agnes2.5flash 等 + 思考模式典型场景）
+    const hasImage = messages.some(function (m) {
+      return Array.isArray(m.content) && m.content.some(function (c) { return c.type === 'image_url'; });
+    });
+    const reqTimeoutMs = hasImage ? 300000 : 30000;
     // _noKwArgs 重试模式：极简 body（只保留 model + messages，去掉 stream/temperature 等可选字段）
     // stream_options.include_usage：让流式响应末尾携带 usage（OpenAI/DeepSeek 均支持）
-    // 用于统计云端 prompt 缓存命中；不支持的厂商会在 400 后走极简重试自动去掉
+    // 用于统计云端 prompt 缓存命中；不支持的厂商会在 400 后走分级重试自动去掉
+    // opts._noStreamOptions：第一级重试——只去掉 stream_options，保留 stream + thinking
     const body = _noKwArgs
       ? { model: api.model, messages: messages }
-      : { model: api.model, stream: true, stream_options: { include_usage: true }, messages: messages };
+      : { model: api.model, stream: true, messages: messages };
+    if (!_noKwArgs && !opts._noStreamOptions) {
+      body.stream_options = { include_usage: true };
+    }
     // 思考模式控制（同 rawChat 逻辑：仅在显式设置时发送；_noKwArgs 强制跳过）
-    // 注意：结构化 JSON 提取场景「不要」硬编码 noThink 关思考（那是用牺牲推理质量换不报错）。
-    // 正确治本做法：传 opts.maxTokens 调大输出预算（如 8192），让 reasoning_content + 正式 JSON
-    // 都能容纳，从而保留思考模式（用户全局设置）的同时 JSON 不被腰斩。noThink 仅用于用户明确
-    // 要「快速无思考」的场合。
+    // noThink=true 时无条件发 enable_thinking:false —— 结构化 JSON 提取一旦让模型思考，
+    // reasoning_content 会占满 max_tokens，正式 JSON 被腰斩，表现为「解析失败」。
     if (!_noKwArgs) {
       if (opts.noThink) {
         body.chat_template_kwargs = { enable_thinking: false };
@@ -5600,64 +5523,87 @@ body.cp-lock { overflow: hidden; }
     // 调试日志：400 时可在控制台看到完整请求体（帮助定位问题）
     console.log('[AI] chatStream 请求 接口=' + (api.name || '') + ' endpoint=' + api.endpoint + ' model=' + api.model
       + ' body前200字=' + jsonBody.slice(0, 200));
-    // 流式传输：连接超时(30s) + 逐块空闲超时(默认4分钟，每收到一块重置)双保险。
-    // 思考模型(reasoning)在吐首段正式内容前可能长时间“攒着”不出包，不能用“总时长”硬超时
-    // （原 30s 会把长推理直接腰斩 → 表现为“AI始终解析失败”）。改为：
-    //   · 连接超时 30s —— 只判定“连不上/首字节迟迟不来”；
-    //   · 空闲超时 4min —— 流式开始后，只要持续有数据流入就一直续期，真正“卡死”才杀。
-    const ctrl = new AbortController();
-    if (opts && opts.signal) {
-      if (opts.signal.aborted) throw new Error('已取消');
-      try { opts.signal.addEventListener('abort', function () { ctrl.abort(); }); } catch (e) {}
-    }
-    const CONNECT_MS = 30000;                          // 仅管“连不上”
-    const INACTIVITY_MS = (opts && opts.streamIdleMs) || 240000; // 流式空闲上限（思考长推理不被误杀）
-    let connectTimer = setTimeout(function () { ctrl.abort(); }, CONNECT_MS);
-    return fetch(api.endpoint, {
+    return fetchWithTimeout(api.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api.key },
-      body: jsonBody,
-      signal: ctrl.signal
-    }).then(function (r) {
-      clearTimeout(connectTimer);
+      body: jsonBody
+    }, reqTimeoutMs).then(function (r) {
       if (!r.ok) {
-        // 400 无条件安全网：首次失败时，用最精简的请求体重试一次（只保留 model+messages）
+        // 400 分级重试：第一级去掉 stream_options，第二级极简 body
         if (r.status === 400 && !_noKwArgs) {
           console.error('[AI] chatStream 400！原始body前300字:', jsonBody.slice(0, 300));
-          console.warn('[AI] 自动用极简请求体重试…');
+          if (!opts._noStreamOptions) {
+            console.warn('[AI] 400 重试①：去掉 stream_options（保留 stream + thinking）…');
+            var opts1 = Object.assign({}, opts, { _noStreamOptions: true });
+            return chatStreamOnce(api, messages, onChunk, false, opts1);
+          }
+          console.warn('[AI] 400 重试②：用极简请求体（仅 model+messages）…');
           return chatStreamOnce(api, messages, onChunk, true, opts);
         }
         return httpError(r, '请求被拒绝');
       }
       // 极简重试模式无 stream：按普通 JSON 解析，一次性回调
       if (_noKwArgs) {
+        console.log('[AI] 极简重试路径（非流式 JSON 解析）');
         return r.json().then(function (j) {
           recordUsage(j.usage);
-          const txt = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+          var msg = j.choices && j.choices[0] && j.choices[0].message;
+          // 分别提取思考过程和正文——极简重试也可能携带 reasoning_content
+          var reasoningTxt = (msg && (msg.reasoning_content || msg.reasoning)) || '';
+          var txt = (msg && msg.content) || '';
+          if (!txt && reasoningTxt) {
+            var js = extractJsonStr(reasoningTxt);
+            if (js) txt = js;
+            else { try { txt = JSON.stringify(extractRobustJSON(reasoningTxt)); } catch (e) {} }
+          }
           if (!txt) throw new Error('接口返回异常');
-          if (onChunk) onChunk(txt, '');
+          if (onChunk) onChunk(txt, reasoningTxt);
           return txt;
         });
       }
       const reader = r.body.getReader();
       const dec = new TextDecoder();
-      let full = '', reasoning = '', buf = '';
-      let inact = setTimeout(function () { ctrl.abort(); }, INACTIVITY_MS);
+      let full = '', reasoning = '', buf = '', rawAll = '';
+      // 与老版一致：简单直传 full/reasoning，不在流式过程中做 reasoning→content 替换
+      // （流式替换会导致思考内容被误显示在正文栏）。仅在流结束时做兜底。
       const emit = () => { if (onChunk) onChunk(full, reasoning); };
       function pump() {
-        return reader.read().then(function (res) {
-          if (res.done) { clearTimeout(inact); emit(); return full; }
-          // 每收到一块数据就重置空闲计时：思考模型长推理只要持续吐字就不会被误杀
-          clearTimeout(inact); inact = setTimeout(function () { ctrl.abort(); }, INACTIVITY_MS);
-          buf += dec.decode(res.value, { stream: true });
+        return reader.read().then(({ done, value }) => {
+          if (done) {
+            // 流结束兜底：content 为空但 reasoning 有内容 → 多层提取 JSON
+            if (!full && reasoning) {
+              var js = extractJsonStr(reasoning);
+              if (js) full = js;
+              else {
+                try { full = JSON.stringify(extractRobustJSON(reasoning)); console.log('[AI] extractJsonStr 失败，extractRobustJSON 成功'); } catch (e) { console.log('[AI] reasoning 中未提取到 JSON'); }
+              }
+            }
+            // SSE 流无 data: 行但 rawAll 有内容 → 非 SSE 响应，尝试解析 JSON
+            else if (!full && !reasoning && rawAll && rawAll.trim()) {
+              console.log('[AI] SSE 流无 data: 行，尝试解析 rawAll 兜底，前200字: ' + rawAll.slice(0, 200));
+              try {
+                var j = JSON.parse(rawAll.trim());
+                recordUsage(j.usage);
+                var msg = j.choices && j.choices[0] && j.choices[0].message;
+                reasoning = (msg && (msg.reasoning_content || msg.reasoning)) || '';
+                full = (msg && msg.content) || '';
+                if (!full && reasoning) { var js2 = extractJsonStr(reasoning); if (js2) full = js2; else try { full = JSON.stringify(extractRobustJSON(reasoning)); } catch (e2) {} }
+                if (!full) full = rawAll;
+              } catch (e) { full = rawAll; }
+            }
+            emit();
+            return full;
+          }
+          var chunk = dec.decode(value, { stream: true });
+          rawAll += chunk;
+          buf += chunk;
           const lines = buf.split('\n');
           buf = lines.pop();
-          lines.forEach(function (line) {
+          lines.forEach(line => {
             const t = line.trim();
             if (!t || t === 'data: [DONE]' || t.indexOf('data:') !== 0) return;
             try {
               const j = JSON.parse(t.slice(5));
-              // 流式末尾的 usage 块（无 choices）：采集云端缓存命中后返回，不参与内容
               if (j.usage) { recordUsage(j.usage); if (!j.choices || !j.choices.length) return; }
               const d = j.choices && j.choices[0] && j.choices[0].delta;
               if (!d) return;
@@ -5669,25 +5615,9 @@ body.cp-lock { overflow: hidden; }
             } catch (e) { /* 忽略半行 */ }
           });
           return pump();
-        }, function (err) {
-          clearTimeout(inact); clearTimeout(connectTimer);
-          if (err && err.name === 'AbortError') {
-            const e = new Error('请求中断/超时：思考模型生成较慢，若频繁出现可在「设置」关闭 AI 思考模式后重试');
-            e.noFailover = true; // 连接/空闲超时或用户取消：不触发备用接口切换（重来一遍无意义）
-            throw e;
-          }
-          throw err;
         });
       }
       return pump();
-    }, function (err) {
-      clearTimeout(connectTimer);
-      if (err && err.name === 'AbortError') {
-        const e = new Error('连接超时：30 秒内未收到响应');
-        e.noFailover = true;
-        throw e;
-      }
-      throw err;
     });
   }
 
@@ -5727,8 +5657,6 @@ body.cp-lock { overflow: hidden; }
     useThinking() { return Store.get().ai.thinkingMode === true; },
     // 通用稳健 JSON 提取器（供各模块复用）
     extractRobustJSON,
-    // 剥离推理模型思考块 <think>…</think>（闭合/未闭合/答案写在块内均处理），供各模块本地 JSON 解析复用
-    stripThinking,
     // JSON 安全修复（只在字符串外替换，不破坏 don't / it's 撇号）+ 截断抢救
     repairJsonSafely, salvageObjects,
     // 动态出题提示词：每次访问按当前专业课生成（getter 保证换专业后即时生效）
@@ -5751,18 +5679,46 @@ body.cp-lock { overflow: hidden; }
     reviewWeekly(reportText) {
       const summary = weeklySummary();
       const payload = reportText + '\n\n' + summary + '\n\n请给出：1)风险诊断 2)下周逐日任务调整 3)防呆强化点。';
-      Modal.open({
-        title: '🤖 AI 深度复盘中…',
-        wide: true, dismissable: false,
-        html: '<div class="muted-sm">已自动附带本周学习摘要，正在等待云端教练回复…</div><pre class="report" id="ai-out">加载中…</pre>',
-        actions: [{ label: '关闭', kind: 'btn-ghost' }]
-      });
+      // 非阻塞：优先在复盘页面原位显示进度（#rv-ai-card），否则用浮动面板
+      var card = document.getElementById('rv-ai-card');
+      var out = document.getElementById('rv-ai-out');
+      var statusEl = document.getElementById('rv-ai-status');
+      if (!out) {
+        // 不在复盘页面 → 创建非阻塞浮动面板
+        var panel = document.createElement('div');
+        panel.id = 'rv-ai-panel';
+        panel.style.cssText = 'position:fixed;bottom:16px;right:16px;width:380px;max-width:calc(100vw - 32px);max-height:60vh;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:0 4px 20px rgba(0,0,0,.12);z-index:9000;overflow:hidden;display:flex;flex-direction:column';
+        panel.innerHTML =
+          '<div style="padding:10px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">'
+          + '<span style="font-weight:600;font-size:13px">🤖 AI 快速复盘</span>'
+          + '<button id="rv-ai-panel-x" aria-label="关闭" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);padding:0 4px;line-height:1">×</button></div>'
+          + '<div style="padding:12px 14px;overflow-y:auto;flex:1">'
+          + '<div class="muted-sm" id="rv-ai-status">已自动附带本周学习摘要，正在等待云端教练回复…</div>'
+          + '<pre class="report" id="rv-ai-out" style="margin-top:10px;min-height:60px;white-space:pre-wrap">加载中…</pre>'
+          + '</div>';
+        document.body.appendChild(panel);
+        var xBtn = panel.querySelector('#rv-ai-panel-x');
+        if (xBtn) xBtn.onclick = function () { panel.remove(); };
+        out = document.getElementById('rv-ai-out');
+        statusEl = document.getElementById('rv-ai-status');
+        card = panel;
+      } else {
+        // 在复盘页面 → 原位显示
+        card.style.display = '';
+        if (statusEl) statusEl.textContent = '已自动附带本周学习摘要，正在等待云端教练回复…';
+        if (out) out.textContent = '加载中…';
+      }
       chat(payload).then(txt => {
-        const out = document.getElementById('ai-out');
         if (out) out.textContent = txt;
+        if (statusEl) statusEl.textContent = '✓ 完成';
+        // 保存结果（切页面/刷新后仍可恢复）
+        try { Store.update(s => { s.aiReview = { week: Store.weekKey(), output: txt, generatedAt: new Date().toISOString() }; }); } catch (e) {}
+        Toast.success('AI 快速复盘完成');
+        if (window.App) App.refresh();
       }).catch(e => {
-        const out = document.getElementById('ai-out');
         if (out) out.textContent = '调用失败：' + e.message + '\n\n可改用本地摘要手动复盘：\n' + summary;
+        if (statusEl) statusEl.textContent = '⚠ 调用失败';
+        Toast.warn('AI 快速复盘失败：' + (e && e.message || '未知错误'));
       });
     },
     test() { return chat('用一句话回复：系统连通正常', { cache: false }).then(t => t.slice(0, 60)); },
@@ -6852,7 +6808,7 @@ body.cp-lock { overflow: hidden; }
 
   // 从 AI 返回中稳健提取每日一题 JSON（含修复常见格式问题）
   function extractDailyJSON(raw) {
-    var str = AI.stripThinking(raw || '').trim();
+    var str = (raw || '').trim();
 
     // 先试 markdown 代码块
     var m = str.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -8312,6 +8268,13 @@ function bind(el, next) {
       + '<div class="muted-sm" id="rv-deep-status"></div>'
       + '</div>'
 
+      // AI 快速复盘（非阻塞，结果自动保存）
+      + '<div class="card" id="rv-ai-card" style="display:none;margin-top:10px">'
+      + '<div class="card-title">🤖 AI 快速复盘</div>'
+      + '<div class="muted-sm" id="rv-ai-status"></div>'
+      + '<pre class="report" id="rv-ai-out" style="margin-top:8px;min-height:60px;white-space:pre-wrap"></pre>'
+      + '</div>'
+
       // 月里程碑检查
       + '<div class="card"><div class="card-title">月里程碑检查</div>'
       + DB.MILESTONES.map(m => {
@@ -8326,6 +8289,7 @@ function bind(el, next) {
     document.getElementById('rv-report').textContent = reportText(d);
     bind(el);
     restoreDeepReview(); // 切回本页时恢复已持久化的深度复盘结果（非阻塞、无需重生成）
+    restoreAiReview();   // 恢复已保存的 AI 快速复盘结果
   }
 
   function bind(el) {
@@ -8545,6 +8509,23 @@ function bind(el, next) {
     }
   }
 
+  // 渲染时恢复已保存的 AI 快速复盘结果（切页面/刷新后不丢失）
+  function restoreAiReview() {
+    var s = Store.get();
+    var ar = s.aiReview;
+    if (!ar || !ar.week || ar.week !== Store.weekKey()) return; // 仅当周有效
+    var card = document.getElementById('rv-ai-card');
+    var out = document.getElementById('rv-ai-out');
+    var statusEl = document.getElementById('rv-ai-status');
+    if (!card) return;
+    card.style.display = '';
+    if (out) out.textContent = ar.output || '';
+    if (statusEl) {
+      var ts = (ar.generatedAt || '').slice(0, 16).replace('T', ' ');
+      statusEl.textContent = '✓ 已完成' + (ts ? '（' + ts + '）' : '') + '，结果已保存';
+    }
+  }
+
   window.ReviewModule = { render, reportText, weekData };
 })();
 
@@ -8678,6 +8659,8 @@ function bind(el, next) {
       + '<span><button class="link-btn" id="ms-ai">🤖 AI 模式分析</button> <button class="link-btn" id="ms-export">导出错题JSON</button></span></div>'
       + Charts.donut(pie, { height: 200 })
       + '</div>'
+
+      + clusterCardHtml(s)
 
       + '<div class="card"><div class="card-title">记录新错题</div>'
       + '<div class="form-grid">'
@@ -8897,6 +8880,7 @@ function bind(el, next) {
     el.querySelectorAll('.rvd-stage[data-rvd-id]').forEach(sp => {
       sp.onclick = () => markReview(sp.getAttribute('data-rvd-id'), parseInt(sp.getAttribute('data-rvd-stage'), 10));
     });
+    bindCluster(el);
   }
 
   // ---------- 统计概览 chips ----------
@@ -9086,7 +9070,7 @@ function bind(el, next) {
             + (m.trap ? '\n易错点：' + m.trap : '');
         }
         userMsg += '\n\n请基于以上错题信息' + (hasStem ? '（含已带入的原题）' : '') + '，生成/完善原题、答案、解析和易错点。';
-        AI.chatJSON(sysPrompt, userMsg, null, { cache: false, maxTokens: 8192 }
+        AI.chatJSON(sysPrompt, userMsg, null, { cache: false, noThink: true, maxTokens: 4096 }
         ).then(function(result) {
           if (result && (result.question || result.answer || result.solution)) {
             Store.update(s => {
@@ -9117,6 +9101,417 @@ function bind(el, next) {
     });
     // 搜索词仍然生效
     applyFilterLight(el);
+  }
+
+  // ==================== AI 错题智能聚类与专项突破 ====================
+  // 数据：s.mistakeClusters [{id,label,desc,mistakeIds,severity,createdAt,status,archivedAt,trainingSets:[{id,questions,createdAt,completedAt,accuracy}],overallAccuracy}]
+
+  function clusterCardHtml(s) {
+    var clusters = s.mistakeClusters || [];
+    var active = clusters.filter(function (c) { return c.status !== 'archived'; });
+    var archived = clusters.filter(function (c) { return c.status === 'archived'; });
+    var totalAcc = active.length ? Math.round(U.avg(active.map(clusterAccuracy).filter(function (x) { return x != null; }))) : null;
+
+    var header = '<div class="card"><div class="card-title-row"><span class="card-title">🧩 AI 错题智能聚类</span>'
+      + '<span><button class="link-btn" id="ms-cluster-run">🤖 ' + (clusters.length ? '重新聚类' : '开始智能聚类') + '</button>'
+      + (archived.length ? ' <button class="link-btn" id="ms-cluster-archived">已归档(' + archived.length + ')</button>' : '')
+      + '</span></div>';
+
+    if (!clusters.length) {
+      return header + '<div class="muted-sm">将所有错题交给 AI 做<span style="color:#2f54eb">语义聚类</span>——不是按错误类型分，而是按<b>真正的知识根因</b>分组（如"含参变限积分求导漏项"、"符号处理习惯性失误"）。'
+        + '<br>每个聚类可一键生成 5-10 题专项训练包，正确率达 80% 自动归档。需至少 3 条错题。</div></div>';
+    }
+
+    // 总览 chips
+    var overview = '<div class="mis-stats">'
+      + chip('活跃聚类', active.length)
+      + chip('已归档', archived.length)
+      + chip('训练集', active.reduce(function (n, c) { return n + (c.trainingSets || []).length; }, 0))
+      + (totalAcc != null ? chip('总体掌握', totalAcc + '%', totalAcc >= 80 ? 'ok' : totalAcc < 50 ? 'danger' : '') : chip('总体掌握', '未训练'))
+      + '</div>';
+
+    // 聚类列表
+    var listHtml = active.length ? active.map(function (c) { return clusterRowHtml(c, s); }).join('') : '<div class="empty">全部聚类已归档 🎉</div>';
+
+    return header + overview + '<div class="mis-cluster-list">' + listHtml + '</div></div>';
+  }
+
+  function clusterRowHtml(c, s) {
+    var acc = clusterAccuracy(c);
+    var accTxt = acc != null ? acc + '%' : '未训练';
+    var accColor = acc == null ? 'var(--text-muted)' : acc >= 80 ? '#237804' : acc >= 50 ? '#d48806' : '#cf1322';
+    var sevColor = c.severity === 3 ? '#cf1322' : c.severity === 2 ? '#d48806' : '#237804';
+    var sevTxt = c.severity === 3 ? '🔴 严重' : c.severity === 2 ? '🟡 中等' : '🟢 轻微';
+    var trainCount = (c.trainingSets || []).length;
+    var canArchive = acc != null && acc >= 80;
+
+    // 取典型案例（前2条错题描述）
+    var samples = (c.mistakeIds || []).slice(0, 2).map(function (mid) {
+      var m = s.mistakes.find(function (x) { return x.id === mid; });
+      return m ? U.esc((m.desc || '').slice(0, 50)) : '';
+    }).filter(Boolean).join(' / ');
+
+    return '<div class="mis-cluster-row" data-cid="' + c.id + '" style="border-left:3px solid ' + sevColor + ';padding:10px 12px;margin:8px 0;background:var(--bg-card);border-radius:6px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">'
+      + '<div style="flex:1;min-width:200px">'
+      + '<div style="font-weight:600;font-size:14px">' + U.esc(c.label) + ' <span class="tag" style="background:' + sevColor + ';color:#fff;font-size:10px">' + sevTxt + '</span></div>'
+      + '<div class="muted-sm" style="margin-top:2px">' + U.esc(c.desc) + '</div>'
+      + (samples ? '<div class="muted-sm" style="margin-top:4px;font-size:12px;opacity:.7">典型：' + samples + '</div>' : '')
+      + '</div>'
+      + '<div style="text-align:right;font-size:12px">'
+      + '<div><span class="tag tag-ghost">' + (c.mistakeIds || []).length + ' 题</span> <span class="tag tag-ghost">' + trainCount + ' 训练</span></div>'
+      + '<div style="margin-top:4px;color:' + accColor + ';font-weight:600">掌握度 ' + accTxt + '</div>'
+      + '</div>'
+      + '</div>'
+      // 正确率进度条
+      + '<div style="height:4px;background:var(--bg-muted);border-radius:2px;margin-top:8px;overflow:hidden">'
+      + '<div style="height:100%;width:' + (acc != null ? acc : 0) + '%;background:' + accColor + ';transition:width .3s"></div></div>'
+      // 操作按钮
+      + '<div class="mis-actions" style="margin-top:8px">'
+      + '<button class="btn btn-sm btn-primary ms-cluster-train" data-cid="' + c.id + '">🎯 生成专项训练</button>'
+      + '<button class="btn btn-sm btn-ghost ms-cluster-detail" data-cid="' + c.id + '">查看详情</button>'
+      + (canArchive ? '<button class="btn btn-sm btn-ghost ms-cluster-archive" data-cid="' + c.id + '" style="color:#237804">✓ 达标归档</button>' : '')
+      + '<button class="btn btn-sm btn-ghost ms-cluster-del" data-cid="' + c.id + '" style="color:var(--danger)">🗑</button>'
+      + '</div></div>';
+  }
+
+  function clusterAccuracy(c) {
+    var sets = (c.trainingSets || []).filter(function (t) { return t.accuracy != null; });
+    if (!sets.length) return null;
+    // 加权平均：越近期权重越高（按 createdAt 降序，最新权重最大）
+    sets.sort(function (a, b) { return (a.createdAt || '').localeCompare(b.createdAt || ''); });
+    var totalW = 0, sum = 0;
+    sets.forEach(function (t, i) { var w = i + 1; sum += (t.accuracy || 0) * w; totalW += w; });
+    return totalW ? Math.round(sum / totalW) : null;
+  }
+
+  function bindCluster(el) {
+    var runBtn = el.querySelector('#ms-cluster-run');
+    if (runBtn) runBtn.onclick = function () { runCluster(el); };
+
+    var archBtn = el.querySelector('#ms-cluster-archived');
+    if (archBtn) archBtn.onclick = function () { showArchived(el); };
+
+    el.querySelectorAll('.ms-cluster-train').forEach(function (b) {
+      b.onclick = function () { genTrainingSet(b.getAttribute('data-cid'), el); };
+    });
+    el.querySelectorAll('.ms-cluster-detail').forEach(function (b) {
+      b.onclick = function () { viewClusterDetail(b.getAttribute('data-cid'), el); };
+    });
+    el.querySelectorAll('.ms-cluster-archive').forEach(function (b) {
+      b.onclick = function () { archiveCluster(b.getAttribute('data-cid'), el); };
+    });
+    el.querySelectorAll('.ms-cluster-del').forEach(function (b) {
+      b.onclick = function () { deleteCluster(b.getAttribute('data-cid'), el); };
+    });
+  }
+
+  // 执行 AI 聚类
+  function runCluster(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+    var s = Store.get();
+    var ms = U.clone(s.mistakes).sort(function (a, b) { return (a.createdAt < b.createdAt ? 1 : -1); });
+    if (ms.length < 3) { Toast.warn('错题至少 3 条才能聚类，当前 ' + ms.length + ' 条'); return; }
+
+    var btn = el.querySelector('#ms-cluster-run');
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 聚类中…'; }
+
+    // 准备输入：id + 科目 + 类型 + 描述
+    var input = ms.map(function (m) {
+      return { id: m.id, subject: (DB.SUBJECTS[m.subject] || {}).short || m.subject, type: (DB.MISTAKE_TYPES[m.type] || {}).name || m.type, desc: (m.desc || '').slice(0, 120) };
+    });
+
+    var sys = '你是考研学情分析师。下面是考生的错题记录列表（JSON）。请按"真正的知识漏洞根因"做语义聚类（不是按错误类型分类）：\n'
+      + '- 同一类计算习惯失误（如符号、分母）归为一类\n'
+      + '- 同一知识点缺陷（如含参变限积分）归为一类\n'
+      + '- 同一思维模式问题（如忽略定义域、未验条件）归为一类\n'
+      + '输出 3-8 个聚类，合并小类。每条错题必须归入且仅归入一个聚类。\n'
+      + '必须只输出 JSON，格式：{"clusters":[{"label":"≤15字标签","desc":"30字内根因说明","mistakeIds":["错题id..."],"severity":1-3}]}\n'
+      + 'severity: 3=严重(高频/核心考点), 2=中等, 1=轻微(偶发)。不要任何多余文字。';
+    var usr = '错题列表（共 ' + input.length + ' 条）：\n' + JSON.stringify(input);
+
+    AI.chatJSON(sys, usr, null, { cache: false, noThink: true, maxTokens: 4096 }).then(function (result) {
+      if (!result || !result.clusters || !result.clusters.length) throw new Error('AI 未返回有效聚类');
+      var clusters = result.clusters.map(function (c) {
+        return {
+          id: U.uid(), label: c.label || '未命名聚类', desc: c.desc || '',
+          mistakeIds: (c.mistakeIds || []).filter(function (id) { return ms.find(function (m) { return m.id === id; }); }),
+          severity: Math.max(1, Math.min(3, parseInt(c.severity, 10) || 1)),
+          createdAt: new Date().toISOString(), status: 'active', archivedAt: null,
+          trainingSets: [], overallAccuracy: null
+        };
+      }).filter(function (c) { return c.mistakeIds.length > 0; });
+      if (!clusters.length) throw new Error('聚类结果为空');
+      Store.update(function (st) {
+        // 保留旧聚类的训练集数据（按 mistakeIds 重叠度匹配）
+        var oldActive = (st.mistakeClusters || []).filter(function (c) { return c.status !== 'archived'; });
+        clusters.forEach(function (nc) {
+          var best = null, bestOverlap = 0;
+          oldActive.forEach(function (oc) {
+            var overlap = (oc.mistakeIds || []).filter(function (id) { return nc.mistakeIds.indexOf(id) >= 0; }).length;
+            if (overlap > bestOverlap) { bestOverlap = overlap; best = oc; }
+          });
+          if (best && bestOverlap >= Math.ceil(nc.mistakeIds.length / 2)) {
+            nc.trainingSets = best.trainingSets || [];
+            nc.overallAccuracy = best.overallAccuracy;
+          }
+        });
+        // 保留已归档聚类，用新活跃聚类替换旧活跃聚类
+        var archived = (st.mistakeClusters || []).filter(function (c) { return c.status === 'archived'; });
+        st.mistakeClusters = archived.concat(clusters);
+      });
+      Toast.success('已生成 ' + clusters.length + ' 个聚类');
+      App.refresh();
+    }).catch(function (e) {
+      Toast.warn('聚类失败：' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 重新聚类'; }
+    });
+  }
+
+  // 生成专项训练包（非阻塞，页内进度）
+  function genTrainingSet(cid, el, deep) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var s = Store.get();
+    var c = (s.mistakeClusters || []).find(function (x) { return x.id === cid; });
+    if (!c) return;
+
+    var btn = el.querySelector('.ms-cluster-train[data-cid="' + cid + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = deep ? '🧠 深度出题中…' : '🔄 出题中…'; }
+
+    // 准备相关错题示例（前3条）
+    var samples = (c.mistakeIds || []).slice(0, 3).map(function (mid) {
+      var m = s.mistakes.find(function (x) { return x.id === mid; });
+      return m ? ((DB.MISTAKE_TYPES[m.type] || {}).name || '') + '：' + (m.desc || '').slice(0, 100) : '';
+    }).filter(Boolean).join('\n');
+
+    var sys = '你是考研出题官。针对以下错题聚类，生成 5 道专项训练题（同根因、不同情境，难度递增）。\n'
+      + '要求：\n1) 题目必须针对该聚类的根因设计，不要泛泛出题\n2) 难度梯度：2 易 + 2 中 + 1 难\n3) 公式用 LaTeX $...$ 格式\n'
+      + '4) 不要输出解析和易错点（纯出题，用户做完后自行决定是否保存为错题再解析）\n'
+      + '必须只输出 JSON：{"questions":[{"stem":"题干","type":"choice|solve","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"答案","diff":"easy|medium|hard"}]}\n'
+      + 'solve 类型不需要 options。answer 只写最终答案（如选项字母或数值），不要写解析过程。不要任何多余文字。';
+    var usr = '聚类标签：' + c.label + '\n聚类根因：' + c.desc + '\n相关错题示例：\n' + samples;
+
+    AI.chatJSON(sys, usr, null, { cache: !deep, noThink: !deep, maxTokens: deep ? 6144 : 4096 }).then(function (result) {
+      if (!result || !result.questions || !result.questions.length) throw new Error('AI 未返回有效题目');
+      var setId = U.uid();
+      var newSet = {
+        id: setId, questions: result.questions.map(function (q) {
+          return { stem: q.stem || '', type: q.type || 'solve', options: q.options || [], answer: q.answer || '', diff: q.diff || 'medium' };
+        }),
+        createdAt: new Date().toISOString(), completedAt: null, accuracy: null, results: []
+      };
+      Store.update(function (st) {
+        var cc = (st.mistakeClusters || []).find(function (x) { return x.id === cid; });
+        if (cc) { cc.trainingSets = cc.trainingSets || []; cc.trainingSets.push(newSet); }
+      });
+      Toast.success('已生成 ' + result.questions.length + ' 道专项训练题');
+      viewClusterDetail(cid, el, setId);
+    }).catch(function (e) {
+      Toast.warn('出题失败：' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '🎯 生成专项训练'; }
+    });
+  }
+
+  // 查看聚类详情（含训练集作答）
+  function viewClusterDetail(cid, el, focusSetId) {
+    var s = Store.get();
+    var c = (s.mistakeClusters || []).find(function (x) { return x.id === cid; });
+    if (!c) return;
+    var acc = clusterAccuracy(c);
+    var sets = c.trainingSets || [];
+
+    var mistakesHtml = (c.mistakeIds || []).map(function (mid) {
+      var m = s.mistakes.find(function (x) { return x.id === mid; });
+      if (!m) return '';
+      var t = DB.MISTAKE_TYPES[m.type] || DB.MISTAKE_TYPES.other;
+      return '<div style="padding:6px 0;border-bottom:1px solid var(--border)"><span class="tag" style="background:' + t.color + ';font-size:10px">' + t.name + '</span> '
+        + '<span class="muted-sm">' + ((DB.SUBJECTS[m.subject] || {}).short || '') + '</span> '
+        + Tex.renderInline((m.desc || '').slice(0, 150)) + '</div>';
+    }).join('') || '<div class="muted-sm">无关联错题</div>';
+
+    var setsHtml = sets.length ? sets.map(function (t, si) {
+      var setAcc = t.accuracy != null ? t.accuracy + '%' : '未完成';
+      var done = t.completedAt != null;
+      var qs = (t.questions || []).length ? (t.questions || []).map(function (q, qi) {
+        var r = (t.results || [])[qi];
+        var mark = r == null ? '' : r.correct ? '<span style="color:#237804">✓ 对</span>' : '<span style="color:#cf1322">✗ 错</span>';
+        var showAnswer = done || r != null;
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--border)" data-set="' + t.id + '" data-q="' + qi + '">'
+          + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px">'
+          + '<div style="flex:1"><div style="font-size:12px;color:var(--text-muted)">题' + (qi + 1) + ' [' + (q.diff || 'medium') + '] ' + mark + '</div>'
+          + '<div class="report">' + Tex.renderInline(q.stem) + '</div></div>'
+          + '<button class="btn btn-sm btn-ghost ms-save-mistake" data-set="' + t.id + '" data-q="' + qi + '" data-cid="' + cid + '" style="font-size:11px;flex-shrink:0" title="保存到错题本">📌 存为错题</button>'
+          + '</div>'
+          + (q.type === 'choice' && q.options && q.options.length ? '<div style="margin-top:4px">' + q.options.map(function (o) {
+              var letter = (o || '').trim().charAt(0);
+              return '<button class="btn btn-sm btn-ghost ms-cq-opt" data-set="' + t.id + '" data-q="' + qi + '" data-v="' + letter + '" data-correct="' + (q.answer || '').trim().charAt(0) + '" style="margin:2px;font-size:12px">' + U.esc(o) + '</button>';
+            }).join('') + '</div>' : '<input class="input input-sm ms-cq-input" data-set="' + t.id + '" data-q="' + qi + '" data-correct="' + U.esc(q.answer || '') + '" placeholder="输入答案" style="margin-top:4px">')
+          + (showAnswer ? '<div class="report" style="margin-top:4px;font-size:13px;color:var(--text-muted)"><b>正确答案：</b>' + Tex.renderInline(q.answer || '') + '</div>' : '')
+          + '</div>';
+      }).join('') : '<div class="muted-sm">本训练集暂无题目</div>';
+      return '<div class="card" style="margin:8px 0;background:var(--bg-muted)"><div class="card-title-sm" style="display:flex;justify-content:space-between">'
+        + '<span>训练集 ' + (si + 1) + ' · ' + (t.questions || []).length + '题</span>'
+        + '<span style="font-size:12px;color:' + (done ? '#237804' : 'var(--text-muted)') + '">' + setAcc + ' · ' + (t.createdAt || '').slice(0, 10) + '</span></div>'
+        + qs + '</div>';
+    }).join('') : '<div class="muted-sm">还没有训练集，点击"生成专项训练"开始</div>';
+
+    Modal.open({
+      title: '🧩 ' + c.label + '（掌握度 ' + (acc != null ? acc + '%' : '未训练') + '）', wide: true, dismissable: true,
+      html: '<div class="mis-cluster-detail">'
+        + '<div class="alert alert-warn" style="margin-bottom:8px"><b>根因：</b>' + U.esc(c.desc) + ' · 关联 ' + (c.mistakeIds || []).length + ' 条错题</div>'
+        + '<div class="card-title-sm">📋 关联错题</div><div style="margin:6px 0">' + mistakesHtml + '</div>'
+        + '<div class="card-title-sm" style="margin-top:12px">🎯 专项训练集</div>' + setsHtml
+        + '<label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:8px"><input type="checkbox" id="ms-deep-train"> 🧠 深度出题(开思考，更慢但质量更高)</label>'
+        + '</div>',
+      actions: [
+        { label: '关闭', kind: 'btn-ghost' },
+        { label: '🎯 生成新训练集', kind: 'btn-primary', onClick: function (close) { var deepEl = document.getElementById('ms-deep-train'); close(); genTrainingSet(cid, el, deepEl ? deepEl.checked : false); } }
+      ]
+    });
+
+    // 绑定作答交互
+    setTimeout(function () {
+      document.querySelectorAll('.ms-cq-opt').forEach(function (b) {
+        b.onclick = function () {
+          var setId = b.getAttribute('data-set');
+          var qi = parseInt(b.getAttribute('data-q'), 10);
+          var v = b.getAttribute('data-v');
+          var correct = b.getAttribute('data-correct');
+          var isCorrect = v === correct;
+          b.style.background = isCorrect ? '#237804' : '#cf1322';
+          b.style.color = '#fff';
+          markClusterQ(cid, setId, qi, isCorrect, el);
+          if (!isCorrect) Toast.warn('答案：' + correct);
+        };
+      });
+      document.querySelectorAll('.ms-cq-input').forEach(function (inp) {
+        inp.onkeydown = function (ev) {
+          if (ev.key !== 'Enter') return;
+          var setId = inp.getAttribute('data-set');
+          var qi = parseInt(inp.getAttribute('data-q'), 10);
+          var v = (inp.value || '').trim();
+          var correct = (inp.getAttribute('data-correct') || '').trim();
+          var isCorrect = v && correct && v.toLowerCase() === correct.toLowerCase();
+          inp.style.borderColor = isCorrect ? '#237804' : '#cf1322';
+          markClusterQ(cid, setId, qi, !!isCorrect, el);
+          if (!isCorrect) Toast.show('参考答案：' + correct, 'info');
+        };
+      });
+      // 存为错题
+      document.querySelectorAll('.ms-save-mistake').forEach(function (b) {
+        b.onclick = function () {
+          var setId = b.getAttribute('data-set');
+          var qi = parseInt(b.getAttribute('data-q'), 10);
+          var clusterId = b.getAttribute('data-cid');
+          saveTrainingAsMistake(clusterId, setId, qi, el, b);
+        };
+      });
+    }, 80);
+  }
+
+  // 把训练题保存到拍题错题本（无图片，标记来源为聚类训练）
+  function saveTrainingAsMistake(cid, setId, qIdx, el, btn) {
+    var s = Store.get();
+    var c = (s.mistakeClusters || []).find(function (x) { return x.id === cid; });
+    if (!c) return;
+    var t = (c.trainingSets || []).find(function (x) { return x.id === setId; });
+    if (!t) return;
+    var q = (t.questions || [])[qIdx];
+    if (!q) return;
+    // 推断科目：取聚类关联错题的科目
+    var subj = 'math';
+    for (var i = 0; i < (c.mistakeIds || []).length; i++) {
+      var m = s.mistakes.find(function (x) { return x.id === c.mistakeIds[i]; });
+      if (m && m.subject) { subj = m.subject; break; }
+    }
+    var newPhoto = {
+      id: U.uid(),
+      subject: subj,
+      imageBase64: '',
+      note: '【聚类训练题】' + (q.stem || ''),
+      createdAt: new Date().toISOString(),
+      painPoint: c.label,
+      extractedQuestion: q.stem || '',
+      referenceAnswer: q.answer || '',
+      fromCluster: cid
+    };
+    Store.update(function (st) {
+      st.mistakePhotos = st.mistakePhotos || [];
+      st.mistakePhotos.unshift(newPhoto);
+    });
+    Toast.success('已保存到错题本（可在拍题错题本中查看）');
+    if (btn) { btn.disabled = true; btn.textContent = '✓ 已保存'; btn.style.opacity = '.6'; }
+  }
+
+  // 标记训练集某题对错，全部完成则计算 accuracy
+  function markClusterQ(cid, setId, qIdx, correct, el) {
+    Store.update(function (st) {
+      var c = (st.mistakeClusters || []).find(function (x) { return x.id === cid; });
+      if (!c) return;
+      var t = (c.trainingSets || []).find(function (x) { return x.id === setId; });
+      if (!t) return;
+      t.results = t.results || [];
+      t.results[qIdx] = { correct: correct, at: new Date().toISOString() };
+      // 全部作答完成？
+      if (t.results.length >= t.questions.length && t.results.every(function (r) { return r != null; })) {
+        var right = t.results.filter(function (r) { return r.correct; }).length;
+        t.accuracy = Math.round((right / t.questions.length) * 100);
+        t.completedAt = new Date().toISOString();
+        c.overallAccuracy = clusterAccuracy(c);
+      }
+    });
+    // 不立即 refresh（避免 Modal 关闭），更新归档提示
+    var s = Store.get();
+    var c = (s.mistakeClusters || []).find(function (x) { return x.id === cid; });
+    if (c) {
+      var acc = clusterAccuracy(c);
+      if (acc != null && acc >= 80) {
+        Toast.show('🎉 本聚类掌握度达 ' + acc + '%，可以归档了！', 'success', 4000);
+      }
+    }
+  }
+
+  function archiveCluster(cid, el) {
+    var s = Store.get();
+    var c = (s.mistakeClusters || []).find(function (x) { return x.id === cid; });
+    if (!c) return;
+    var acc = clusterAccuracy(c);
+    Modal.confirm('归档聚类', '<p>归档「' + U.esc(c.label) + '」？</p><p class="muted-sm">当前掌握度 ' + (acc != null ? acc + '%' : '未训练') + '。归档后移入"已归档"列表，不再占用主视图，可随时查看。</p>', '确认归档', function () {
+      Store.update(function (st) {
+        var cc = (st.mistakeClusters || []).find(function (x) { return x.id === cid; });
+        if (cc) { cc.status = 'archived'; cc.archivedAt = new Date().toISOString(); }
+      });
+      Toast.success('已归档');
+      App.refresh();
+    });
+  }
+
+  function deleteCluster(cid, el) {
+    Modal.confirm('删除聚类', '<p>删除该聚类？关联的错题不会被删除。</p>', '确认删除', function () {
+      Store.update(function (st) {
+        st.mistakeClusters = (st.mistakeClusters || []).filter(function (x) { return x.id !== cid; });
+      });
+      Toast.success('已删除');
+      App.refresh();
+    });
+  }
+
+  function showArchived(el) {
+    var s = Store.get();
+    var archived = (s.mistakeClusters || []).filter(function (c) { return c.status === 'archived'; });
+    var html = archived.length ? archived.map(function (c) {
+      var acc = clusterAccuracy(c);
+      return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">'
+        + '<div style="font-weight:600">' + U.esc(c.label) + ' <span class="tag tag-ghost">' + (c.mistakeIds || []).length + '题</span>'
+        + (acc != null ? ' <span class="tag" style="background:#237804;color:#fff">掌握 ' + acc + '%</span>' : '') + '</div>'
+        + '<div class="muted-sm" style="font-size:12px;margin-top:2px">' + U.esc(c.desc) + '</div>'
+        + '<div class="muted-sm" style="font-size:11px;margin-top:2px">归档于 ' + (c.archivedAt || '').slice(0, 10) + '</div></div>';
+    }).join('') : '<div class="empty">暂无已归档聚类</div>';
+    Modal.open({
+      title: '📦 已归档聚类（' + archived.length + '）', wide: true, dismissable: true,
+      html: html,
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
   }
 
   window.MistakesModule = { render };
@@ -9241,8 +9636,9 @@ function bind(el, next) {
 
 /* ===== js/modules/heatmap.js ===== */
 /* ============================================================
- * heatmap.js — 考点热力图 + 130分能力分层训练
- * 绿=掌握 黄=薄弱 红=危险；点击格子录入掌握度并可生成针对任务
+ * heatmap.js — 考点热力图（AI 增强版）
+ * 绿=掌握 黄=薄弱 红=危险；点击格子录入掌握度
+ * 增强：①AI 知识点讲解 ②AI 针对考点出题 ③关联错题 ④分组雷达图 ⑤AI 今日建议
  * 分层规则：必拿层正确率<90% → 提示先补必拿层（弱锁定）
  * ============================================================ */
 (function () {
@@ -9265,15 +9661,84 @@ function bind(el, next) {
     return out;
   }
 
+  // 关联错题：按科目 + 考点关键词匹配
+  function relatedMistakes(topic) {
+    const s = Store.get();
+    const ms = (s.mistakes || []).filter(function (m) { return m.subject === subjTab; });
+    if (!ms.length) return [];
+    // 提取考点名称关键词（去掉"计算"/"定理"等通用后缀，取核心2字）
+    const name = topic.name || '';
+    const keywords = [name];
+    // 拆分可能的简称：如"极限计算"→"极限"、"特征值/特征向量"→"特征值"
+    const parts = name.split(/[·\/（）()]/).map(function (p) { return p.trim(); }).filter(Boolean);
+    parts.forEach(function (p) { if (p.length >= 2) keywords.push(p); });
+    return ms.filter(function (m) {
+      const desc = (m.desc || '').toLowerCase();
+      return keywords.some(function (kw) { return kw.length >= 2 && desc.indexOf(kw.toLowerCase()) >= 0; });
+    });
+  }
+
   function cell(t, heat, tierLocked) {
     const h = heat[t.id] || {};
     const lv = h.level || 0;
     const cls = lv === 2 ? 'hm-green' : lv === 1 ? 'hm-yellow' : 'hm-red';
     const scoreTxt = h.score != null ? h.score + '%' : '未测';
-    return '<button class="hm-cell ' + cls + (tierLocked ? ' hm-locked' : '') + '" data-id="' + t.id + '" title="' + U.esc(t.group + ' · ' + t.name) + '：' + scoreTxt + '">'
+    const relCnt = relatedMistakes(t).length;
+    return '<button class="hm-cell ' + cls + (tierLocked ? ' hm-locked' : '') + '" data-id="' + t.id + '" title="' + U.esc(t.group + ' · ' + t.name) + '：' + scoreTxt + (relCnt ? ' · 关联错题' + relCnt + '条' : '') + '">'
       + '<span class="hm-name">' + U.esc(t.name) + '</span>'
-      + '<span class="hm-score">' + scoreTxt + '</span>'
+      + '<span class="hm-score">' + scoreTxt + (relCnt ? ' <span style="color:#cf1322;font-size:10px">×' + relCnt + '</span>' : '') + '</span>'
       + '</button>';
+  }
+
+  // 分组雷达图：每个 group 的平均掌握度（0-100）
+  function radarSvg(groups) {
+    const W = 320, H = 240, cx = W / 2, cy = H / 2 + 8, R = 88;
+    const n = groups.length;
+    if (n < 3) return '<div class="muted-sm" style="padding:20px;text-align:center">分组不足3个，无法绘制雷达图。当前 ' + n + ' 个分组。</div>';
+    const angle = function (i) { return -Math.PI / 2 + i * 2 * Math.PI / n; };
+    const pt = function (i, r) { return [cx + r * Math.cos(angle(i)), cy + r * Math.sin(angle(i))]; };
+    let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" xmlns="http://www.w3.org/2000/svg">';
+    // 同心网格（4层）
+    for (let g = 1; g <= 4; g++) {
+      const rr = R * g / 4;
+      let path = '';
+      for (let i = 0; i < n; i++) { const p = pt(i, rr); path += (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }
+      s += '<path d="' + path + 'Z" fill="none" stroke="#e8e8e8" stroke-width="1"/>';
+    }
+    // 轴线 + 标签
+    groups.forEach(function (grp, i) {
+      const p = pt(i, R);
+      s += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '" stroke="#d9d9d9" stroke-width="1"/>';
+      const lp = pt(i, R + 14);
+      s += '<text x="' + lp[0].toFixed(1) + '" y="' + lp[1].toFixed(1) + '" text-anchor="middle" dominant-baseline="middle" font-size="10" fill="#595959">' + U.esc(grp.label) + '</text>';
+      s += '<text x="' + lp[0].toFixed(1) + '" y="' + (lp[1] + 12) + '" text-anchor="middle" font-size="9" fill="' + (grp.value >= 80 ? '#237804' : grp.value >= 50 ? '#d48806' : '#cf1322') + '">' + (grp.value != null ? grp.value + '%' : '?') + '</text>';
+    });
+    // 数据多边形
+    let dpath = '';
+    groups.forEach(function (grp, i) {
+      const v = (grp.value != null ? grp.value : 0) / 100;
+      const p = pt(i, R * v);
+      dpath += (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1);
+    });
+    s += '<path d="' + dpath + 'Z" fill="rgba(47,84,235,0.18)" stroke="#2f54eb" stroke-width="2"/>';
+    groups.forEach(function (grp, i) {
+      const v = (grp.value != null ? grp.value : 0) / 100;
+      const p = pt(i, R * v);
+      s += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3" fill="#2f54eb"><title>' + U.esc(grp.label) + '：' + (grp.value != null ? grp.value + '%' : '未测') + '</title></circle>';
+    });
+    return s + '</svg>';
+  }
+
+  // 分组平均掌握度
+  function groupStats(list, heat) {
+    const groupNames = [];
+    list.forEach(t => { if (groupNames.indexOf(t.group) < 0) groupNames.push(t.group); });
+    return groupNames.map(g => {
+      const items = list.filter(t => t.group === g);
+      const scored = items.filter(t => heat[t.id] && heat[t.id].score != null);
+      const avg = scored.length ? Math.round(U.avg(scored.map(t => heat[t.id].score))) : null;
+      return { label: g, value: avg, count: items.length, mastered: items.filter(t => heat[t.id] && heat[t.id].level === 2).length };
+    });
   }
 
   function render(el) {
@@ -9281,7 +9746,6 @@ function bind(el, next) {
     const heat = s.heat;
     const list = DB.TOPICS[subjTab];
     const ts = tierStats(list, heat);
-    // 必拿层弱锁定：必拿层平均<90 → 拔高/冲刺层提示先补基础
     const tier1Weak = ts[1].avg != null && ts[1].avg < 90;
     const tier1Untested = ts[1].avg == null;
 
@@ -9297,28 +9761,55 @@ function bind(el, next) {
     });
 
     let groups = '';
-    const groupNames = [];
-    list.forEach(t => { if (groupNames.indexOf(t.group) < 0) groupNames.push(t.group); });
+    const grpStats = groupStats(list, heat);
+    const groupNames = grpStats.map(g => g.label);
     groupNames.forEach(g => {
       const items = list.filter(t => t.group === g);
       groups += '<div class="hm-group"><div class="hm-group-name">' + U.esc(g) + '</div><div class="hm-grid">'
         + items.map(t => cell(t, heat, false)).join('') + '</div></div>';
     });
 
+    // 雷达图
+    const radarData = grpStats.map(g => ({ label: g.label, value: g.value }));
+    const radarHtml = radarSvg(radarData);
+
+    // 关联错题最多的考点 Top3
+    const relTop = list.map(t => ({ t, n: relatedMistakes(t).length })).filter(x => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 3);
+
     el.innerHTML =
-      '<div class="card"><div class="card-title">🎯 考点热力图与真题切片追踪</div>'
+      // ① AI 今日建议卡（非阻塞，页内生成）
+      '<div class="card"><div class="card-title-row"><span class="card-title">🎯 考点热力图与真题切片追踪</span>'
+      + '<span><button class="link-btn" id="hm-ai-advice">🤖 AI 建议今天练哪儿</button></span></div>'
       + '<div class="tab-row">'
       + ['math', 'ctrl', 'eng', 'pol'].map(function (k) {
           return '<button class="tab' + (subjTab === k ? ' tab-on' : '') + '" data-t="' + k + '">' + (DB.SUBJECTS[k].short || DB.SUBJECTS[k].name) + '（' + (DB.TOPICS[k] ? DB.TOPICS[k].length : 0) + '考点）</button>';
         }).join('')
       + '</div>'
-      + '<div class="legend"><span class="lg lg-green"></span>掌握(≥80%) <span class="lg lg-yellow"></span>薄弱(50-79%) <span class="lg lg-red"></span>危险(&lt;50%或未测) <span class="muted-sm">点击格子录入/更新掌握度</span></div>'
+      + '<div class="legend"><span class="lg lg-green"></span>掌握(≥80%) <span class="lg lg-yellow"></span>薄弱(50-79%) <span class="lg lg-red"></span>危险(&lt;50%或未测) <span class="muted-sm">点击格子录入/更新掌握度、AI讲解、AI出题</span></div>'
+      + '<div id="hm-advice-zone"></div>'
       + '</div>'
 
       + '<div class="tier-row">' + tierCards + '</div>'
       + (tier1Weak ? '<div class="alert alert-danger">🔒 必拿层平均 ' + ts[1].avg + '% < 90%：按规则应暂停拔高/冲刺层新题，先把必拿层补到零失误。错一题罚5道同类题。</div>' : '')
       + (tier1Untested ? '<div class="alert alert-warn">必拿层尚未测评：建议先用步骤审查器做3道必拿层题目，录入掌握度后再解锁拔高层。</div>' : '')
 
+      // ② 分组雷达图 + 关联错题 Top
+      + '<div class="card"><div class="card-title">📊 分组掌握度雷达</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">'
+      + '<div style="flex:1;min-width:280px;max-width:360px">' + radarHtml + '</div>'
+      + '<div style="flex:1;min-width:200px">'
+      + '<div class="card-title-sm">分组明细</div>'
+      + (grpStats.map(function (g) {
+          const pct = g.value != null ? g.value : 0;
+          const color = g.value == null ? '#bfbfbf' : g.value >= 80 ? '#237804' : g.value >= 50 ? '#d48806' : '#cf1322';
+          return '<div style="margin:6px 0"><div style="display:flex;justify-content:space-between;font-size:12px"><span>' + U.esc(g.label) + '</span><span style="color:' + color + '">' + (g.value != null ? g.value + '%' : '未测') + ' · ' + g.mastered + '/' + g.count + '掌握</span></div>'
+            + Charts.progressBar(pct, color, 6) + '</div>';
+        }).join(''))
+      + '</div></div>'
+      + (relTop.length ? '<div class="card-title-sm" style="margin-top:8px">🔥 关联错题最多</div><div style="margin-top:4px">' + relTop.map(function (x) { return '<span class="tag tag-red" style="margin:2px;cursor:pointer" data-jump-topic="' + x.t.id + '">' + U.esc(x.t.name) + ' ×' + x.n + '</span>'; }).join('') + '</div>' : '')
+      + '</div>'
+
+      // ③ 考点网格
       + '<div class="card">' + groups + '</div>'
 
       + '<div class="card"><div class="card-title">层级跃迁报告（本周）</div><div class="muted-sm" id="hm-week"></div></div>';
@@ -9336,56 +9827,285 @@ function bind(el, next) {
   function bind(el) {
     el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { subjTab = b.getAttribute('data-t'); render(el); });
 
+    // AI 今日建议（非阻塞页内）
+    const adviceBtn = el.querySelector('#hm-ai-advice');
+    if (adviceBtn) adviceBtn.onclick = () => genAiAdvice(el);
+
+    // 关联错题 Top 跳转
+    el.querySelectorAll('[data-jump-topic]').forEach(sp => {
+      sp.onclick = () => {
+        const tid = sp.getAttribute('data-jump-topic');
+        const topic = allTopics().find(t => t.id === tid);
+        if (topic) openTopicModal(topic, el);
+      };
+    });
+
     el.querySelectorAll('.hm-cell').forEach(c => {
       c.onclick = () => {
         const id = c.getAttribute('data-id');
-        const topic = (DB.TOPICS.math.concat(DB.TOPICS.ctrl, DB.TOPICS.eng, DB.TOPICS.pol)).find(t => t.id === id);
-        const heat = Store.get().heat;
-        const h = heat[id] || {};
-        const meta = DB.TIERS[topic.tier];
-        Modal.open({
-          title: topic.group + ' · ' + topic.name + '（' + meta.icon + meta.name + '）',
-          html:
-            '<div class="form-grid">'
-            + '<label class="fld"><span>自测正确率（%，近10题）</span><input id="hm-in-score" class="input" type="number" min="0" max="100" value="' + (h.score != null ? h.score : '') + '"></label>'
-            + '<label class="fld"><span>掌握状态</span><select id="hm-in-level" class="input input-sel">'
-            + '<option value="0"' + (h.level === 0 ? ' selected' : '') + '>🔴 危险</option>'
-            + '<option value="1"' + (h.level === 1 ? ' selected' : '') + '>🟡 薄弱</option>'
-            + '<option value="2"' + (h.level === 2 ? ' selected' : '') + '>🟢 掌握</option>'
-            + '</select></label></div>'
-            + '<div class="muted-sm">保存正确率后系统将自动判定状态：≥80绿 / 50-79黄 / &lt;50红</div>',
-          actions: [
-            { label: '取消' },
-            {
-              label: '生成针对训练任务', kind: 'btn-ghost', onClick: close => {
-                Store.update(s => {
-                  s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: id, title: '【' + topic.name + '】针对训练3题（热力图生成）', subject: subjTab, status: 'pending', createdAt: new Date().toISOString() });
-                });
-                close(); Toast.success('已加入错题重练队列'); App.refresh();
-              }
-            },
-            {
-              label: '保存', kind: 'btn-primary', onClick: close => {
-                const score = parseFloat(document.getElementById('hm-in-score').value);
-                const level = parseInt(document.getElementById('hm-in-level').value, 10);
-                Store.update(s => {
-                  const autoLevel = !isNaN(score) ? (score >= 80 ? 2 : score >= 50 ? 1 : 0) : level;
-                  s.heat[id] = { level: autoLevel, score: isNaN(score) ? null : score, updatedAt: new Date().toISOString() };
-                  // 必拿层惩罚规则：必拿层考点录入<90 → 生成罚练
-                  if (topic.tier === 1 && !isNaN(score) && score < 90) {
-                    for (let i = 0; i < 5; i++) {
-                      s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: id, title: '【罚练】' + topic.name + ' 同类题 ' + (i + 1) + '/5', subject: subjTab, status: 'pending', penaltyOf: id, createdAt: new Date().toISOString() });
-                    }
-                    Toast.warn('必拿层正确率<90%：按规则罚5道同类题，已加入重练队列');
-                  }
-                });
-                close(); App.refresh();
-              }
-            }
-          ]
-        });
-        setTimeout(() => { const i = document.getElementById('hm-in-score'); if (i) i.focus(); }, 50);
+        const topic = allTopics().find(t => t.id === id);
+        if (!topic) return;
+        openTopicModal(topic, el);
       };
+    });
+  }
+
+  function allTopics() {
+    return DB.TOPICS.math.concat(DB.TOPICS.ctrl, DB.TOPICS.eng, DB.TOPICS.pol);
+  }
+
+  // 考点详情弹窗（增强版：录入 + 关联错题 + AI讲解 + AI出题）
+  function openTopicModal(topic, el) {
+    const heat = Store.get().heat;
+    const h = heat[topic.id] || {};
+    const meta = DB.TIERS[topic.tier];
+    const relMs = relatedMistakes(topic);
+    const explain = (Store.get().topicExplain || {})[topic.id];
+    const cachedQuiz = (Store.get().topicQuiz || {})[topic.id] || [];
+
+    const relHtml = relMs.length ? relMs.slice(0, 5).map(m => {
+      const t = DB.MISTAKE_TYPES[m.type] || DB.MISTAKE_TYPES.other;
+      return '<div style="padding:4px 0;border-bottom:1px solid var(--border)"><span class="tag" style="background:' + t.color + ';font-size:10px">' + t.name + '</span> ' + Tex.renderInline((m.desc || '').slice(0, 100)) + '</div>';
+    }).join('') + (relMs.length > 5 ? '<div class="muted-sm">还有 ' + (relMs.length - 5) + ' 条…</div>' : '') : '<div class="muted-sm">暂无关联错题（按科目+考点名关键词匹配）</div>';
+
+    const explainHtml = explain
+      ? '<div class="hm-explain">'
+        + '<div class="card-title-sm">📖 AI 知识点讲解 <span class="muted-sm" style="font-size:11px">（' + (explain.at || '').slice(0, 10) + '）</span></div>'
+        + '<div style="margin-top:6px"><b>🎯 核心：</b>' + Tex.renderInline(explain.core || '') + '</div>'
+        + '<div style="margin-top:4px"><b>📝 考法：</b>' + Tex.renderInline(explain.exam || '') + '</div>'
+        + '<div style="margin-top:4px"><b>⚙️ 步骤：</b>' + Tex.renderInline(explain.steps || '') + '</div>'
+        + '<div style="margin-top:4px"><b>⚠️ 陷阱：</b>' + Tex.renderInline(explain.traps || '') + '</div>'
+        + '<div style="margin-top:4px"><b>🔗 联系：</b>' + Tex.renderInline(explain.link || '') + '</div>'
+        + (explain.mnemonic ? '<div style="margin-top:4px"><b>💡 口诀：</b>' + Tex.renderInline(explain.mnemonic) + '</div>' : '')
+        + '</div>'
+      : '<div class="muted-sm" id="hm-explain-empty">点击下方"AI 知识点讲解"生成详细讲解</div>';
+
+    const quizHtml = cachedQuiz.length
+      ? '<div class="card-title-sm" style="margin-top:8px">📝 缓存题目（' + cachedQuiz.length + '题）</div>'
+        + cachedQuiz.slice(0, 5).map((q, qi) => '<div style="padding:6px 0;border-bottom:1px solid var(--border)"><div style="font-size:12px;color:var(--text-muted)">题' + (qi + 1) + '</div><div class="report">' + Tex.renderInline(q.stem || '') + '</div></div>').join('')
+      : '<div class="muted-sm" id="hm-quiz-empty">点击"AI 出 3 道题"生成针对练习</div>';
+
+    Modal.open({
+      title: topic.group + ' · ' + topic.name + '（' + meta.icon + meta.name + '）',
+      wide: true, dismissable: true,
+      html:
+        '<div class="form-grid">'
+        + '<label class="fld"><span>自测正确率（%，近10题）</span><input id="hm-in-score" class="input" type="number" min="0" max="100" value="' + (h.score != null ? h.score : '') + '"></label>'
+        + '<label class="fld"><span>掌握状态</span><select id="hm-in-level" class="input input-sel">'
+        + '<option value="0"' + (h.level === 0 ? ' selected' : '') + '>🔴 危险</option>'
+        + '<option value="1"' + (h.level === 1 ? ' selected' : '') + '>🟡 薄弱</option>'
+        + '<option value="2"' + (h.level === 2 ? ' selected' : '') + '>🟢 掌握</option>'
+        + '</select></label></div>'
+        + '<div class="muted-sm">保存正确率后系统将自动判定状态：≥80绿 / 50-79黄 / &lt;50红</div>'
+
+        + '<div class="btn-row" style="margin-top:10px;align-items:center;flex-wrap:wrap">'
+        + '<button class="btn btn-sm btn-ghost" id="hm-ai-explain">📖 AI 知识点讲解</button>'
+        + '<button class="btn btn-sm btn-ghost" id="hm-ai-quiz">📝 AI 出 3 道题</button>'
+        + '<button class="btn btn-sm btn-ghost" id="hm-gen-task">🎯 生成针对训练任务</button>'
+        + '<label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-left:4px"><input type="checkbox" id="hm-deep-quiz"> 🧠 深度出题(开思考)</label>'
+        + '</div>'
+
+        + '<div id="hm-explain-zone" style="margin-top:10px">' + explainHtml + '</div>'
+
+        + '<div class="card-title-sm" style="margin-top:12px">📋 关联错题（' + relMs.length + '条）</div><div style="margin:6px 0">' + relHtml + '</div>'
+
+        + '<div id="hm-quiz-zone" style="margin-top:8px">' + quizHtml + '</div>',
+      actions: [
+        { label: '取消' },
+        { label: '保存掌握度', kind: 'btn-primary', onClick: close => {
+          const score = parseFloat(document.getElementById('hm-in-score').value);
+          const level = parseInt(document.getElementById('hm-in-level').value, 10);
+          Store.update(s => {
+            const autoLevel = !isNaN(score) ? (score >= 80 ? 2 : score >= 50 ? 1 : 0) : level;
+            s.heat[topic.id] = { level: autoLevel, score: isNaN(score) ? null : score, updatedAt: new Date().toISOString() };
+            if (topic.tier === 1 && !isNaN(score) && score < 90) {
+              for (let i = 0; i < 5; i++) {
+                s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: topic.id, title: '【罚练】' + topic.name + ' 同类题 ' + (i + 1) + '/5', subject: subjTab, status: 'pending', penaltyOf: topic.id, createdAt: new Date().toISOString() });
+              }
+              Toast.warn('必拿层正确率<90%：按规则罚5道同类题，已加入重练队列');
+            }
+          });
+          close(); App.refresh();
+        }}
+      ]
+    });
+
+    // 绑定 AI 按钮
+    setTimeout(() => {
+      const exBtn = document.getElementById('hm-ai-explain');
+      if (exBtn) exBtn.onclick = () => genTopicExplain(topic);
+      const qBtn = document.getElementById('hm-ai-quiz');
+      if (qBtn) qBtn.onclick = () => {
+        const deepEl = document.getElementById('hm-deep-quiz');
+        genTopicQuiz(topic, deepEl ? deepEl.checked : false);
+      };
+      const taskBtn = document.getElementById('hm-gen-task');
+      if (taskBtn) taskBtn.onclick = () => {
+        Store.update(s => {
+          s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: topic.id, title: '【' + topic.name + '】针对训练3题（热力图生成）', subject: subjTab, status: 'pending', createdAt: new Date().toISOString() });
+        });
+        Toast.success('已加入错题重练队列');
+      };
+      const i = document.getElementById('hm-in-score'); if (i) i.focus();
+    }, 50);
+  }
+
+  // AI 知识点讲解（非阻塞，页内生成并缓存）
+  function genTopicExplain(topic) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    const btn = document.getElementById('hm-ai-explain');
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 讲解生成中…'; }
+    const zone = document.getElementById('hm-explain-zone');
+    if (zone) zone.innerHTML = '<div class="muted-sm">🤖 AI 正在生成「' + U.esc(topic.name) + '」的知识点讲解…</div><div class="skl-line"></div><div class="skl-line skl-w80"></div><div class="skl-line skl-w60"></div>';
+
+    const sys = '你是考研辅导名师。针对以下考点生成详细知识点讲解，帮助考生快速理解并掌握。'
+      + '必须只输出 JSON，格式：{"core":"核心概念(50字内)","exam":"考研怎么考/常见题型(60字内)","steps":"解题步骤/通用思路(120字内)","traps":"常见陷阱与易错点(80字内)","link":"与其他考点的联系(60字内)","mnemonic":"记忆口诀/技巧(30字内)"}'
+      + '。公式用 LaTeX $...$ 格式。不要任何多余文字。';
+    const tierName = DB.TIERS[topic.tier].name;
+    const usr = '科目：' + (DB.SUBJECTS[subjTab] || {}).name + '\n考点：' + topic.name + '\n分组：' + topic.group + '\n层级：' + tierName + '（' + DB.TIERS[topic.tier].range + '）\n请生成该考点的详细讲解。';
+
+    AI.chatJSON(sys, usr, null, { cache: true, noThink: true, maxTokens: 2048 }).then(function (result) {
+      if (!result || !result.core) throw new Error('AI 未返回有效讲解');
+      const explain = {
+        core: result.core || '', exam: result.exam || '', steps: result.steps || '',
+        traps: result.traps || '', link: result.link || '', mnemonic: result.mnemonic || '',
+        at: new Date().toISOString()
+      };
+      Store.update(s => { s.topicExplain = s.topicExplain || {}; s.topicExplain[topic.id] = explain; });
+      Toast.success('讲解已生成并缓存');
+      // 刷新弹窗内容
+      const z = document.getElementById('hm-explain-zone');
+      if (z) z.innerHTML = '<div class="hm-explain">'
+        + '<div class="card-title-sm">📖 AI 知识点讲解 <span class="muted-sm" style="font-size:11px">（刚刚）</span></div>'
+        + '<div style="margin-top:6px"><b>🎯 核心：</b>' + Tex.renderInline(explain.core) + '</div>'
+        + '<div style="margin-top:4px"><b>📝 考法：</b>' + Tex.renderInline(explain.exam) + '</div>'
+        + '<div style="margin-top:4px"><b>⚙️ 步骤：</b>' + Tex.renderInline(explain.steps) + '</div>'
+        + '<div style="margin-top:4px"><b>⚠️ 陷阱：</b>' + Tex.renderInline(explain.traps) + '</div>'
+        + '<div style="margin-top:4px"><b>🔗 联系：</b>' + Tex.renderInline(explain.link) + '</div>'
+        + (explain.mnemonic ? '<div style="margin-top:4px"><b>💡 口诀：</b>' + Tex.renderInline(explain.mnemonic) + '</div>' : '')
+        + '</div>';
+      if (btn) { btn.disabled = false; btn.textContent = '📖 重新生成讲解'; }
+    }).catch(function (e) {
+      Toast.warn('讲解生成失败：' + e.message);
+      if (zone) zone.innerHTML = '<div class="muted-sm">生成失败：' + U.esc(e.message) + '</div>';
+      if (btn) { btn.disabled = false; btn.textContent = '📖 AI 知识点讲解'; }
+    });
+  }
+
+  // AI 针对考点出题（非阻塞，页内生成并缓存，可作答）
+  function genTopicQuiz(topic, deep) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    const btn = document.getElementById('hm-ai-quiz');
+    if (btn) { btn.disabled = true; btn.textContent = deep ? '🧠 深度出题中…' : '🔄 出题中…'; }
+    const zone = document.getElementById('hm-quiz-zone');
+    if (zone) zone.innerHTML = '<div class="muted-sm">🤖 AI ' + (deep ? '（深度思考模式，' : '') + '正在针对「' + U.esc(topic.name) + '」出 3 道题…</div><div class="skl-line"></div><div class="skl-line skl-w80"></div><div class="skl-line"></div>';
+
+    const sys = '你是考研出题官。针对指定考点出 3 道练习题（难度递增：1易1中1难）。'
+      + '必须只输出 JSON：{"questions":[{"stem":"题干","type":"choice|solve","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"答案","solution":"分步详解","trap":"易错点","diff":"easy|medium|hard"}]}\n'
+      + 'solve 类型不需要 options。公式用 LaTeX $...$ 格式。不要任何多余文字。';
+    const usr = '科目：' + (DB.SUBJECTS[subjTab] || {}).name + '\n考点：' + topic.name + '（' + topic.group + '）\n层级：' + DB.TIERS[topic.tier].name + '\n请出 3 道针对该考点的练习题。';
+
+    AI.chatJSON(sys, usr, null, { cache: !deep, noThink: !deep, maxTokens: deep ? 8192 : 4096 }).then(function (result) {
+      if (!result || !result.questions || !result.questions.length) throw new Error('AI 未返回有效题目');
+      const qs = result.questions.map(q => ({ stem: q.stem || '', type: q.type || 'solve', options: q.options || [], answer: q.answer || '', solution: q.solution || '', trap: q.trap || '', diff: q.diff || 'medium', savedAt: new Date().toISOString(), source: 'ai' }));
+      Store.update(s => {
+        s.topicQuiz = s.topicQuiz || {};
+        // 保留旧题，追加新题，最多缓存 9 题
+        const old = s.topicQuiz[topic.id] || [];
+        s.topicQuiz[topic.id] = old.concat(qs).slice(-9);
+      });
+      Toast.success('已生成 ' + qs.length + ' 道题');
+      renderTopicQuiz(topic, qs);
+      if (btn) { btn.disabled = false; btn.textContent = '📝 再出 3 道题'; }
+    }).catch(function (e) {
+      Toast.warn('出题失败：' + e.message);
+      if (zone) zone.innerHTML = '<div class="muted-sm">出题失败：' + U.esc(e.message) + '</div>';
+      if (btn) { btn.disabled = false; btn.textContent = '📝 AI 出 3 道题'; }
+    });
+  }
+
+  // 渲染考点题目（可作答）
+  function renderTopicQuiz(topic, qs) {
+    const zone = document.getElementById('hm-quiz-zone');
+    if (!zone) return;
+    const html = '<div class="card-title-sm" style="margin-top:8px">📝 针对练习（' + qs.length + '题，点击选项作答）</div>'
+      + qs.map(function (q, qi) {
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">'
+          + '<div style="font-size:12px;color:var(--text-muted)">题' + (qi + 1) + ' [' + (q.diff || 'medium') + ']</div>'
+          + '<div class="report">' + Tex.renderInline(q.stem) + '</div>'
+          + (q.type === 'choice' && q.options && q.options.length ? '<div style="margin-top:4px">' + q.options.map(function (o) {
+              var letter = (o || '').trim().charAt(0);
+              return '<button class="btn btn-sm btn-ghost hm-q-opt" data-q="' + qi + '" data-v="' + letter + '" data-correct="' + (q.answer || '').trim().charAt(0) + '" style="margin:2px;font-size:12px">' + U.esc(o) + '</button>';
+            }).join('') + '</div>' : '<input class="input input-sm hm-q-input" data-q="' + qi + '" data-correct="' + U.esc(q.answer || '') + '" placeholder="输入答案后回车" style="margin-top:4px">')
+          + '<details style="margin-top:4px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(q.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(q.solution || '') + (q.trap ? '<br><b style="color:#d48806">易错点：</b>' + Tex.renderInline(q.trap) : '') + '</div></details>'
+          + '</div>';
+      }).join('');
+    zone.innerHTML = html;
+    // 绑定作答
+    zone.querySelectorAll('.hm-q-opt').forEach(function (b) {
+      b.onclick = function () {
+        var v = b.getAttribute('data-v');
+        var correct = b.getAttribute('data-correct');
+        var isCorrect = v === correct;
+        b.style.background = isCorrect ? '#237804' : '#cf1322';
+        b.style.color = '#fff';
+        if (!isCorrect) Toast.show('答案：' + correct, 'info');
+        else Toast.success('答对了！');
+      };
+    });
+    zone.querySelectorAll('.hm-q-input').forEach(function (inp) {
+      inp.onkeydown = function (ev) {
+        if (ev.key !== 'Enter') return;
+        var v = (inp.value || '').trim();
+        var correct = (inp.getAttribute('data-correct') || '').trim();
+        var isCorrect = v && correct && v.toLowerCase() === correct.toLowerCase();
+        inp.style.borderColor = isCorrect ? '#237804' : '#cf1322';
+        if (isCorrect) Toast.success('答对了！');
+        else Toast.show('参考答案：' + correct, 'info');
+      };
+    });
+  }
+
+  // AI 今日建议（非阻塞页内）
+  function genAiAdvice(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    const btn = el.querySelector('#hm-ai-advice');
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 分析中…'; }
+    const zone = el.querySelector('#hm-advice-zone');
+    if (zone) zone.innerHTML = '<div class="alert alert-info" style="margin-top:8px"><div class="muted-sm">🤖 AI 正在分析你的考点掌握度，给出今日训练建议…</div><div class="skl-line" style="margin-top:8px"></div><div class="skl-line skl-w80"></div><div class="skl-line skl-w60"></div></div>';
+
+    const s = Store.get();
+    const list = DB.TOPICS[subjTab];
+    const heat = s.heat;
+    // 构造考点状态摘要
+    const topicStatus = list.map(t => {
+      const h = heat[t.id] || {};
+      const tier = DB.TIERS[t.tier];
+      return '- ' + t.name + '（' + tier.name + '）：' + (h.score != null ? h.score + '%，' + (h.level === 2 ? '掌握' : h.level === 1 ? '薄弱' : '危险') : '未测') + '，分组' + t.group;
+    }).join('\n');
+    const relErrs = list.map(t => ({ n: relatedMistakes(t).length, name: t.name })).filter(x => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 5);
+    const errSummary = relErrs.length ? '关联错题最多的考点：' + relErrs.map(x => x.name + '(' + x.n + '条)').join('、') : '暂无关联错题';
+
+    const sys = '你是考研训练规划师。根据考生的考点掌握度热力图，给出"今天该练什么"的精准建议。'
+      + '必须只输出 JSON：{"priority":"今天最该练的1-2个考点及原因(80字内)","skip":"今天可以跳过的考点(40字内)","goal":"今日训练小目标(40字内)","tip":"一句话提醒(30字内)"}'
+      + '。直接、犀利、可执行。不要任何多余文字。';
+    const usr = '科目：' + (DB.SUBJECTS[subjTab] || {}).name + '\n考点掌握度：\n' + topicStatus + '\n' + errSummary + '\n请给出今天的训练建议。';
+
+    AI.chatJSON(sys, usr, null, { cache: false, noThink: true, maxTokens: 1024 }).then(function (result) {
+      if (!result || !result.priority) throw new Error('AI 未返回有效建议');
+      const html = '<div class="alert alert-info" style="margin-top:8px">'
+        + '<div style="font-weight:600;margin-bottom:4px">🤖 AI 今日训练建议</div>'
+        + '<div style="margin:4px 0"><b>🎯 优先：</b>' + Tex.renderInline(result.priority || '') + '</div>'
+        + '<div style="margin:4px 0"><b>⏭ 跳过：</b>' + Tex.renderInline(result.skip || '') + '</div>'
+        + '<div style="margin:4px 0"><b>🏆 目标：</b>' + Tex.renderInline(result.goal || '') + '</div>'
+        + '<div style="margin:4px 0"><b>💡 提醒：</b>' + Tex.renderInline(result.tip || '') + '</div>'
+        + '</div>';
+      if (zone) zone.innerHTML = html;
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 重新生成建议'; }
+    }).catch(function (e) {
+      Toast.warn('建议生成失败：' + e.message);
+      if (zone) zone.innerHTML = '<div class="alert alert-warn" style="margin-top:8px">生成失败：' + U.esc(e.message) + '</div>';
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 建议今天练哪儿'; }
     });
   }
 
@@ -10489,6 +11209,7 @@ function bind(el, next) {
   let timer = null;          // setInterval handle
   let session = null;        // {mins, subject, startAt, remainSec, lastFatigueMark}
   let fatigueShownAt = 0;
+  let pendingReview = null;  // 专注结束后待完成的防呆复盘上下文 {doneMins, subject}
 
   function todaySessions() {
     const s = Store.get();
@@ -10539,16 +11260,27 @@ function bind(el, next) {
       + '<li>结束后强制5分钟防呆复盘（符号/分式回顾）</li>'
       + '<li>连续3次专注 → 强制休息15分钟（无法跳过）</li>'
       + '<li>专注时长自动计入学习时长统计</li>'
-      + '</ul></div>';
+      + '</ul></div>'
+
+      + (pendingReview ? buildReviewHtml(pendingReview) : '')
+      ;
 
     el.querySelectorAll('.seg').forEach(b => {
       b.onclick = () => startFocus(+b.getAttribute('data-m'), el.querySelector('#fc-subj').value);
     });
+    // 防呆复盘（非阻塞，页面原位）按钮
+    const aiBtn = el.querySelector('#fc-ai-btn');
+    if (aiBtn) aiBtn.onclick = () => runAiReview(pendingReview);
+    const vioBtn = el.querySelector('#fc-review-vio');
+    if (vioBtn) vioBtn.onclick = () => { pendingReview = null; App.go('mistakes'); };
+    const doneBtn = el.querySelector('#fc-review-done');
+    if (doneBtn) doneBtn.onclick = () => { pendingReview = null; App.refresh(); };
   }
 
   // ---------- 专注会话 ----------
   function startFocus(mins, subject) {
     if (session) { Toast.show('专注进行中，请先点「中断专注」结束', 'warn', 3000); return; }
+    pendingReview = null;
     session = { mins, subject, startAt: Date.now(), remainSec: mins * 60, lastFatigueMark: mins * 60 };
     fatigueShownAt = 0;
     document.body.classList.add('focus-lock');
@@ -10628,52 +11360,63 @@ function bind(el, next) {
       App.refresh();
     } else {
       Notify.send('专注完成', '强制5分钟防呆复盘开始');
-      var defaultChecklist = '<p>闭眼回忆刚才的练习，逐条确认：</p>'
-        + '<ol style="padding-left:18px;line-height:2">'
-        + '<li>有没有出现<b>负号后置</b>？翻草稿检查最后3题</li>'
-        + '<li>分式合并是否走了<b>分母→分子→计算</b>三步？</li>'
-        + '<li>草稿是否保持<b>左乱草/右正稿</b>分区？</li>'
-        + '<li>卡壳题是否已标记"?"，没有死磕超过3分钟？</li></ol>'
-        + '<p class="muted-sm">发现违规 → 立即去错题画像记录一条，类型选对应项。</p>';
-      var modalActions = [
-        { label: '发现违规，去记错题', kind: 'btn-ghost', onClick: function (close) { close(); App.go('mistakes'); } },
-        { label: '复盘完毕，无违规', kind: 'btn-primary', onClick: function (close) { close(); App.refresh(); } }
-      ];
-      // AI 可用 → 生成针对性复盘问题（科目 + 长期记忆）；失败回落默认清单
-      if (typeof AI !== 'undefined' && AI.configured()) {
-        Modal.open({
-          title: '🧘 AI 针对性复盘（5分钟）',
-          dismissable: false,
-          html: '<div class="muted-sm">教练正在根据你刚才的专注内容出复盘问题…</div>'
-            + '<div id="fc-ai-review" class="pm-ai-body" style="margin-top:8px;min-height:80px"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w60"></div></div>',
-          actions: modalActions
-        });
-        var subjName = DB.SUBJECTS[rec.subject].name;
-        var mem = AI.memoryDigest ? AI.memoryDigest(300) : '';
-        var sys = '你是考研教练。考生刚完成一段 ' + doneMins + ' 分钟的「' + subjName + '」深度专注。'
-          + (mem ? '\n' + mem + '\n' : '')
-          + '请出 3 个针对性的复盘问题，引导他闭眼回忆刚才的练习并自我检查。'
-          + '要求：1) 问题必须结合该科目特点与他的已知弱点（尤其符号/分式/跳步）；2) 每个问题一句话，具体可检查（如"最后三道积分题，负号是否都提到了最前？"）；'
-          + '3) 先给一句 15 字内的开场（肯定时长但不吹捧）；4) 用简体中文，直接列 1/2/3，不要其他废话。';
-        var out = document.getElementById('fc-ai-review');
-        AI.chatStream(sys, '请出复盘问题。', function (full) {
-          if (out) out.innerHTML = (full || '').replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>';
-        }).then(function (full) {
-          if (out) out.innerHTML = (full || defaultChecklist).replace(/\n/g, '<br>');
-          if (window.AiMemory && full) AiMemory.recordEvent('完成' + doneMins + '分钟' + subjName + '专注', 'AI复盘问题已给出');
-          if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant(doneMins + '分钟' + subjName + '专注结束。刚才的复盘问题过一遍，明天同科目别再犯。');
-        }).catch(function () {
-          if (out) out.innerHTML = defaultChecklist;
-        });
-      } else {
-        Modal.open({
-          title: '🧘 强制防呆复盘（5分钟）',
-          dismissable: false,
-          html: defaultChecklist,
-          actions: modalActions
-        });
-      }
+      // 非阻塞：在页面原位显示复盘卡片，用户可继续操作页面其他部分；
+      // AI 复盘由用户点击「🤖 AI 复盘」按钮触发，流式输出到 #fc-ai-review
+      pendingReview = { doneMins: doneMins, subject: rec.subject };
+      App.refresh();
     }
+  }
+
+  // ---------- 防呆复盘（非阻塞，页面原位） ----------
+  function buildReviewHtml(r) {
+    const aiConfigured = typeof AI !== 'undefined' && AI.configured();
+    const checklist = '<p>闭眼回忆刚才的练习，逐条确认：</p>'
+      + '<ol style="padding-left:18px;line-height:2">'
+      + '<li>有没有出现<b>负号后置</b>？翻草稿检查最后3题</li>'
+      + '<li>分式合并是否走了<b>分母→分子→计算</b>三步？</li>'
+      + '<li>草稿是否保持<b>左乱草/右正稿</b>分区？</li>'
+      + '<li>卡壳题是否已标记"?"，没有死磕超过3分钟？</li></ol>'
+      + '<p class="muted-sm">发现违规 → 立即去错题画像记录一条，类型选对应项。</p>';
+    return '<div class="card" id="fc-review-card"><div class="card-title">🧘 防呆复盘（5分钟）</div>'
+      + '<div id="fc-review-default">' + checklist + '</div>'
+      + '<div id="fc-ai-review" class="pm-ai-body" style="margin-top:8px;min-height:0"></div>'
+      + '<div class="btn-row" style="margin-top:10px">'
+      + (aiConfigured ? '<button class="btn btn-sm btn-primary" id="fc-ai-btn">🤖 AI 复盘</button>' : '')
+      + '<button class="btn btn-sm btn-ghost" id="fc-review-vio">发现违规，去记错题</button>'
+      + '<button class="btn btn-sm btn-primary" id="fc-review-done">复盘完毕，无违规</button>'
+      + '</div></div>';
+  }
+
+  function runAiReview(r) {
+    const btn = document.getElementById('fc-ai-btn');
+    const out = document.getElementById('fc-ai-review');
+    if (!out || !btn || !r) return;
+    const doneMins = r.doneMins;
+    const subjName = DB.SUBJECTS[r.subject].name;
+    const mem = AI.memoryDigest ? AI.memoryDigest(300) : '';
+    const sys = '你是考研教练。考生刚完成一段 ' + doneMins + ' 分钟的「' + subjName + '」深度专注。'
+      + (mem ? '\n' + mem + '\n' : '')
+      + '请出 3 个针对性的复盘问题，引导他闭眼回忆刚才的练习并自我检查。'
+      + '要求：1) 问题必须结合该科目特点与他的已知弱点（尤其符号/分式/跳步）；2) 每个问题一句话，具体可检查（如"最后三道积分题，负号是否都提到了最前？"）；'
+      + '3) 先给一句 15 字内的开场（肯定时长但不吹捧）；4) 用简体中文，直接列 1/2/3，不要其他废话。';
+    // 按钮置为「生成中」并禁用，原位显示流式输出
+    btn.disabled = true;
+    btn.textContent = '🔄 生成中...';
+    out.innerHTML = '<div class="muted-sm">教练正在根据你刚才的专注内容出复盘问题…</div>'
+      + '<div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w60"></div>';
+    AI.chatStream(sys, '请出复盘问题。', function (content, reasoning) {
+      if (out) out.innerHTML = (content || '').replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>';
+    }).then(function (full) {
+      if (out) out.innerHTML = (full || '').replace(/\n/g, '<br>');
+      if (window.AiMemory && full) AiMemory.recordEvent('完成' + doneMins + '分钟' + subjName + '专注', 'AI复盘问题已给出');
+      if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant(doneMins + '分钟' + subjName + '专注结束。刚才的复盘问题过一遍，明天同科目别再犯。');
+      btn.disabled = false;
+      btn.textContent = '🤖 重新生成';
+    }).catch(function () {
+      if (out) out.innerHTML = '<span class="muted-sm">⚠️ AI 复盘生成失败，请对照上方默认清单自查，或点此重试。</span>';
+      btn.disabled = false;
+      btn.textContent = '🤖 AI 复盘';
+    });
   }
 
   window.FocusModule = { render, get active() { return !!session; }, abort() { if (session) finishFocus(true); } };
@@ -11639,47 +12382,84 @@ function bind(el, next) {
 
 /* ===== js/modules/sprint.js ===== */
 /* ============================================================
- * sprint.js — 智能押题 · 冲刺清单
- * 算法：冲刺分 = 考频(必拿层tier/概念图谱杠杆度) × 薄弱度(热力图level)
- *   只有「既可能考、又薄弱」的考点才会冲到顶部；已掌握(level2)自动出列。
- * 复用：DB.TOPICS(四科考点+tier) × Store.heat(掌握度) × DB.CONCEPT_GRAPH(专业课概念杠杆度)
+ * sprint.js — 智能押题 · 商业级引擎
+ * 五维评分：考频 × 时效性 × 薄弱度 × 杠杆度 × 难度匹配
+ * AI 增强：趋势预测 / 押题卷生成 / 押题理由 / 命中追踪 / 冲刺路径
+ * 复用：DB.TOPICS × Store.heat × DB.CONCEPT_GRAPH × AI.chatJSON
  * ============================================================ */
 (function () {
   'use strict';
 
-  // 概念图谱杠杆度：被多少其他节点依赖（专业课自控专属，数据在 DB.CONCEPT_GRAPH）
+  // ==================== 五维评分引擎 ====================
   function leverageMap() {
-    const cg = (window.DB && DB.CONCEPT_GRAPH) || [];
-    const dep = {};
-    cg.forEach(n => (n.deps || []).forEach(d => { dep[d] = (dep[d] || 0) + 1; }));
+    var cg = (window.DB && DB.CONCEPT_GRAPH) || [];
+    var dep = {};
+    cg.forEach(function (n) { (n.deps || []).forEach(function (d) { dep[d] = (dep[d] || 0) + 1; }); });
     return dep;
   }
 
-  // 单考点冲刺分
-  function scoreOf(t, heat, dep) {
-    const h = heat[t.id] || {};
-    const lvl = (h.level != null) ? h.level
+  function scoreOf(t, heat, dep, trends) {
+    var h = heat[t.id] || {};
+    var lvl = (h.level != null) ? h.level
       : (h.score != null ? (h.score >= 80 ? 2 : h.score >= 50 ? 1 : 0) : 0);
-    // 考频：必拿层(tier1)几乎必考=3，tier2=2，tier3=1；专业课概念杠杆再 +min(2,依赖数)
-    let exam = t.tier === 1 ? 3 : t.tier === 2 ? 2 : 1;
-    if (dep[t.id]) exam += Math.min(2, dep[t.id]);
-    // 薄弱度：红(未测=2/已测差=3) > 黄(1)=2 > 绿(2)=0
-    let weak;
-    if (lvl === 0) weak = (h.score == null ? 2 : 3);
-    else if (lvl === 1) weak = 2;
-    else weak = 0;
-    return { lvl, exam, weak, score: exam * weak, dep: dep[t.id] || 0 };
+
+    // 维度1：考频（tier + 历年出现）
+    var examFreq = t.tier === 1 ? 3 : t.tier === 2 ? 2 : 1;
+    if (dep[t.id]) examFreq += Math.min(2, dep[t.id]);
+
+    // 维度2：时效性（AI 趋势分析给出，默认 1.0）
+    var timeliness = 1.0;
+    if (trends && trends.hotTopics) {
+      for (var i = 0; i < trends.hotTopics.length; i++) {
+        if (trends.hotTopics[i].topicId === t.id || trends.hotTopics[i].name === t.name) {
+          timeliness = 1.5 + (trends.hotTopics[i].heat || 0.5);
+          break;
+        }
+      }
+      // 冷门考点降权
+      if (trends.coldTopics) {
+        for (var j = 0; j < trends.coldTopics.length; j++) {
+          if (trends.coldTopics[j].name === t.name) { timeliness = 0.5; break; }
+        }
+      }
+    }
+
+    // 维度3：薄弱度
+    var weakness;
+    if (lvl === 0) weakness = (h.score == null ? 2 : 3);
+    else if (lvl === 1) weakness = 2;
+    else weakness = 0;
+
+    // 维度4：杠杆度（概念图谱依赖）
+    var leverage = 1 + Math.min(2, (dep[t.id] || 0) * 0.5);
+
+    // 维度5：难度匹配（目标院校难度）
+    var diffMatch = 1.0;
+    try {
+      var tgt = Store.get().settings.targetScores || {};
+      if (t.subject === 'math' && tgt.math >= 130) diffMatch = 1.3;
+      if (t.subject === 'ctrl' && tgt.prof >= 130) diffMatch = 1.3;
+    } catch (e) {}
+
+    var score = Math.round(examFreq * timeliness * weakness * leverage * diffMatch);
+    return { lvl: lvl, examFreq: examFreq, timeliness: Math.round(timeliness * 10) / 10, weakness: weakness, leverage: leverage, diffMatch: diffMatch, score: score, dep: dep[t.id] || 0 };
   }
 
   function priority(score) {
-    if (score >= 9) return { label: '🔴 紧急', cls: 'sp-p0' };
-    if (score >= 5) return { label: '🟠 重点', cls: 'sp-p1' };
-    return { label: '🟢 可选', cls: 'sp-p2' };
+    if (score >= 18) return { label: '🔴 必押', cls: 'sp-p0' };
+    if (score >= 10) return { label: '🟠 重点', cls: 'sp-p1' };
+    if (score >= 5) return { label: '🟡 关注', cls: 'sp-p2' };
+    return { label: '🟢 可选', cls: 'sp-p3' };
   }
 
+  var SUBJ_ORDER = ['math', 'ctrl', 'eng', 'pol'];
+  var fSubj = '', fPrio = '', fBalance = true, fShowMastered = false;
+
+  function subjName(s) { return (DB.SUBJECTS[s] && DB.SUBJECTS[s].short) || s; }
+  function subjColor(s) { return (DB.SUBJECTS[s] && DB.SUBJECTS[s].color) || '#595959'; }
   function tierText(t, dep) {
-    const base = t.tier === 1 ? '高频·必拿' : t.tier === 2 ? '中频' : '低频';
-    return dep ? base + '·杠杆+' + dep : base;
+    var base = t.tier === 1 ? '高频·必拿' : t.tier === 2 ? '中频' : '低频';
+    return dep ? base + '·杠杆' + dep : base;
   }
   function weakText(lvl, h) {
     if (lvl === 0) return h.score == null ? '🟡 未测(风险)' : '🔴 薄弱';
@@ -11687,66 +12467,95 @@ function bind(el, next) {
     return '🟢 已掌握';
   }
 
-  let fSubj = '', fPrio = '', fBalance = false, fShowMastered = false;
-
-  function prioLabel(p) { return p === 'urgent' ? '🔴 紧急' : p === 'key' ? '🟠 重点' : '🟢 可选'; }
-
+  // ==================== 渲染 ====================
   function render(el) {
-    const heat = Store.get().heat || {};
-    const dep = leverageMap();
-    const subjOrder = ['math', 'ctrl', 'eng', 'pol'];
-    const rows = [];
-    subjOrder.forEach(subj => {
-      (DB.TOPICS[subj] || []).forEach(t => {
-        const s = scoreOf(t, heat, dep);
+    var st = Store.get();
+    var heat = st.heat || {};
+    var dep = leverageMap();
+    var trends = (st.sprintData && st.sprintData.trends) || null;
+    var reasons = (st.sprintData && st.sprintData.reasons) || {};
+
+    var rows = [];
+    SUBJ_ORDER.forEach(function (subj) {
+      (DB.TOPICS[subj] || []).forEach(function (t) {
+        var s = scoreOf(t, heat, dep, trends);
         rows.push({
-          subj, id: t.id, name: t.name, group: t.group || '',
-          tier: t.tier, lvl: s.lvl, exam: s.exam, weak: s.weak,
+          subj: subj, id: t.id, name: t.name, group: t.group || '',
+          tier: t.tier, lvl: s.lvl, examFreq: s.examFreq, timeliness: s.timeliness,
+          weakness: s.weakness, leverage: s.leverage, diffMatch: s.diffMatch,
           score: s.score, dep: s.dep, mastered: s.lvl >= 2
         });
       });
     });
 
-    // 筛选（科目 / 优先级 / 是否显示已掌握）
-    let filtered = rows.filter(r => {
+    var filtered = rows.filter(function (r) {
       if (fSubj && r.subj !== fSubj) return false;
       if (fPrio && priority(r.score).label !== prioLabel(fPrio)) return false;
       if (!fShowMastered && (r.mastered || r.score <= 0)) return false;
       return true;
     });
-    filtered.sort((a, b) => (b.score - a.score) || (b.weak - a.weak));
+    filtered.sort(function (a, b) { return (b.score - a.score) || (b.weakness - a.weakness); });
 
-    // 取列表：均衡(每科前4) / 单科全列 / 全局Top12(或显示已掌握时Top24)
-    let list;
-    if (fBalance) {
-      const per = {}; const BAL = 4;
-      filtered.forEach(r => { per[r.subj] = per[r.subj] || []; if (per[r.subj].length < BAL) per[r.subj].push(r); });
-      list = []; Object.keys(per).forEach(k => { list = list.concat(per[k]); });
-      list.sort((a, b) => (b.score - a.score) || (b.weak - a.weak));
+    var list;
+    if (fBalance && !fSubj) {
+      var per = {}; var BAL = 5;
+      filtered.forEach(function (r) { per[r.subj] = per[r.subj] || []; if (per[r.subj].length < BAL) per[r.subj].push(r); });
+      list = [];
+      SUBJ_ORDER.forEach(function (k) { if (per[k]) list = list.concat(per[k]); });
+      list.sort(function (a, b) { return (b.score - a.score) || (b.weakness - a.weakness); });
     } else if (fSubj) {
       list = filtered;
     } else {
-      list = filtered.slice(0, fShowMastered ? 24 : 12);
+      list = filtered.slice(0, fShowMastered ? 30 : 15);
     }
 
-    const subjName = s => (DB.SUBJECTS[s] && DB.SUBJECTS[s].short) || s;
-    const subjColor = s => (DB.SUBJECTS[s] && DB.SUBJECTS[s].color) || '#595959';
-    const subjOpts = '<option value="">全部科目</option>' + subjOrder.map(s => '<option value="' + s + '"' + (fSubj === s ? ' selected' : '') + '>' + subjName(s) + '</option>').join('');
-    const prioOpts = '<option value="">全部优先级</option>' + ['urgent', 'key', 'optional'].map(p => '<option value="' + p + '"' + (fPrio === p ? ' selected' : '') + '>' + prioLabel(p) + '</option>').join('');
-    const urgent = list.filter(r => r.score >= 9).length;
-    const masteredTotal = rows.filter(r => r.mastered).length;
+    // ---- 顶部：概览 + AI 工具栏 ----
+    var daysLeft = U.daysTo(Store.get().settings.examDate);
+    var urgent = list.filter(function (r) { return r.score >= 18; }).length;
+    var masteredTotal = rows.filter(function (r) { return r.mastered; }).length;
+    var hitRate = calcHitRate(st.sprintData);
 
-    let html = ''
+    var html = ''
       + '<div class="card">'
-      + '<div class="card-title">🎯 智能押题 · 冲刺清单</div>'
-      + '<div class="muted-sm" style="margin-bottom:8px">冲刺分 = 考频（必拿层/概念图谱杠杆）× 薄弱度（热力图）。既可能考、又薄弱的考点冲到顶部；已掌握自动出列。分数与公式逐题可解释。</div>'
+      + '<div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">'
+      + '<span>🎯 智能押题 · 商业级引擎</span>'
+      + '<span style="font-size:13px;color:var(--text-muted)">距初试 ' + (daysLeft > 0 ? daysLeft : 0) + ' 天</span></div>'
+      + '<div class="muted-sm" style="margin-bottom:8px">五维评分 = 考频 × 时效性 × 薄弱度 × 杠杆度 × 难度匹配。AI 趋势分析自动调整时效权重，冷门考点降权、热门加码。</div>'
       + '<div class="sp-chips">'
       + '<span class="tag">扫描 ' + rows.length + ' 考点</span>'
       + '<span class="tag">命中 ' + list.length + ' 个</span>'
-      + (urgent ? '<span class="tag" style="background:#cf1322;color:#fff">🔴 紧急 ' + urgent + '</span>' : '')
+      + (urgent ? '<span class="tag" style="background:#cf1322;color:#fff">🔴 必押 ' + urgent + '</span>' : '')
       + (masteredTotal ? '<span class="tag" style="background:#237804;color:#fff">✓ 已掌握 ' + masteredTotal + '</span>' : '')
+      + (hitRate != null ? '<span class="tag" style="background:#7c3aed;color:#fff">🎯 命中率 ' + hitRate + '%</span>' : '')
+      + (trends ? '<span class="tag" style="background:#096dd9;color:#fff">📈 AI趋势已分析</span>' : '')
       + '</div>'
-      + '<div class="sp-filter">'
+
+      // AI 工具栏
+      + '<div class="btn-row" style="margin:10px 0;flex-wrap:wrap">'
+      + '<button class="btn btn-primary btn-sm" id="sp-ai-trend">📈 AI 趋势分析</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-ai-exam">📝 生成押题卷</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-ai-reason">🧠 生成押题理由</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-rush-plan">🗺️ 冲刺路径</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-hit-track">🎯 命中追踪</button>'
+      + '</div>'
+
+      // AI 结果区域（非阻塞注入）
+      + '<div id="sp-ai-zone"></div>';
+
+    // ---- 趋势分析结果 ----
+    if (trends) {
+      html += renderTrends(trends);
+    }
+
+    // ---- 筛选栏 ----
+    var subjOpts = '<option value="">全部科目</option>' + SUBJ_ORDER.map(function (s) {
+      return '<option value="' + s + '"' + (fSubj === s ? ' selected' : '') + '>' + subjName(s) + '</option>';
+    }).join('');
+    var prioOpts = '<option value="">全部优先级</option>' + ['urgent', 'key', 'watch', 'optional'].map(function (p) {
+      return '<option value="' + p + '"' + (fPrio === p ? ' selected' : '') + '>' + prioLabel(p) + '</option>';
+    }).join('');
+
+    html += '<div class="sp-filter">'
       + '<select id="sp-subjf" class="input input-sm">' + subjOpts + '</select>'
       + '<select id="sp-priof" class="input input-sm">' + prioOpts + '</select>'
       + '<label class="sp-toggle"><input type="checkbox" id="sp-balance"' + (fBalance ? ' checked' : '') + '> 每科均衡</label>'
@@ -11754,90 +12563,515 @@ function bind(el, next) {
       + '<button class="btn btn-ghost btn-sm" id="sp-copy">📋 复制</button>'
       + '</div>';
 
+    // ---- 押题列表 ----
     if (!list.length) {
-      html += '<div class="empty" style="padding:18px 4px">🎉 当前筛选下没有冲刺点' + (fShowMastered ? '' : '——四科薄弱考点都清得差不多了，保持手感即可') + '。</div></div>';
+      html += '<div class="empty" style="padding:18px 4px">🎉 当前筛选下没有冲刺点。点击「AI 趋势分析」获取今年命题预测。</div></div>';
       el.innerHTML = html;
-      bindControls(el, list, subjName);
+      bindControls(el, list);
       return;
     }
 
-    let cur = null;
-    list.forEach(r => {
+    var cur = null;
+    list.forEach(function (r) {
       if (r.subj !== cur) {
         cur = r.subj;
         html += '<div class="sp-group" style="margin-top:14px"><span class="sp-gname" style="color:' + subjColor(cur) + '">' + subjName(cur) + '</span></div>';
       }
-      const p = priority(r.score);
-      const isMastered = r.mastered;
+      var p = priority(r.score);
+      var isMastered = r.mastered;
+      var reason = reasons[r.id];
       html += '<div class="sp-item' + (isMastered ? ' mastered' : '') + '" style="border-left:4px solid ' + subjColor(r.subj) + '">'
         + '<div class="sp-top"><span class="sp-name">' + U.esc(r.name) + '</span>'
         + '<span class="sp-badge ' + p.cls + '">' + p.label + '</span></div>'
         + '<div class="sp-meta"><span>' + U.esc(r.group) + '</span>'
         + '<span class="sp-bars">' + tierText(r, r.dep) + ' ｜ ' + weakText(r.lvl, heat[r.id] || {}) + '</span></div>'
-        + '<div class="sp-scorerow"><span class="sp-score">冲刺分 <b>' + r.score + '</b></span><span class="sp-formula">考频' + r.exam + ' × 薄弱' + r.weak + '</span></div>'
-        + '<div class="btn-row" style="margin-top:8px">'
-        + '<button class="btn btn-primary sp-prac" data-id="' + r.id + '" data-subj="' + r.subj + '" data-name="' + U.esc(r.name) + '">去练这题</button>'
+        + '<div class="sp-scorerow"><span class="sp-score">押题分 <b>' + r.score + '</b></span>'
+        + '<span class="sp-formula">考频' + r.examFreq + '×时效' + r.timeliness + '×薄弱' + r.weakness + '×杠杆' + r.leverage + '×难度' + r.diffMatch + '</span></div>';
+      if (reason) {
+        html += '<details style="margin-top:4px"><summary style="font-size:12px;cursor:pointer;opacity:.7">🧠 押题理由（置信度 ' + (reason.confidence || '?') + '%）</summary>'
+          + '<div class="report" style="margin-top:4px;font-size:13px;opacity:.85">' + U.esc(reason.reason || '') + '</div></details>';
+      }
+      html += '<div class="btn-row" style="margin-top:8px">'
+        + '<button class="btn btn-primary btn-sm sp-prac" data-id="' + r.id + '" data-subj="' + r.subj + '" data-name="' + U.esc(r.name) + '">去练这题</button>'
         + (isMastered
-            ? '<button class="btn btn-ghost sp-recover" data-id="' + r.id + '">恢复薄弱</button>'
-            : '<button class="btn btn-ghost sp-master" data-id="' + r.id + '">标记已掌握</button>')
+            ? '<button class="btn btn-ghost btn-sm sp-recover" data-id="' + r.id + '" data-name="' + U.esc(r.name) + '">恢复薄弱</button>'
+            : '<button class="btn btn-ghost btn-sm sp-master" data-id="' + r.id + '" data-name="' + U.esc(r.name) + '">标记已掌握</button>')
         + '</div></div>';
     });
     html += '</div>';
     el.innerHTML = html;
-    bindControls(el, list, subjName);
+    bindControls(el, list);
   }
 
-  function bindControls(el, list, subjName) {
-    const subjf = el.querySelector('#sp-subjf'); if (subjf) subjf.onchange = function () { fSubj = subjf.value; render(el); };
-    const priof = el.querySelector('#sp-priof'); if (priof) priof.onchange = function () { fPrio = priof.value; render(el); };
-    const bal = el.querySelector('#sp-balance'); if (bal) bal.onchange = function () { fBalance = bal.checked; render(el); };
-    const showm = el.querySelector('#sp-showm'); if (showm) showm.onchange = function () { fShowMastered = showm.checked; render(el); };
-    const copy = el.querySelector('#sp-copy'); if (copy) copy.onclick = function () { copyList(list, subjName); };
-    el.querySelectorAll('.sp-prac').forEach(b => b.onclick = () => {
-      const id = b.getAttribute('data-id'), subj = b.getAttribute('data-subj'), name = b.getAttribute('data-name');
-      if (window.QuizModule && QuizModule.startVariant) {
-        App.go('quiz');
-        setTimeout(() => QuizModule.startVariant({ subject: subj, type: 'concept', desc: name, refId: id }), 0);
-      } else { App.go('quiz'); }
-    });
-    el.querySelectorAll('.sp-master').forEach(b => b.onclick = () => {
-      const id = b.getAttribute('data-id');
-      Store.update(s => {
-        s.heat = s.heat || {};
-        s.heat[id] = { level: 2, score: 90, updatedAt: new Date().toISOString() };
+  function prioLabel(p) {
+    return p === 'urgent' ? '🔴 必押' : p === 'key' ? '🟠 重点' : p === 'watch' ? '🟡 关注' : '🟢 可选';
+  }
+
+  function renderTrends(trends) {
+    var hot = (trends.hotTopics || []).map(function (t) {
+      return '<span class="tag" style="background:#cf1322;color:#fff;margin:2px">' + U.esc(t.name || t.topicId) + (t.heat ? ' ×' + t.heat : '') + '</span>';
+    }).join('');
+    var cold = (trends.coldTopics || []).map(function (t) {
+      return '<span class="tag" style="background:#64748b;color:#fff;margin:2px">' + U.esc(t.name || t.topicId) + '</span>';
+    }).join('');
+    return '<div class="card" style="background:var(--bg-muted);margin:8px 0">'
+      + '<div class="card-title-sm" style="display:flex;justify-content:space-between;align-items:center">'
+      + '<span>📈 AI 命题趋势预测</span>'
+      + '<span class="muted-sm" style="font-size:11px">' + (trends.year || '') + ' · ' + ((trends.generatedAt || '').slice(0, 10)) + '</span></div>'
+      + (trends.prediction ? '<div class="report" style="margin:6px 0;font-size:13px">' + U.esc(trends.prediction).replace(/\\n/g, '<br>') + '</div>' : '')
+      + (hot ? '<div style="margin-top:6px"><b style="font-size:12px">🔥 热门预测：</b>' + hot + '</div>' : '')
+      + (cold ? '<div style="margin-top:4px"><b style="font-size:12px">❄️ 冷门降权：</b>' + cold + '</div>' : '')
+      + '</div>';
+  }
+
+  // ==================== AI 趋势分析 ====================
+  function aiTrend(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var btn = document.getElementById('sp-ai-trend');
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 分析中…'; }
+    var zone = document.getElementById('sp-ai-zone');
+    if (zone) zone.innerHTML = '<div class="card" style="background:var(--bg-muted)"><div class="muted-sm">🤖 AI 正在分析近 5 年考研命题趋势，预测今年热点…</div><div class="skl-line"></div><div class="skl-line skl-w80"></div><div class="skl-line"></div></div>';
+
+    // 收集用户薄弱考点
+    var st = Store.get();
+    var weakTopics = [];
+    SUBJ_ORDER.forEach(function (subj) {
+      (DB.TOPICS[subj] || []).forEach(function (t) {
+        var h = (st.heat || {})[t.id];
+        if (!h || h.level == null || h.level < 2) {
+          weakTopics.push(subjName(subj) + ':' + t.name);
+        }
       });
-      if (id[0] === 'm' && window.Store && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
-      Toast.success('✓ 已标记「' + b.getAttribute('data-name') + '」为掌握，清单自动重算');
-      App.refresh();
     });
-    el.querySelectorAll('.sp-recover').forEach(b => b.onclick = () => {
-      const id = b.getAttribute('data-id');
-      Store.update(s => {
-        s.heat = s.heat || {};
-        s.heat[id] = { level: 0, score: null, updatedAt: new Date().toISOString() };
-      });
-      if (id[0] === 'm' && window.Store && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
-      Toast.success('已恢复为薄弱，重新进入冲刺');
-      App.refresh();
+
+    var sys = '你是考研命题研究专家，精通近5年考研真题命题趋势分析。'
+      + '基于大纲变化、近年真题规律、社会热点，预测今年命题方向。\n'
+      + '必须只输出 JSON：{"prediction":"总体预测（200字内）","hotTopics":[{"name":"考点名","heat":0.5-2.0,"reason":"为什么热"}],"coldTopics":[{"name":"考点名","reason":"为什么冷"}],"year":"2026"}\n'
+      + 'heat 越高表示越可能考。不要任何多余文字。';
+    var usr = '考生情况：\n薄弱考点：' + weakTopics.slice(0, 20).join('、') + '\n专业课：' + (function () { try { return DB.getActiveMajor().name; } catch (e) { return '未指定'; } })()
+      + '\n请预测2026考研命题趋势，重点关注数学科目（微积分/线代/概率）和专业课。';
+
+    AI.chatJSON(sys, usr, null, { cache: true, noThink: true, maxTokens: 4096 }).then(function (result) {
+      if (!result || !result.prediction) throw new Error('AI 未返回有效趋势分析');
+      result.generatedAt = new Date().toISOString();
+      Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.trends = result; });
+      Toast.success('AI 趋势分析完成');
+      render(el);
+    }).catch(function (e) {
+      if (zone) zone.innerHTML = '<div class="alert alert-error">趋势分析失败：' + U.esc(e.message) + '</div>';
+      Toast.warn('趋势分析失败：' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '📈 AI 趋势分析'; }
     });
   }
 
-  function copyList(list, subjName) {
-    let txt = '【考研冲刺押题清单】\n';
-    list.forEach((r, i) => { txt += (i + 1) + '. [' + subjName(r.subj) + '] ' + r.name + ' — 冲刺分' + r.score + '（考频' + r.exam + '×薄弱' + r.weak + '）\n'; });
+  // ==================== AI 押题理由 ====================
+  function aiReasons(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var btn = document.getElementById('sp-ai-reason');
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 生成中…'; }
+    var zone = document.getElementById('sp-ai-zone');
+    if (zone) zone.innerHTML = '<div class="card" style="background:var(--bg-muted)"><div class="muted-sm">🧠 AI 正在为 Top 10 押题考点生成详细押题理由…</div><div class="skl-line"></div><div class="skl-line skl-w80"></div></div>';
+
+    var st = Store.get();
+    var heat = st.heat || {};
+    var dep = leverageMap();
+    var trends = (st.sprintData && st.sprintData.trends) || null;
+    var allRows = [];
+    SUBJ_ORDER.forEach(function (subj) {
+      (DB.TOPICS[subj] || []).forEach(function (t) {
+        var s = scoreOf(t, heat, dep, trends);
+        if (s.score > 0 && s.lvl < 2) allRows.push({ subj: subj, id: t.id, name: t.name, score: s.score });
+      });
+    });
+    allRows.sort(function (a, b) { return b.score - a.score; });
+    var top = allRows.slice(0, 10);
+
+    var sys = '你是考研命题研究专家。为每个考点生成押题理由。\n'
+      + '必须只输出 JSON：{"reasons":[{"topicId":"考点ID","reason":"为什么今年可能考（含近年趋势/大纲变化/关联考点）","confidence":0-100整数,"lastYearTrend":"上升|平稳|下降"}]}\n'
+      + 'confidence 越高表示越可能考。不要任何多余文字。';
+    var usr = '请为以下考点生成押题理由：\n' + top.map(function (r) {
+      return subjName(r.subj) + ':' + r.name + '（ID:' + r.id + '，押题分' + r.score + '）';
+    }).join('\n');
+
+    AI.chatJSON(sys, usr, null, { cache: true, noThink: true, maxTokens: 4096 }).then(function (result) {
+      if (!result || !result.reasons) throw new Error('AI 未返回有效押题理由');
+      Store.update(function (s) {
+        s.sprintData = s.sprintData || {};
+        s.sprintData.reasons = s.sprintData.reasons || {};
+        result.reasons.forEach(function (r) {
+          if (r.topicId) s.sprintData.reasons[r.topicId] = { reason: r.reason, confidence: r.confidence, lastYearTrend: r.lastYearTrend, at: new Date().toISOString() };
+        });
+      });
+      Toast.success('已生成 ' + (result.reasons || []).length + ' 个考点的押题理由');
+      render(el);
+    }).catch(function (e) {
+      if (zone) zone.innerHTML = '<div class="alert alert-error">押题理由生成失败：' + U.esc(e.message) + '</div>';
+      Toast.warn('生成失败：' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '🧠 生成押题理由'; }
+    });
+  }
+
+  // ==================== AI 押题卷生成 ====================
+  function aiExam(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var btn = document.getElementById('sp-ai-exam');
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 组卷中…'; }
+
+    var st = Store.get();
+    var heat = st.heat || {};
+    var dep = leverageMap();
+    var trends = (st.sprintData && st.sprintData.trends) || null;
+
+    // 按科目收集薄弱考点
+    var subjTopics = {};
+    SUBJ_ORDER.forEach(function (subj) {
+      subjTopics[subj] = [];
+      (DB.TOPICS[subj] || []).forEach(function (t) {
+        var s = scoreOf(t, heat, dep, trends);
+        if (s.score > 0 && s.lvl < 2) subjTopics[subj].push({ id: t.id, name: t.name, score: s.score });
+      });
+      subjTopics[subj].sort(function (a, b) { return b.score - a.score; });
+    });
+
+    var major = (function () { try { return DB.getActiveMajor().name; } catch (e) { return '专业课'; } })();
+
+    var sys = '你是考研命题组专家。根据考生薄弱点，生成一套模拟押题卷。\n'
+      + '要求：\n1) 题目必须贴合考研真题难度和风格\n2) 优先覆盖考生薄弱考点\n3) 题型分布：选择题(4选1) + 解答题\n4) 公式用 LaTeX $...$ 格式\n'
+      + '必须只输出 JSON：{"title":"押题卷标题","subject":"math|ctrl|eng|pol","timeLimit":180,"questions":[{"stem":"题干","type":"choice|solve","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"答案","solution":"分步详解","diff":"easy|medium|hard","score":分值,"topicName":"对应考点"}]}\n'
+      + 'solve 类型不需要 options。选择题8道(每道4分)+解答题3道(每道14分左右)，总分约74分。不要任何多余文字。';
+    var usr = '请为数学科目生成押题卷。\n考生薄弱考点（按优先级）：\n'
+      + subjTopics.math.slice(0, 8).map(function (t, i) { return (i + 1) + '. ' + t.name + '（押题分' + t.score + '）'; }).join('\n')
+      + '\n专业课：' + major;
+
+    AI.chatJSON(sys, usr, null, { cache: false, noThink: true, maxTokens: 8192 }).then(function (result) {
+      if (!result || !result.questions || !result.questions.length) throw new Error('AI 未返回有效押题卷');
+      var exam = {
+        id: U.uid(), title: result.title || 'AI 押题卷', subject: result.subject || 'math',
+        questions: result.questions.map(function (q) {
+          return { stem: q.stem || '', type: q.type || 'solve', options: q.options || [], answer: q.answer || '', solution: q.solution || '', diff: q.diff || 'medium', score: q.score || 0, topicName: q.topicName || '' };
+        }),
+        timeLimit: result.timeLimit || 180, createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null
+      };
+      Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
+      Toast.success('押题卷已生成：' + exam.title + '（' + exam.questions.length + '题）');
+      viewExam(exam.id, el);
+      if (btn) { btn.disabled = false; btn.textContent = '📝 生成押题卷'; }
+    }).catch(function (e) {
+      Toast.warn('组卷失败：' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '📝 生成押题卷'; }
+    });
+  }
+
+  // 查看押题卷（非阻塞页内显示）
+  function viewExam(examId, el) {
+    var st = Store.get();
+    var exam = ((st.sprintData && st.sprintData.mockExams) || []).find(function (e) { return e.id === examId; });
+    if (!exam) return;
+    var done = exam.completedAt != null;
+    var totalScore = exam.questions.reduce(function (s, q) { return s + (q.score || 0); }, 0);
+
+    var qsHtml = exam.questions.map(function (q, qi) {
+      var r = (exam.results || [])[qi];
+      var mark = r == null ? '' : r.correct ? '<span style="color:#237804">✓ ' + (r.score || 0) + '分</span>' : '<span style="color:#cf1322">✗ ' + (r.score || 0) + '分</span>';
+      return '<div style="padding:10px 0;border-bottom:1px solid var(--border)" data-q="' + qi + '">'
+        + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px">'
+        + '<div style="flex:1"><div style="font-size:12px;color:var(--text-muted)">题' + (qi + 1) + ' [' + (q.diff || 'medium') + '] ' + (q.score || 0) + '分 ' + (q.topicName ? '· ' + U.esc(q.topicName) : '') + ' ' + mark + '</div>'
+        + '<div class="report" style="margin-top:4px">' + Tex.renderInline(q.stem) + '</div></div></div>'
+        + (q.type === 'choice' && q.options && q.options.length ? '<div style="margin-top:4px">' + q.options.map(function (o) {
+            var letter = (o || '').trim().charAt(0);
+            return '<button class="btn btn-sm btn-ghost sp-exam-opt" data-exam="' + examId + '" data-q="' + qi + '" data-v="' + letter + '" data-correct="' + (q.answer || '').trim().charAt(0) + '" data-score="' + (q.score || 0) + '" style="margin:2px;font-size:12px">' + U.esc(o) + '</button>';
+          }).join('') + '</div>' : '<textarea class="input sp-exam-input" data-exam="' + examId + '" data-q="' + qi + '" data-correct="' + U.esc(q.answer || '') + '" data-score="' + (q.score || 0) + '" placeholder="输入解答…" style="margin-top:4px;min-height:60px"></textarea>')
+        + (done || r != null ? '<details style="margin-top:4px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(q.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(q.solution || '') + '</div></details>' : '')
+        + '</div>';
+    }).join('');
+
+    Modal.open({
+      title: '📝 ' + exam.title + '（' + (exam.questions || []).length + '题 · 满分' + totalScore + ' · 限时' + (exam.timeLimit || 180) + '分钟）',
+      wide: true, dismissable: true,
+      html: '<div id="sp-exam-zone">' + (done ? '<div class="alert alert-warn" style="margin-bottom:8px">已完成 · 得分 ' + (exam.score || 0) + '/' + totalScore + ' · 用时 ' + (exam.duration || 0) + '分钟</div>' : '<div class="alert alert-warn" style="margin-bottom:8px">⏱ 建议限时 ' + (exam.timeLimit || 180) + ' 分钟完成，做完后点击「交卷判分」</div>') + qsHtml + '</div>',
+      actions: [
+        { label: '关闭', kind: 'btn-ghost' },
+        ...(done ? [] : [{ label: '📤 交卷判分', kind: 'btn-primary', onClick: function (close) { close(); gradeExam(examId, el); } }])
+      ]
+    });
+
+    // 绑定作答
+    setTimeout(function () {
+      document.querySelectorAll('.sp-exam-opt').forEach(function (b) {
+        b.onclick = function () {
+          var v = b.getAttribute('data-v');
+          var correct = b.getAttribute('data-correct');
+          var isCorrect = v === correct;
+          b.style.background = isCorrect ? '#237804' : '#cf1322';
+          b.style.color = '#fff';
+          // 标记同题其他选项为灰
+          var qi = b.getAttribute('data-q');
+          document.querySelectorAll('.sp-exam-opt[data-q="' + qi + '"]').forEach(function (o) {
+            if (o !== b) { o.style.opacity = '.4'; o.disabled = true; }
+          });
+          recordExamAnswer(examId, parseInt(qi, 10), isCorrect, isCorrect ? parseInt(b.getAttribute('data-score'), 10) : 0);
+        };
+      });
+      document.querySelectorAll('.sp-exam-input').forEach(function (inp) {
+        inp.onblur = function () {
+          var v = (inp.value || '').trim();
+          var correct = (inp.getAttribute('data-correct') || '').trim();
+          var score = parseInt(inp.getAttribute('data-score'), 10) || 0;
+          // 简单判分：关键词匹配
+          var isCorrect = v && correct && v.length > 5 && (v.indexOf(correct) >= 0 || correct.indexOf(v.slice(0, 20)) >= 0);
+          inp.style.borderColor = isCorrect ? '#237804' : '#cf1322';
+          recordExamAnswer(examId, parseInt(inp.getAttribute('data-q'), 10), !!isCorrect, isCorrect ? score : Math.round(score * 0.3));
+        };
+      });
+    }, 80);
+  }
+
+  function recordExamAnswer(examId, qIdx, correct, score) {
+    Store.update(function (s) {
+      var exam = (s.sprintData.mockExams || []).find(function (e) { return e.id === examId; });
+      if (!exam) return;
+      exam.results = exam.results || [];
+      exam.results[qIdx] = { correct: correct, score: score, at: new Date().toISOString() };
+    });
+  }
+
+  function gradeExam(examId, el) {
+    var st = Store.get();
+    var exam = ((st.sprintData && st.sprintData.mockExams) || []).find(function (e) { return e.id === examId; });
+    if (!exam) return;
+    var totalScore = exam.questions.reduce(function (s, q) { return s + (q.score || 0); }, 0);
+    var gotScore = (exam.results || []).reduce(function (s, r) { return s + (r ? r.score || 0 : 0); }, 0);
+    Store.update(function (s) {
+      var e = (s.sprintData.mockExams || []).find(function (x) { return x.id === examId; });
+      if (e) { e.completedAt = new Date().toISOString(); e.score = gotScore; e.duration = e.timeLimit; }
+    });
+    Toast.show('📊 交卷完成：得分 ' + gotScore + '/' + totalScore + '（' + Math.round(gotScore / totalScore * 100) + '%）', 'info', 5000);
+    viewExam(examId, el);
+  }
+
+  // ==================== 命中追踪 ====================
+  function calcHitRate(sprintData) {
+    if (!sprintData || !sprintData.hitTracker || !sprintData.hitTracker.length) return null;
+    var totalHit = 0, totalTopics = 0;
+    sprintData.hitTracker.forEach(function (h) {
+      totalHit += (h.hit || []).length;
+      totalTopics += (h.topics || []).length;
+    });
+    return totalTopics > 0 ? Math.round(totalHit / totalTopics * 100) : null;
+  }
+
+  function hitTrack(el) {
+    var st = Store.get();
+    var tracker = (st.sprintData && st.sprintData.hitTracker) || [];
+    var rows = [];
+    SUBJ_ORDER.forEach(function (subj) {
+      (DB.TOPICS[subj] || []).forEach(function (t) { rows.push({ id: t.id, name: t.name, subj: subj }); });
+    });
+
+    var existingHtml = tracker.length ? tracker.map(function (h, i) {
+      return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">'
+        + '<div style="display:flex;justify-content:space-between"><b>' + U.esc(h.examName || '真题') + '</b><span class="muted-sm">' + (h.year || '') + ' · ' + ((h.at || '').slice(0, 10)) + '</span></div>'
+        + '<div style="font-size:12px;margin-top:4px">押中 ' + (h.hit || []).length + ' / ' + (h.topics || []).length + ' 考点</div>'
+        + '<button class="btn btn-sm btn-ghost sp-hit-del" data-idx="' + i + '" style="margin-top:4px;font-size:11px">删除</button></div>';
+    }).join('') : '<div class="muted-sm">还没有命中记录。做完真题后，在这里记录押题命中情况。</div>';
+
+    var topicOpts = rows.map(function (r) { return '<option value="' + r.id + '">' + subjName(r.subj) + ':' + U.esc(r.name) + '</option>'; }).join('');
+
+    Modal.open({
+      title: '🎯 押题命中追踪', wide: true, dismissable: true,
+      html: '<div class="muted-sm" style="margin-bottom:8px">做完真题后，选择今年真题考过的考点，系统会自动对比你的押题列表，计算命中率。</div>'
+        + '<div class="card-title-sm">添加命中记录</div>'
+        + '<input class="input" id="sp-hit-name" placeholder="真题名称（如 2025数学一）" style="margin:4px 0">'
+        + '<input class="input" id="sp-hit-year" placeholder="年份" style="margin:4px 0;width:100px">'
+        + '<div style="margin:4px 0"><label style="font-size:12px">真题考到的考点（多选）：</label>'
+        + '<select class="input" id="sp-hit-topics" multiple style="height:120px">' + topicOpts + '</select></div>'
+        + '<button class="btn btn-primary btn-sm" id="sp-hit-add" style="margin-top:6px">➕ 添加记录</button>'
+        + '<div class="card-title-sm" style="margin-top:12px">📋 历史记录</div>'
+        + '<div id="sp-hit-list">' + existingHtml + '</div>',
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+
+    setTimeout(function () {
+      var addBtn = document.getElementById('sp-hit-add');
+      if (addBtn) addBtn.onclick = function () {
+        var name = (document.getElementById('sp-hit-name').value || '').trim();
+        var year = (document.getElementById('sp-hit-year').value || '').trim();
+        var topics = Array.from(document.getElementById('sp-hit-topics').selectedOptions || []).map(function (o) { return o.value; });
+        if (!name || !topics.length) { Toast.warn('请填写名称并选择至少一个考点'); return; }
+        // 对比押题列表
+        var st2 = Store.get();
+        var heat = st2.heat || {};
+        var dep = leverageMap();
+        var trends = (st2.sprintData && st2.sprintData.trends) || null;
+        var predicted = [];
+        SUBJ_ORDER.forEach(function (subj) {
+          (DB.TOPICS[subj] || []).forEach(function (t) {
+            var s = scoreOf(t, heat, dep, trends);
+            if (s.score >= 10 && s.lvl < 2) predicted.push(t.id);
+          });
+        });
+        var hit = topics.filter(function (t) { return predicted.indexOf(t) >= 0; });
+        var miss = topics.filter(function (t) { return predicted.indexOf(t) < 0; });
+        Store.update(function (s) {
+          s.sprintData = s.sprintData || {};
+          s.sprintData.hitTracker = s.sprintData.hitTracker || [];
+          s.sprintData.hitTracker.unshift({ examName: name, year: year, topics: topics, hit: hit, miss: miss, at: new Date().toISOString() });
+        });
+        Toast.success('已添加！本次押中 ' + hit.length + '/' + topics.length + ' 考点');
+        Modal.close();
+        hitTrack(el);
+      };
+      document.querySelectorAll('.sp-hit-del').forEach(function (b) {
+        b.onclick = function () {
+          var idx = parseInt(b.getAttribute('data-idx'), 10);
+          Store.update(function (s) {
+            s.sprintData.hitTracker.splice(idx, 1);
+          });
+          Modal.close();
+          hitTrack(el);
+        };
+      });
+    }, 80);
+  }
+
+  // ==================== 冲刺路径规划 ====================
+  function rushPlan(el) {
+    var st = Store.get();
+    var daysLeft = U.daysTo(st.settings.examDate);
+    if (daysLeft <= 0) { Toast.warn('考试日期已过或未设置'); return; }
+
+    var heat = st.heat || {};
+    var dep = leverageMap();
+    var trends = (st.sprintData && st.sprintData.trends) || null;
+    var allRows = [];
+    SUBJ_ORDER.forEach(function (subj) {
+      (DB.TOPICS[subj] || []).forEach(function (t) {
+        var s = scoreOf(t, heat, dep, trends);
+        if (s.score > 0 && s.lvl < 2) allRows.push({ subj: subj, id: t.id, name: t.name, score: s.score, group: t.group || '' });
+      });
+    });
+    allRows.sort(function (a, b) { return b.score - a.score; });
+
+    // 按天分配：每天 3-4 个考点，按科目均衡
+    var perDay = 4;
+    var totalDays = Math.min(daysLeft, Math.ceil(allRows.length / perDay));
+    var days = [];
+    var idx = 0;
+    for (var d = 0; d < totalDays && idx < allRows.length; d++) {
+      var date = new Date(); date.setDate(date.getDate() + d);
+      var tasks = [];
+      // 每天每科最多1个，取剩余最高分
+      var used = {};
+      while (tasks.length < perDay && idx < allRows.length) {
+        var r = allRows[idx++];
+        if (!used[r.subj]) { tasks.push(r); used[r.subj] = true; }
+      }
+      if (tasks.length) days.push({ date: date.toISOString().slice(0, 10), tasks: tasks });
+    }
+
+    var plan = { days: days, generatedAt: new Date().toISOString() };
+    Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.rushPlan = plan; });
+
+    var daysHtml = days.map(function (d, di) {
+      var tasksHtml = d.tasks.map(function (t) {
+        return '<div style="padding:4px 0;font-size:13px"><span class="task-tag" style="background:' + subjColor(t.subj) + ';font-size:10px">' + subjName(t.subj) + '</span> '
+          + U.esc(t.name) + ' <span class="muted-sm">（押题分' + t.score + '）</span></div>';
+      }).join('');
+      var dateLabel = di === 0 ? '今天' : di === 1 ? '明天' : d.date.slice(5);
+      return '<div class="card" style="margin:6px 0;background:var(--bg-muted)"><div class="card-title-sm">📅 ' + dateLabel + ' · 第' + (di + 1) + '天</div>' + tasksHtml + '</div>';
+    }).join('');
+
+    Modal.open({
+      title: '🗺️ 冲刺路径规划（' + totalDays + '天 · 每天约' + perDay + '个考点）', wide: true, dismissable: true,
+      html: '<div class="muted-sm" style="margin-bottom:8px">基于押题评分按天分配冲刺任务，每天每科1个最高分考点。已完成的天数可跳过。</div>' + daysHtml,
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+  }
+
+  // ==================== 事件绑定 ====================
+  function bindControls(el, list) {
+    var subjf = el.querySelector('#sp-subjf'); if (subjf) subjf.onchange = function () { fSubj = subjf.value; render(el); };
+    var priof = el.querySelector('#sp-priof'); if (priof) priof.onchange = function () { fPrio = priof.value; render(el); };
+    var bal = el.querySelector('#sp-balance'); if (bal) bal.onchange = function () { fBalance = bal.checked; render(el); };
+    var showm = el.querySelector('#sp-showm'); if (showm) showm.onchange = function () { fShowMastered = showm.checked; render(el); };
+    var copy = el.querySelector('#sp-copy'); if (copy) copy.onclick = function () { copyList(list); };
+
+    var tBtn = el.querySelector('#sp-ai-trend'); if (tBtn) tBtn.onclick = function () { aiTrend(el); };
+    var eBtn = el.querySelector('#sp-ai-exam'); if (eBtn) eBtn.onclick = function () { aiExam(el); };
+    var rBtn = el.querySelector('#sp-ai-reason'); if (rBtn) rBtn.onclick = function () { aiReasons(el); };
+    var pBtn = el.querySelector('#sp-rush-plan'); if (pBtn) pBtn.onclick = function () { rushPlan(el); };
+    var hBtn = el.querySelector('#sp-hit-track'); if (hBtn) hBtn.onclick = function () { hitTrack(el); };
+
+    el.querySelectorAll('.sp-prac').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id'), subj = b.getAttribute('data-subj'), name = b.getAttribute('data-name');
+        if (window.QuizModule && QuizModule.startVariant) {
+          App.go('quiz');
+          setTimeout(function () { QuizModule.startVariant({ subject: subj, type: 'concept', desc: name, refId: id }); }, 0);
+        } else { App.go('quiz'); }
+      };
+    });
+    el.querySelectorAll('.sp-master').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id'); var name = b.getAttribute('data-name');
+        Store.update(function (s) { s.heat = s.heat || {}; s.heat[id] = { level: 2, score: 90, updatedAt: new Date().toISOString() }; });
+        if (id[0] === 'm' && window.Store && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
+        Toast.success('✓ 已标记「' + name + '」为掌握');
+        App.refresh();
+      };
+    });
+    el.querySelectorAll('.sp-recover').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id');
+        Store.update(function (s) { s.heat = s.heat || {}; s.heat[id] = { level: 0, score: null, updatedAt: new Date().toISOString() }; });
+        if (id[0] === 'm' && window.Store && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
+        Toast.success('已恢复为薄弱');
+        App.refresh();
+      };
+    });
+
+    // 显示已有押题卷列表
+    var st = Store.get();
+    var exams = (st.sprintData && st.sprintData.mockExams) || [];
+    if (exams.length) {
+      var zone = el.querySelector('#sp-ai-zone');
+      // 不覆盖正在进行的 AI 操作
+      if (zone && !zone.querySelector('.skl-line')) {
+        var examsHtml = '<div class="card" style="background:var(--bg-muted);margin:8px 0"><div class="card-title-sm">📝 已生成的押题卷</div>'
+          + exams.slice(0, 5).map(function (e) {
+            var totalScore = e.questions.reduce(function (s, q) { return s + (q.score || 0); }, 0);
+            var done = e.completedAt != null;
+            return '<div style="padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer" data-exam="' + e.id + '">'
+              + '<div style="display:flex;justify-content:space-between"><span>' + U.esc(e.title) + '</span>'
+              + '<span class="muted-sm" style="font-size:12px">' + (done ? '✓ ' + (e.score || 0) + '/' + totalScore : e.questions.length + '题') + ' · ' + ((e.createdAt || '').slice(0, 10)) + '</span></div></div>';
+          }).join('') + '</div>';
+        zone.innerHTML = examsHtml;
+        zone.querySelectorAll('[data-exam]').forEach(function (row) {
+          row.onclick = function () { viewExam(row.getAttribute('data-exam'), el); };
+        });
+      }
+    }
+  }
+
+  function copyList(list) {
+    var txt = '【考研智能押题清单】\n生成时间：' + new Date().toLocaleDateString() + '\n\n';
+    list.forEach(function (r, i) {
+      txt += (i + 1) + '. [' + subjName(r.subj) + '] ' + r.name + ' — 押题分' + r.score
+        + '（考频' + r.examFreq + '×时效' + r.timeliness + '×薄弱' + r.weakness + '×杠杆' + r.leverage + '×难度' + r.diffMatch + '）\n';
+    });
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(txt).then(function () { Toast.success('已复制 ' + list.length + ' 条'); }, function () { fallbackCopy(txt); });
         return;
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {}
     fallbackCopy(txt);
   }
   function fallbackCopy(txt) {
-    Modal.open({ title: '📋 冲刺清单（请手动复制）', html: '<textarea class="input" rows="10" style="width:100%">' + U.esc(txt) + '</textarea>', actions: [{ label: '关闭' }] });
+    Modal.open({ title: '📋 押题清单（请手动复制）', html: '<textarea class="input" rows="12" style="width:100%">' + U.esc(txt) + '</textarea>', actions: [{ label: '关闭' }] });
   }
 
-  window.SprintModule = { render };
+  window.SprintModule = { render: render };
 })();
 
 
@@ -11965,7 +13199,7 @@ function bind(el, next) {
   }
 
   function extractJSON(txt) {
-    try { var m = AI.stripThinking(txt || '').match(/\{[\s\S]*\}/); if (!m) return null; return JSON.parse(m[0]); }
+    try { var m = txt.match(/\{[\s\S]*\}/); if (!m) return null; return JSON.parse(m[0]); }
     catch (e) { return null; }
   }
 
@@ -13245,11 +14479,11 @@ function bind(el, next) {
     if (!retrying && extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); return; }
     extractJob = { status: 'running', source: source + (retrying ? '·精简重试' : ''), startedAt: Date.now(), thumb: imageDataUrl || '' };
     // 提取要求“每次都重新看图”，跳过响应缓存，避免命中旧的坏结果
-    // 思考模式：不再强制关闭——尊重用户全局思考设置；开思考时 reasoning 会占用预算，
-    //   故把 maxTokens 提到 12000 兜底（一次可能 40+ 词条含例句），避免「推理+JSON」被腰斩。
-    //   如用户全局关了思考，则自动走快速路径；如显式要快速可传 { noThink:true }。
+    // noThink：结构化提取强制关闭思考模式——开思考时 reasoning 会吃掉 max_tokens 预算，
+    //          导致正式 JSON 输出被腰斩（这正是「开思考模式必失败」的根因）
+    // maxTokens 8000：一次可能要输出 40+ 词条（含例句），默认预算不够
     AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl, {
-      cache: false, maxTokens: 12000
+      cache: false, noThink: true, maxTokens: 8000
     }).then(function (arr) {
       var items = normalizeExtracted(arr);
       if (!items.length) throw new Error('AI 未提取到有效词条');
@@ -14251,7 +15485,9 @@ function bind(el, next) {
       + '<div class="btn-row" style="margin-top:8px">'
       + '<button class="btn btn-ghost" id="cp-ai"' + (aiReady ? '' : ' disabled') + '>' + U.icon('quiz') + ' 按专业课生成画像</button>'
       + '<button class="btn btn-primary" id="cp-save">保存画像</button>'
-      + '</div></div>';
+      + '</div>'
+      + '<div id="cp-ai-zone" style="display:none;margin-top:8px"></div>'
+      + '</div>';
 
     // ---- 调度引擎与目标分（AI 编排可配）----
     const schedCard =
@@ -14346,7 +15582,9 @@ function bind(el, next) {
           + '</div>'
           + '<div class="btn-row" style="margin-top:8px">'
           + '<button class="btn btn-ghost" id="st-ai-school"' + (aiReady ? '' : ' disabled') + '>' + U.icon('quiz') + ' AI 择校推荐（基于当前专业+进度）</button>'
-          + '</div></div>';
+          + '</div>'
+          + '<div id="st-ai-school-zone" style="display:none;margin-top:8px"></div>'
+          + '</div>';
       })()
 
       // 周目标
@@ -14712,17 +15950,31 @@ function bind(el, next) {
       });
       Toast.success('教练画像已保存'); App.refresh();
     };
-    // 教练画像：AI 按专业课生成
+    // 教练画像：AI 按专业课生成（非阻塞：按钮变「生成中」+ 原位流式输出）
     const cpAi = el.querySelector('#cp-ai');
     if (cpAi) cpAi.onclick = () => {
       if (!AI.configured()) { Toast.warn('请先保存 AI 配置'); return; }
+      if (cpAi.disabled) return;
       const major = (Store.get().settings.examConfig && Store.get().settings.examConfig.profName) || '专业课';
       const sys = '你是考研教练画像设计师。根据考生的专业课，生成该考生的「数学致命弱点描述」「分心源画像」「红线备注（违禁词）」。只输出 JSON，不要多余文字、不要 markdown：{"mathWeak":"...","distractions":"...","redlineNote":"..."}';
       const usr = '考生专业课：' + major + '\n请生成贴合该专业的教练画像：数学弱点要具体到该专业常见计算坑；分心源要现实；红线备注点明绝对不能说的丧气话。';
-      Modal.open({ title: '🤖 生成教练画像…', wide: true, dismissable: false, html: '<div class="muted-sm">正在按「' + U.esc(major) + '」生成画像…</div><pre class="report" id="cp-out">思考中…</pre>', actions: [{ label: '关闭', kind: 'btn-ghost' }] });
-      const out = document.getElementById('cp-out');
+      const zone = el.querySelector('#cp-ai-zone');
+      const origLabel = cpAi.innerHTML;
+      cpAi.disabled = true;
+      cpAi.innerHTML = U.icon('quiz') + ' 🔄 生成中...';
+      if (zone) {
+        zone.style.display = '';
+        zone.innerHTML = '<div class="muted-sm">正在按「' + U.esc(major) + '」生成画像…</div><pre class="report" id="cp-out">思考中…</pre>';
+      }
+      const out = zone ? zone.querySelector('#cp-out') : null;
       AI.chatStream(sys, usr, function (txt) { if (out) out.textContent = txt; }).then(function (full) {
-        const m = full.match(/\{[\s\S]*\}/); if (!m) { if (out) out.textContent = full + '\n（未能解析为结构化结果）'; Toast.warn('生成未结构化'); return; }
+        const m = full.match(/\{[\s\S]*\}/);
+        if (!m) {
+          if (out) out.textContent = full + '\n（未能解析为结构化结果）';
+          Toast.warn('生成未结构化');
+          cpAi.disabled = false; cpAi.innerHTML = origLabel;
+          return;
+        }
         const j = JSON.parse(m[0]);
         if (el.querySelector('#cp-mathweak')) el.querySelector('#cp-mathweak').value = j.mathWeak || '';
         if (el.querySelector('#cp-dist')) el.querySelector('#cp-dist').value = j.distractions || '';
@@ -14733,8 +15985,19 @@ function bind(el, next) {
           s.settings.coachProfile.distractions = j.distractions || '分心/畏难';
           s.settings.coachProfile.redlineNote = j.redlineNote || '“二战”是违禁词';
         });
-        Modal.close(); Toast.success('已按专业课生成并保存画像'); App.refresh();
-      }).catch(function (e) { if (out) out.textContent = '生成失败：' + e.message; });
+        Toast.success('已按专业课生成并保存画像'); App.refresh();
+      }).catch(function (e) {
+        if (out) out.textContent = '生成失败：' + (e && e.message ? e.message : String(e));
+        if (zone) {
+          const errBox = document.createElement('div');
+          errBox.className = 'alert alert-danger';
+          errBox.style.marginTop = '6px';
+          errBox.textContent = '生成失败：' + (e && e.message ? e.message : String(e));
+          zone.appendChild(errBox);
+        }
+        Toast.danger('教练画像生成失败');
+        cpAi.disabled = false; cpAi.innerHTML = origLabel;
+      });
     };
     // 调度：AI 开关
     const scUse = el.querySelector('#sc-useai');
@@ -14762,10 +16025,11 @@ function bind(el, next) {
       Toast.success('调度与目标分已保存');
     };
 
-    // AI 择校推荐（基于当前专业 + 考生进度 + 数学能力）
+    // AI 择校推荐（基于当前专业 + 考生进度 + 数学能力）—— 非阻塞：按钮变「分析中」+ 原位流式输出
     const aiSchBtn = el.querySelector('#st-ai-school');
     if (aiSchBtn) aiSchBtn.onclick = () => {
       if (!AI.configured()) { Toast.warn('请先保存 AI 配置', 4000); return; }
+      if (aiSchBtn.disabled) return;
       var _p2 = (Store.get().settings.examConfig && Store.get().settings.examConfig.profName) || '自控原理';
       var _acc = Store.currentMathAccuracy();
       var _xkPct = Store.profAdvancedPercent();
@@ -14787,28 +16051,30 @@ function bind(el, next) {
         + '}\n'
         + '\n要求：院校必须真实存在且开设「' + _p2 + '」相关专业；分数线基于近年大致水平（标注"仅供参考"）；只输出 JSON。';
 
-      Modal.open({
-        title: '🤖 AI 正在为「' + U.esc(_p2) + '」择校推荐…',
-        wide: true, dismissable: false,
-        html: '<div class="muted-sm">⏳ 正在分析你的进度与匹配度，请稍候…</div>'
+      var zone = el.querySelector('#st-ai-school-zone');
+      var origLabel = aiSchBtn.innerHTML;
+      aiSchBtn.disabled = true;
+      aiSchBtn.innerHTML = U.icon('quiz') + ' 🔄 分析中...';
+      if (zone) {
+        zone.style.display = '';
+        zone.innerHTML = '<div class="muted-sm">⏳ 正在分析你的进度与匹配度，请稍候…</div>'
           + '<div id="aisch-think-wrap" style="display:none;margin-top:10px">'
           + '<div class="card-title-sm" style="opacity:.7">💭 思考过程</div>'
           + '<pre class="report" id="aisch-think" style="max-height:140px;overflow:auto;opacity:.72;font-size:12px;white-space:pre-wrap"></pre></div>'
           + '<div id="aisch-content-wrap" style="display:none;margin-top:10px">'
           + '<div class="card-title-sm">📋 推荐结果</div>'
-          + '<div id="aisch-result" style="max-height:300px;overflow:auto;font-size:13px"></div></div>',
-        actions: [{ label: '关闭', kind: 'btn-ghost', id: 'aisc-close-btn' }]
-      });
+          + '<div id="aisch-result" style="max-height:300px;overflow:auto;font-size:13px"></div></div>';
+      }
 
       AI.chatStream(prompt, '请按上述要求生成院校推荐 JSON', function (text, reasoning) {
-        var tw = document.getElementById('aisch-think');
-        var cw = document.getElementById('aisch-content-wrap');
-        var cr = document.getElementById('aisch-result');
+        var tw = zone ? zone.querySelector('#aisch-think') : null;
+        var cw = zone ? zone.querySelector('#aisch-content-wrap') : null;
+        var cr = zone ? zone.querySelector('#aisch-result') : null;
         if (reasoning && tw) { tw.style.display = ''; tw.textContent = reasoning; tw.scrollTop = tw.scrollHeight; }
         if (text && cw) { cw.style.display = ''; cr.textContent = text; cr.scrollTop = cr.scrollHeight; }
       }).then(function (fullText) {
         // 尝试解析 JSON 并渲染为结构化卡片
-        var jsonStr = AI.stripThinking(fullText || '');
+        var jsonStr = fullText;
         var jm = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
         if (jm) jsonStr = jm[1];
         try {
@@ -14829,16 +16095,23 @@ function bind(el, next) {
               + (sc.reason ? '<div style="margin-top:4px;background:#f5f5f5;padding:6px;border-radius:4px;font-size:11px">' + U.esc(sc.reason) + '</div>' : '')
               + '</div>';
           });
-          var resultEl = document.getElementById('aisch-result');
+          var resultEl = zone ? zone.querySelector('#aisch-result') : null;
           if (resultEl) resultEl.innerHTML = cards;
+          Toast.success('AI 择校推荐已生成');
         } catch (e) {
           // 解析失败，保留原始文本
-          var resultEl = document.getElementById('aisch-result');
+          var resultEl = zone ? zone.querySelector('#aisch-result') : null;
           if (resultEl) resultEl.innerHTML = '<pre style="white-space:pre-wrap">' + U.esc(fullText) + '</pre>';
+          Toast.warn('结果未能解析为结构化卡片');
         }
+        aiSchBtn.disabled = false; aiSchBtn.innerHTML = origLabel;
       }).catch(function (err) {
         var msg = err && err.message ? err.message : String(err || '未知错误');
-        Modal.open({ title: 'AI 推荐失败', html: '<p>请求失败：' + U.esc(msg) + '</p><p class="muted-sm">请检查 API 配置（地址/密钥/模型名）后重试。</p>', actions: [{ label: '知道了' }] });
+        if (zone) {
+          zone.innerHTML = '<div class="alert alert-danger">AI 推荐失败：' + U.esc(msg) + '<br><span class="muted-sm">请检查 API 配置（地址/密钥/模型名）后重试。</span></div>';
+        }
+        Toast.danger('AI 择校推荐失败');
+        aiSchBtn.disabled = false; aiSchBtn.innerHTML = origLabel;
       });
     };
 
@@ -15413,9 +16686,13 @@ function bind(el, next) {
               s.settings.targetSchool = collected.school;
               s.settings.onboarded = true;
             });
-            c();
-            // 加载 / AI 生成专业课知识体系，再进入系统
-            finalizeMajor(collected.examConfig.profName || '自控原理');
+            var profName = collected.examConfig.profName || '自控原理';
+            var inRegistry = DB.MAJOR_REGISTRY && DB.MAJOR_REGISTRY[profName];
+            var inCache = (Store.get().majorData || {})[profName];
+            var needAI = !inRegistry && !inCache && typeof AI !== 'undefined' && AI.configured();
+            // 不需要 AI 生成时立即关闭向导；需要时由 genMajorWithAI 在完成后关闭（期间不可跳过）
+            if (!needAI) c();
+            finalizeMajor(profName);
           }
         }]
       );
@@ -15448,20 +16725,51 @@ function bind(el, next) {
     }
   }
 
-  // 弹出流式进度弹窗，调用 AI 生成专业数据
+  // 检测引导向导 Modal 是否打开（用于在引导流程中原位显示进度）
+  function getOnboardingModal() {
+    var ov = document.getElementById('modal-overlay');
+    if (!ov) return null;
+    var t = ov.querySelector('.modal-title');
+    return (t && /初始化/.test(t.textContent || '')) ? ov : null;
+  }
+
+  // 非阻塞式生成专业课知识体系：
+  //   引导向导中 → 替换 Modal 内容原位显示进度（保持不可跳过）；
+  //   设置页切换 → 浮动面板显示进度，用户可继续操作页面其他部分。
   function genMajorWithAI(profName) {
-    Modal.open({
-      title: '🤖 正在为「' + profName + '」生成专业课知识体系…',
-      wide: true, dismissable: false,
-      html: '<div class="muted-sm" id="gm-status">⏳ 正在连接模型，请稍候（约需 10-30 秒）…</div>'
-        + '<div id="gm-think-wrap" style="display:none;margin-top:10px">'
-        + '<div class="card-title-sm" style="opacity:.7">💭 思考过程</div>'
-        + '<pre class="report" id="gm-think" style="max-height:160px;overflow:auto;opacity:.72;font-size:12px;white-space:pre-wrap"></pre></div>'
-        + '<div id="gm-content-wrap" style="display:none;margin-top:10px">'
-        + '<div class="card-title-sm">📝 生成内容</div>'
-        + '<pre class="report" id="gm-content" style="max-height:220px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre></div>',
-      actions: []
-    });
+    var obModal = getOnboardingModal();
+    var progressHtml =
+      '<div class="muted-sm" id="gm-status">⏳ 正在连接模型，请稍候（约需 10-30 秒）…</div>'
+      + '<div id="gm-think-wrap" style="display:none;margin-top:10px">'
+      + '<div class="card-title-sm" style="opacity:.7">💭 思考过程</div>'
+      + '<pre class="report" id="gm-think" style="max-height:160px;overflow:auto;opacity:.72;font-size:12px;white-space:pre-wrap"></pre></div>'
+      + '<div id="gm-content-wrap" style="display:none;margin-top:10px">'
+      + '<div class="card-title-sm">📝 生成内容</div>'
+      + '<pre class="report" id="gm-content" style="max-height:220px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre></div>'
+      + '<div id="gm-error" style="display:none;margin-top:10px"></div>';
+
+    if (obModal) {
+      // 引导向导：替换 Modal 内容为进度显示（保持 dismissable:false 不可跳过）
+      var title = obModal.querySelector('.modal-title');
+      if (title) title.textContent = '🤖 正在为「' + profName + '」生成专业课知识体系…';
+      var body = obModal.querySelector('.modal-body');
+      if (body) body.innerHTML = progressHtml;
+      var foot = obModal.querySelector('.modal-foot');
+      if (foot) foot.innerHTML = '';
+    } else {
+      // 非引导场景（设置页切换专业）：创建非阻塞浮动面板
+      var panel = document.createElement('div');
+      panel.id = 'gm-panel';
+      panel.style.cssText = 'position:fixed;bottom:16px;right:16px;width:380px;max-width:calc(100vw - 32px);max-height:70vh;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:0 4px 20px rgba(0,0,0,.12);z-index:9000;overflow:hidden;display:flex;flex-direction:column';
+      panel.innerHTML =
+        '<div style="padding:10px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center">'
+        + '<span style="font-weight:600;font-size:13px">🤖 正在为「' + U.esc(profName) + '」生成专业课知识体系…</span>'
+        + '<button id="gm-panel-x" aria-label="关闭" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);padding:0 4px;line-height:1">×</button></div>'
+        + '<div style="padding:12px 14px;overflow-y:auto;flex:1">' + progressHtml + '</div>';
+      document.body.appendChild(panel);
+      var xBtn = panel.querySelector('#gm-panel-x');
+      if (xBtn) xBtn.onclick = function () { panel.remove(); };
+    }
 
     DB.generateMajorAI(profName, function (text) {
       var st = document.getElementById('gm-status');
@@ -15471,7 +16779,9 @@ function bind(el, next) {
       if (cw) cw.style.display = '';
       if (ce) { ce.textContent = text || ''; ce.scrollTop = ce.scrollHeight; }
     }).then(function (data) {
-      if (Modal.close) Modal.close();
+      // 关闭引导 Modal 或移除浮动面板
+      if (obModal) { if (Modal.close) Modal.close(); }
+      else { var p = document.getElementById('gm-panel'); if (p) p.remove(); }
       DB.syncSubjects();
       if (data) {
         Toast.success('已为「' + profName + '」生成专属考点体系，初始化完成！');
@@ -15480,7 +16790,6 @@ function bind(el, next) {
       }
       App.refresh();
     }).catch(function (err) {
-      if (Modal.close) Modal.close();
       DB.syncSubjects();
       var reason = (err && err.message) || '未知网络错误';
       // 精简用户可见的错误信息
@@ -15489,8 +16798,34 @@ function bind(el, next) {
       else if (/HTTP\s*5\d{2}/.test(reason)) userMsg = 'AI 服务端错误（' + reason + '）。请稍后重试。';
       else if (/Failed to fetch|NetworkError|Load failed/i.test(reason)) userMsg = '网络连接失败。请检查网络后重试。';
       else if (/timeout/i.test(reason)) userMsg = '请求超时。模型响应较慢或网络不稳定，请稍后重试。';
-      Toast.warn('AI 生成失败：' + userMsg + '\n已按通用模式初始化。', 8000);
-      App.refresh();
+      // 原位显示错误（不关闭 Modal/面板）
+      var errEl = document.getElementById('gm-error');
+      if (errEl) {
+        errEl.style.display = '';
+        errEl.className = 'warn-box';
+        errEl.innerHTML = '<div class="warn-body">⚠ AI 生成失败：' + U.esc(userMsg) + '<br>已按通用模式初始化。</div>';
+      }
+      if (obModal) {
+        // 引导场景：显示重试 + 跳过按钮（保持不可跳过直到用户选择）
+        var foot2 = obModal.querySelector('.modal-foot');
+        if (foot2) {
+          foot2.innerHTML = '';
+          var retryBtn = document.createElement('button');
+          retryBtn.className = 'btn btn-primary';
+          retryBtn.textContent = '重试';
+          retryBtn.onclick = function () { genMajorWithAI(profName); };
+          foot2.appendChild(retryBtn);
+          var skipBtn = document.createElement('button');
+          skipBtn.className = 'btn btn-ghost';
+          skipBtn.textContent = '跳过，进入系统';
+          skipBtn.onclick = function () { if (Modal.close) Modal.close(); App.refresh(); };
+          foot2.appendChild(skipBtn);
+        }
+      } else {
+        // 非引导场景：Toast 通知 + 刷新
+        Toast.warn('AI 生成失败：' + userMsg + '\n已按通用模式初始化。', 8000);
+        App.refresh();
+      }
     });
   }
 
@@ -15576,6 +16911,64 @@ function bind(el, next) {
   var composing = false; // IME 组合输入中标记
   var searchTimer = null;
 
+  // 非阻塞 AI 任务注册表：{ photoId: { status, content, reasoning, error, startedAt } }
+  // status: 'analyzing' | 'done' | 'error'
+  var activeTasks = {};
+
+  // 更新单个卡片的 AI 状态徽章（不重建整个列表，避免输入法/滚动抖动）
+  function updateCardBadge(id) {
+    var card = document.querySelector('.pm-card[data-id="' + id + '"]');
+    if (!card) return;
+    var meta = card.querySelector('.pm-meta');
+    if (!meta) return;
+    // 移除旧徽章
+    var oldBadge = meta.querySelector('.pm-ai-badge');
+    if (oldBadge) oldBadge.remove();
+    // 同时检查解析任务(id)和出题任务(sim_id)
+    var task = activeTasks[id];
+    var simTask = activeTasks['sim_' + id];
+    if (!task && !simTask) return;
+    var badge = document.createElement('span');
+    badge.className = 'pm-ai-badge tag';
+    var activeTask = task || simTask;
+    var taskKey = task ? id : ('sim_' + id);
+    var label = simTask && !task ? '出题' : '解析';
+    if (activeTask.status === 'analyzing') {
+      badge.style.cssText = 'background:#096dd9;color:#fff;margin-left:4px;cursor:pointer';
+      badge.textContent = '🔄 AI ' + label + '中…';
+      badge.title = '点击查看进度';
+      badge.onclick = function () { viewProgress(taskKey); };
+    } else if (activeTask.status === 'error') {
+      badge.style.cssText = 'background:#cf1322;color:#fff;margin-left:4px;cursor:pointer';
+      badge.textContent = '❌ ' + label + '失败（点击查看）';
+      badge.onclick = function () { viewProgress(taskKey); };
+    }
+    meta.appendChild(badge);
+  }
+
+  // 查看流式进度（非阻塞浮窗，可关闭，关闭后任务继续后台运行）
+  function viewProgress(id) {
+    var task = activeTasks[id];
+    if (!task) return;
+    var statusText = task.status === 'analyzing' ? '🔄 AI 解析中…' : task.status === 'error' ? '❌ 解析失败' : '✓ 解析完成';
+    var errorHtml = task.error ? '<div style="margin-top:8px;color:#cf1322;font-size:13px;white-space:pre-wrap">' + U.esc(task.error) + '</div>' : '';
+    var thinkDisplay = task.reasoning ? '' : 'display:none;';
+    var contentDisplay = task.content ? '' : 'display:none;';
+    Modal.open({
+      title: '🤖 AI 解析进度',
+      wide: true, dismissable: true,
+      html: '<div class="muted-sm" id="pm-prog-status">' + statusText + '</div>'
+        + '<div id="pm-prog-think-wrap" style="' + thinkDisplay + 'margin-top:8px">'
+        + '<div class="card-title-sm" style="opacity:.7">💭 思考过程</div>'
+        + '<pre class="report" id="pm-prog-think" style="max-height:180px;overflow:auto;opacity:.72;font-size:12px;white-space:pre-wrap">' + U.esc(task.reasoning || '') + '</pre></div>'
+        + '<div id="pm-prog-content-wrap" style="' + contentDisplay + 'margin-top:8px">'
+        + '<div class="card-title-sm">📝 解析内容</div>'
+        + '<pre class="report" id="pm-prog-content" style="max-height:240px;overflow:auto;white-space:pre-wrap">' + U.esc(task.content || '') + '</pre></div>'
+        + errorHtml,
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+  }
+
   // 轻量筛选：仅切换卡片显隐，不重建 DOM（搜索框与输入法会话始终存活，杜绝闪/失焦）
   function applyFilterLight(el) {
     var ql = (q || '').toLowerCase();
@@ -15637,11 +17030,15 @@ function bind(el, next) {
   function weaknessCardHtml(s) {
     var wp = s.weaknessProfile;
     var painCnt = countPainPoints(s);
+    var weakTask = activeTasks['weakness'];
+    var weakBtnText = weakTask && weakTask.status === 'analyzing' ? '🔄 分析中...'
+      : weakTask && weakTask.status === 'error' ? '❌ 分析失败（点击查看）'
+      : (wp ? '🔄 重新分析' : '🧠 分析薄弱点');
     var header = '<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">'
       + '<span>📊 我的薄弱点画像</span>'
       + '<span style="display:flex;gap:4px">'
       + (typeof AI !== 'undefined' && AI.configured()
-          ? '<button class="btn btn-ghost pm-weak-btn" data-act="weak" style="font-size:11px;padding:3px 8px">' + (wp ? '🔄 重新分析' : '🧠 分析薄弱点') + '</button>'
+          ? '<button class="btn btn-ghost pm-weak-btn" data-act="weak" style="font-size:11px;padding:3px 8px">' + weakBtnText + '</button>'
           : '')
       + '</span></div>';
 
@@ -15731,6 +17128,9 @@ function bind(el, next) {
         // AI 解析区域（TeX 渲染）
         if (hasAI) {
           cardsHtml += '<div class="pm-ai">';
+          if (p.aiAnalysis.reasoning) {
+            cardsHtml += '<details class="pm-ai-think" style="margin-bottom:6px"><summary style="cursor:pointer;opacity:.7;font-size:12px">💭 思考过程</summary><pre class="report" style="max-height:180px;overflow:auto;opacity:.72;font-size:12px;white-space:pre-wrap;margin-top:4px">' + U.esc(p.aiAnalysis.reasoning) + '</pre></details>';
+          }
           if (p.aiAnalysis.keySteps) {
             cardsHtml += '<div class="pm-ai-section"><b>🔑 解题关键：</b><div class="pm-ai-body">' + renderMath(p.aiAnalysis.keySteps) + '</div></div>';
           }
@@ -15744,6 +17144,7 @@ function bind(el, next) {
         if (hasSimilar) {
           cardsHtml += '<div class="pm-similar">'
             + '<div class="pm-ai-section"><b>🔄 举一反三：</b></div>'
+            + (p.similarProblem.reasoning ? '<details class="pm-similar-think" style="margin-bottom:6px"><summary style="cursor:pointer;opacity:.7;font-size:12px">💭 思考过程</summary><pre class="report" style="max-height:180px;overflow:auto;opacity:.72;font-size:12px;white-space:pre-wrap;margin-top:4px">' + U.esc(p.similarProblem.reasoning) + '</pre></details>' : '')
             + '<div class="pm-similar-q"><b>题目：</b>' + renderMath(p.similarProblem.question) + '</div>'
             + (p.similarProblem.solution ? '<div class="pm-similar-a"><b>解答：</b>' + renderMath(p.similarProblem.solution) + '</div>' : '')
             + '</div>';
@@ -15972,86 +17373,49 @@ function bind(el, next) {
     App.refresh();
   }
 
-  // 统一的 AI 生成弹窗：可关闭 + spinner + 实时计时 + 取消（abort 信号）
-  // 解决"前端看起来阻塞、不知道是否在生成"& 长推理被误杀后无法取消的问题
-  // 增强关闭后体验：弹窗关闭时若仍在生成，自动在状态栏注入轻量进度指示器（计时+可取消），
-  //   用户随时知道后台还在跑；完成后自动消失并 Toast 通知结果。
-  function openAiGenModal(title) {
-    var ac = new AbortController();
-    var cancelled = false;
-    var done = false;
-    var t0 = Date.now();
-    Modal.open({
-      title: title,
-      wide: true,
-      dismissable: true,   // 允许关闭，生成继续在后台，完成后自动保存
-      html: '<div class="pm-ai-gen">'
-        + '<div><span class="spinner"></span><b>AI 正在生成…</b><span id="pm-ai-elapsed" style="color:#888;margin-left:6px"> 0s</span></div>'
-        + '<div class="muted-sm">开启「AI 思考模式」时模型会先内部推理，首段文字可能要等一会儿，请耐心等待；此窗口可关闭，结果会在完成后自动保存。</div>'
-        + '</div>'
-        + '<pre class="report" id="pm-ai-out" style="white-space:pre-wrap;max-height:350px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#fafafa;font-size:13px">准备中…</pre>',
-      actions: [
-        { label: '取消', kind: 'btn-ghost', onClick: function () { cancelled = true; try { ac.abort(); } catch (e) {} Modal.close(); } },
-        { label: '关闭', kind: 'btn-ghost' }
-      ]
-    });
-    var out = document.getElementById('pm-ai-out');
-    var timer = setInterval(function () {
-      var el = document.getElementById('pm-ai-elapsed');
-      if (el) el.textContent = ' ' + Math.floor((Date.now() - t0) / 1000) + 's';
-      // 状态栏全局进度指示器同步更新计时
-      updateGlobalProgress();
-    }, 1000);
-
-    // ---------- 全局进度指示器：弹窗关闭后注入状态栏，完成后自动移除 ----------
-    var globalEl = null;
-    function ensureGlobalProgress() {
-      if (globalEl && document.body.contains(globalEl)) return;
-      if (done || cancelled) return;
-      var sb = document.getElementById('statusbar');
-      if (!sb) return;
-      globalEl = document.createElement('span');
-      globalEl.id = 'pm-global-progress';
-      globalEl.className = 'sb-item';
-      globalEl.style.cssText = 'background:#e8f0fe;color:#1a56c4;font-size:11px;padding:2px 8px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px';
-      globalEl.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px"></span>AI生成中<span id="pm-gp-elapsed"> 0s</span>';
-      globalEl.title = '点击取消';
-      globalEl.onclick = function () { cancelled = true; try { ac.abort(); } catch (e) {} removeGlobalProgress(); };
-      sb.appendChild(globalEl);
-    }
-    function updateGlobalProgress() {
-      if (!globalEl || !document.body.contains(globalEl)) { ensureGlobalProgress(); return; }
-      var el = document.getElementById('pm-gp-elapsed');
-      if (el) el.textContent = ' ' + Math.floor((Date.now() - t0) / 1000) + 's';
-    }
-    function removeGlobalProgress() {
-      if (globalEl && globalEl.parentNode) globalEl.parentNode.removeChild(globalEl);
-      globalEl = null;
-    }
-
-    // 监听弹窗关闭：若尚未完成则激活全局进度
-    var closeWatcher = setInterval(function () {
-      if (out && !document.body.contains(out) && !done && !cancelled) ensureGlobalProgress();
-      if (done || cancelled) { clearInterval(closeWatcher); }
-    }, 500);
-
-    return {
-      ac: ac, out: out, timer: timer,
-      cancelled: function () { return cancelled; },
-      stopTimer: function () { clearInterval(timer); clearInterval(closeWatcher); done = true; removeGlobalProgress(); },
-      // 安全写入：仅当 out 仍在 DOM 中才写入（防止弹窗关闭后报错/静默失败）
-      safeWrite: function (html) { if (out && document.body.contains(out)) { out.innerHTML = html; out.scrollTop = out.scrollHeight; } },
-      // 仅当本弹窗仍是当前弹窗时才关闭：用户中途关掉后，后台完成不应误关别的窗口
-      closeIfMine: function () {
-        if (out && document.body.contains(out)) Modal.close();
+  // ---------- 从 AI 返回文本中提取 JSON ----------
+  function extractJSON(raw) {
+    var s = (raw || '').trim();
+    // 先试 markdown 代码块
+    var m = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (m) { s = m[1].trim(); var r1 = tryParseRepair(s); if (r1) return r1; }
+    // 遍历所有 { 位置，逐个尝试括号深度计数 + 解析（避免 LaTeX \frac{a} 的花括号干扰）
+    for (var start = 0; start < s.length; start++) {
+      if (s.charAt(start) !== '{') continue;
+      var depth = 0, inStr = false, escape = false, end = -1;
+      for (var i = start; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (escape) { escape = false; continue; }
+        if (c === '\\') { escape = true; continue; }
+        if (c === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (c === '{') depth++;
+        else if (c === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
       }
-    };
+      if (end > start) {
+        var r2 = tryParseRepair(s.slice(start, end));
+        if (r2) return r2;
+      }
+    }
+    return null;
+  }
+
+  // 尝试 JSON.parse 并修复 LaTeX 转义吞字符问题
+  function tryParseRepair(jsonStr) {
+    // 直接解析
+    try { return Tex.repairMangledLatex(JSON.parse(jsonStr)); } catch (e) {}
+    // 安全修复后重试（AI.repairJsonSafely：注释/尾逗号/裸换行/单引号串，
+    // 但只在字符串外替换，不会破坏英文里的 don't / it's 撇号）
+    try { return Tex.repairMangledLatex(JSON.parse(AI.repairJsonSafely(jsonStr))); } catch (e) {}
+    return null;
   }
 
   function analyzePhoto(id, el) {
     var s = Store.get();
     var photo = (s.mistakePhotos || []).find(function (p) { return p.id === id; });
     if (!photo) return;
+    // 已有任务在跑 → 不重复启动，直接查看进度
+    if (activeTasks[id] && activeTasks[id].status === 'analyzing') { viewProgress(id); return; }
 
     var majorName = '';
     try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
@@ -16071,44 +17435,64 @@ function bind(el, next) {
       + (photo.note ? '\n考生备注：' + photo.note : '')
       + '\n科目：' + (DB.SUBJECTS[photo.subject] ? DB.SUBJECTS[photo.subject].name : photo.subject);
 
-    var gen = openAiGenModal('🤖 AI 解析中…');
-    var out = gen.out;
-    // 直接复用与其他模块一致的 AI.chatJSON（内部走 AI.extractRobustJSON，已含思考块剥离 stripThinking），
-    // 思考模式下解析稳健，不再依赖本地脆弱的 extractJSON / 直接显示含 <think> 的原始流。
-    AI.chatJSON(systemPrompt, userPrompt, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 })
-      .then(function (analysis) {
-        gen.stopTimer();
-        gen.safeWrite('<div class="ai-ans">' + (analysis.keySteps ? renderMath(analysis.keySteps).replace(/\n/g, '<br>') : '（无解析）') + '</div>'
-          + (analysis.extractedQuestion ? '<div class="muted-sm" style="margin-top:8px"><b>识别题目：</b>' + U.esc(analysis.extractedQuestion) + '</div>' : '')
-          + (analysis.errorCause ? '<div class="muted-sm" style="margin-top:8px"><b>易错根因：</b>' + U.esc(analysis.errorCause) + '</div>' : '')
-          + (analysis.painPoint ? '<div class="muted-sm" style="margin-top:8px"><b>疑难点标签：</b>' + U.esc(analysis.painPoint) + '</div>' : ''));
-      // 写回数据（含提取的题目）
-      var wasEmpty = !photo.painPoint; // 解析前是否已标记过疑难点
+    // 非阻塞：注册任务 → 更新徽章 → 后台调用 → 完成后刷新卡片
+    activeTasks[id] = { status: 'analyzing', content: '', reasoning: '', error: null, startedAt: Date.now() };
+    updateCardBadge(id);
+    Toast.show('🔄 AI 解析已启动，可继续操作其他题目', 'info', 3000);
+
+    AI.chatStream(systemPrompt, userPrompt, function (content, reasoning) {
+      // 更新注册表（不操作 DOM，避免卡片重建冲突）
+      var task = activeTasks[id];
+      if (!task) return;
+      if (reasoning) task.reasoning = reasoning;
+      if (content) task.content = content;
+      // 如果进度浮窗正打开，实时更新
+      var progContent = document.getElementById('pm-prog-content');
+      var progThink = document.getElementById('pm-prog-think');
+      var progStatus = document.getElementById('pm-prog-status');
+      if (progStatus) {
+        if (content) { progStatus.textContent = '📝 正在生成解析…'; if (progContent) { progContent.style.display=''; progContent.textContent = content; progContent.scrollTop = progContent.scrollHeight; } }
+        else if (reasoning) { progStatus.textContent = '💭 模型正在思考…'; if (progThink) { progThink.style.display=''; progThink.textContent = reasoning; progThink.scrollTop = progThink.scrollHeight; } }
+      }
+    }, photo.imageBase64).then(function (fullText) {
+      var analysis = extractJSON(fullText);
+      if (!analysis) analysis = { keySteps: fullText, errorCause: '', extractedQuestion: '', painPoint: '' };
+      var taskReasoning = (activeTasks[id] && activeTasks[id].reasoning) || '';
+      var wasEmpty = !photo.painPoint;
       var autoPain = (analysis.painPoint || '').trim().slice(0, 20);
       Store.update(function (st) {
         var photos = st.mistakePhotos || [];
         var target = photos.find(function (p) { return p.id === id; });
         if (target) {
-          target.aiAnalysis = { keySteps: analysis.keySteps || '', errorCause: analysis.errorCause || '' };
+          target.aiAnalysis = { keySteps: analysis.keySteps || '', errorCause: analysis.errorCause || '', reasoning: taskReasoning };
           target.extractedQuestion = analysis.extractedQuestion || target.extractedQuestion || '';
-          // 仅当此前未标记疑难点时，由 AI 一次性自动建议（不覆盖用户后续手动修改）
           if (wasEmpty && autoPain) target.painPoint = autoPain;
           target.analyzedAt = new Date().toISOString();
         }
       });
-      // 提示文案：首次解析且 AI 给出了疑难点时，告知已自动填充
+      // 清除任务注册
+      delete activeTasks[id];
       var painMsg = (wasEmpty && autoPain) ? '（已自动建议疑难点：' + autoPain + '）' : '';
       Toast.success('✓ AI 解析完成' + painMsg);
-      // 记忆事件：拍题暴露的错因汇入反思队列
-      if (window.AiMemory) {
-        AiMemory.recordEvent('拍题错题解析', ((analysis.errorCause || autoPain || '已解析') + '').slice(0, 60));
-      }
-      if (window.App && App.current === 'photomistake') App.refresh();
-      setTimeout(function () { gen.closeIfMine(); }, 600);
+      if (window.AiMemory) AiMemory.recordEvent('拍题错题解析', ((analysis.errorCause || autoPain || '已解析') + '').slice(0, 60));
+      // 关闭进度浮窗（如果开着）
+      if (document.getElementById('pm-prog-status')) Modal.close();
+      // 刷新卡片列表
+      render(el);
     }).catch(function (err) {
-      gen.stopTimer();
-      if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
-      gen.safeWrite('❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。');
+      var errMsg = err && err.message ? err.message : String(err);
+      var detail = '错误原因：' + errMsg;
+      if (/超时|timeout/i.test(errMsg)) detail += '\n\n建议：视觉模型+思考模式处理图片较慢，可重试或暂时关闭思考模式。';
+      else if (/400|被拒绝/i.test(errMsg)) detail += '\n\n建议：API 不支持当前请求参数，可尝试关闭思考模式后重试。';
+      else if (/网络|network|ERR_|Failed to fetch/i.test(errMsg)) detail += '\n\n建议：请检查网络连接和 API 地址是否正确。';
+      else if (/格式异常|无法解析|JSON/i.test(errMsg)) detail += '\n\n建议：AI 返回内容格式不符，请重试或更换模型。';
+      // 记录错误到注册表
+      if (activeTasks[id]) { activeTasks[id].status = 'error'; activeTasks[id].error = detail; }
+      updateCardBadge(id);
+      Toast.show('❌ AI 解析失败，点击徽章查看详情', 'error', 5000);
+      // 更新进度浮窗（如果开着）
+      var progStatus = document.getElementById('pm-prog-status');
+      if (progStatus) progStatus.textContent = '❌ 解析失败';
     });
   }
 
@@ -16117,6 +17501,8 @@ function bind(el, next) {
     var s = Store.get();
     var photo = (s.mistakePhotos || []).find(function (p) { return p.id === id; });
     if (!photo) return;
+    var taskKey = 'sim_' + id;
+    if (activeTasks[taskKey] && activeTasks[taskKey].status === 'analyzing') { viewProgress(taskKey); return; }
 
     var majorName = '';
     try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
@@ -16138,16 +17524,28 @@ function bind(el, next) {
 
     var userPrompt = context + '\n\n请根据以上原题，出一道同类练习题（举一反三）。';
 
-    var gen = openAiGenModal('🔄 AI 出题中…');
-    var out = gen.out;
-    // 复用 AI.chatJSON（同其他模块的稳健 JSON 提取 + 思考块剥离）
-    AI.chatJSON(systemPrompt, userPrompt, photo.imageBase64, { signal: gen.ac.signal, maxTokens: 8192 })
-      .then(function (result) {
-        gen.stopTimer();
-        gen.safeWrite('<div class="ai-ans">' + (result.question ? renderMath(result.question).replace(/\n/g, '<br>') : '（无题目）') + '</div>'
-          + (result.solution ? '<div class="muted-sm" style="margin-top:8px"><b>解答：</b>' + U.esc(result.solution) + '</div>' : '')
-          + (result.trap ? '<div class="muted-sm" style="margin-top:8px"><b>易踩坑：</b>' + U.esc(result.trap) + '</div>' : ''));
-      // 写回数据
+    // 非阻塞：注册任务 → 后台调用 → 完成后刷新卡片
+    activeTasks[taskKey] = { status: 'analyzing', content: '', reasoning: '', error: null, startedAt: Date.now() };
+    updateCardBadge(id);
+    Toast.show('🔄 AI 出题已启动，可继续操作其他题目', 'info', 3000);
+
+    AI.chatStream(systemPrompt, userPrompt, function (content, reasoning) {
+      var task = activeTasks[taskKey];
+      if (!task) return;
+      if (reasoning) task.reasoning = reasoning;
+      if (content) task.content = content;
+      // 如果进度浮窗正打开，实时更新
+      var progContent = document.getElementById('pm-prog-content');
+      var progThink = document.getElementById('pm-prog-think');
+      var progStatus = document.getElementById('pm-prog-status');
+      if (progStatus) {
+        if (content) { progStatus.textContent = '📝 正在生成题目…'; if (progContent) { progContent.style.display=''; progContent.textContent = content; progContent.scrollTop = progContent.scrollHeight; } }
+        else if (reasoning) { progStatus.textContent = '💭 模型正在思考…'; if (progThink) { progThink.style.display=''; progThink.textContent = reasoning; progThink.scrollTop = progThink.scrollHeight; } }
+      }
+    }, photo.imageBase64).then(function (fullText) {
+      var result = extractJSON(fullText);
+      if (!result) result = { question: fullText, solution: '', trap: '' };
+      var taskReasoning = (activeTasks[taskKey] && activeTasks[taskKey].reasoning) || '';
       Store.update(function (st) {
         var photos = st.mistakePhotos || [];
         var target = photos.find(function (p) { return p.id === id; });
@@ -16155,17 +17553,28 @@ function bind(el, next) {
           target.similarProblem = {
             question: result.question || '',
             solution: result.solution || '',
-            trap: result.trap || ''
+            trap: result.trap || '',
+            reasoning: taskReasoning
           };
         }
       });
+      delete activeTasks[taskKey];
+      updateCardBadge(id);
       Toast.success('✓ 举一反三题目已生成');
-      if (window.App && App.current === 'photomistake') App.refresh();
-      setTimeout(function () { gen.closeIfMine(); }, 600);
+      if (document.getElementById('pm-prog-status')) Modal.close();
+      render(el);
     }).catch(function (err) {
-      gen.stopTimer();
-      if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
-      gen.safeWrite('❌ 调用失败：' + (err && err.message ? err.message : err) + '\n\n请检查 API 配置后重试。');
+      var errMsg = err && err.message ? err.message : String(err);
+      var detail = '错误原因：' + errMsg;
+      if (/超时|timeout/i.test(errMsg)) detail += '\n\n建议：视觉模型+思考模式处理图片较慢，可重试或暂时关闭思考模式。';
+      else if (/400|被拒绝/i.test(errMsg)) detail += '\n\n建议：API 不支持当前请求参数，可尝试关闭思考模式后重试。';
+      else if (/网络|network|ERR_|Failed to fetch/i.test(errMsg)) detail += '\n\n建议：请检查网络连接和 API 地址是否正确。';
+      else if (/格式异常|无法解析|JSON/i.test(errMsg)) detail += '\n\n建议：AI 返回内容格式不符，请重试或更换模型。';
+      if (activeTasks[taskKey]) { activeTasks[taskKey].status = 'error'; activeTasks[taskKey].error = detail; }
+      updateCardBadge(id);
+      Toast.show('❌ AI 出题失败，点击徽章查看详情', 'error', 5000);
+      var progStatus = document.getElementById('pm-prog-status');
+      if (progStatus) progStatus.textContent = '❌ 出题失败';
     });
   }
 
@@ -16260,6 +17669,13 @@ function bind(el, next) {
   // ---------- 弱点画像分析：汇聚疑难点，省 token ----------
   function analyzeWeakness(el) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+    var taskKey = 'weakness';
+    // 已有任务在跑或失败待查看 → 直接打开进度浮窗，不重复启动
+    if (activeTasks[taskKey] && (activeTasks[taskKey].status === 'analyzing' || activeTasks[taskKey].status === 'error')) {
+      viewWeaknessProgress(el);
+      return;
+    }
+
     var s = Store.get();
     var photos = s.mistakePhotos || [];
     // 优先取疑难点标签（20字内），最多 40 条
@@ -16272,9 +17688,6 @@ function bind(el, next) {
     if (!painPoints.length && !fallbackQs.length) {
       Toast.warn('暂无错题数据，请先拍题并记录'); return;
     }
-
-    var gen = openAiGenModal('🧠 分析薄弱点中…');
-    var out = gen.out;
 
     var majorName = '';
     try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
@@ -16302,13 +17715,30 @@ function bind(el, next) {
 
     var userPrompt = ctx + '\n\n请基于以上信息生成该考生的薄弱点画像。';
 
-    // 复用 AI.chatJSON（同其他模块的稳健 JSON 提取 + 思考块剥离）
-    AI.chatJSON(systemPrompt, userPrompt, null, { signal: gen.ac.signal, maxTokens: 8192 })
-      .then(function (res) {
-        gen.stopTimer();
-        gen.safeWrite('<div class="ai-ans">' + (res.summary ? U.esc(res.summary) : '（无摘要）') + '</div>'
-          + (res.advice ? '<div class="muted-sm" style="margin-top:8px"><b>建议：</b>' + U.esc(res.advice) + '</div>' : ''));
-        Store.update(function (st) {
+    // 非阻塞：注册任务 → 更新按钮文案 → Toast → 打开可关闭进度浮窗 → 后台调用
+    activeTasks[taskKey] = { status: 'analyzing', content: '', reasoning: '', error: null, startedAt: Date.now() };
+    var btn = el.querySelector('[data-act="weak"]');
+    if (btn) btn.textContent = '🔄 分析中...';
+    Toast.show('🔄 薄弱点分析已启动', 'info', 3000);
+    viewWeaknessProgress(el);
+
+    AI.chatStream(systemPrompt, userPrompt, function (text, reasoning) {
+      var task = activeTasks[taskKey];
+      if (!task) return;
+      if (reasoning) task.reasoning = reasoning;
+      if (text) task.content = text;
+      // 如果进度浮窗正打开，实时更新
+      var progContent = document.getElementById('pm-weak-prog-content');
+      var progThink = document.getElementById('pm-weak-prog-think');
+      var progStatus = document.getElementById('pm-weak-prog-status');
+      if (progStatus) {
+        if (text) { progStatus.textContent = '📝 正在生成薄弱点画像…'; if (progContent) { progContent.style.display=''; progContent.textContent = text; progContent.scrollTop = progContent.scrollHeight; } }
+        else if (reasoning) { progStatus.textContent = '💭 模型正在思考…'; if (progThink) { progThink.style.display=''; progThink.textContent = reasoning; progThink.scrollTop = progThink.scrollHeight; } }
+      }
+    }).then(function (fullText) {
+      var res = extractJSON(fullText);
+      if (!res) res = { weakAreas: [], summary: fullText, advice: '' };
+      Store.update(function (st) {
         st.weaknessProfile = {
           generatedAt: new Date().toISOString(),
           basedOn: painPoints,
@@ -16317,13 +17747,58 @@ function bind(el, next) {
           advice: res.advice || ''
         };
       });
+      delete activeTasks[taskKey];
       Toast.success('✓ 薄弱点画像已生成');
-      if (window.App && App.current === 'photomistake') { try { render(el); } catch (e) {} }
-      setTimeout(function () { gen.closeIfMine(); }, 500);
+      // 关闭进度浮窗（如果开着）
+      if (document.getElementById('pm-weak-prog-status')) Modal.close();
+      render(el);
     }).catch(function (err) {
-      gen.stopTimer();
-      if (gen.cancelled()) { if (window.Toast) Toast.show('已取消生成', 'info'); return; }
-      gen.safeWrite('❌ 分析失败：' + (err && err.message ? err.message : err));
+      var errMsg = err && err.message ? err.message : String(err);
+      var detail = '错误原因：' + errMsg;
+      if (/超时|timeout/i.test(errMsg)) detail += '\n\n建议：生成较慢，可重试或暂时关闭思考模式。';
+      else if (/400|被拒绝/i.test(errMsg)) detail += '\n\n建议：API 不支持当前请求参数，可尝试关闭思考模式后重试。';
+      else if (/网络|network|ERR_|Failed to fetch/i.test(errMsg)) detail += '\n\n建议：请检查网络连接和 API 地址是否正确。';
+      else if (/格式异常|无法解析|JSON/i.test(errMsg)) detail += '\n\n建议：AI 返回内容格式不符，请重试或更换模型。';
+      // 记录错误到注册表，保留供查看
+      if (activeTasks[taskKey]) { activeTasks[taskKey].status = 'error'; activeTasks[taskKey].error = detail; }
+      var btn = el.querySelector('[data-act="weak"]');
+      if (btn) btn.textContent = '❌ 分析失败（点击查看）';
+      Toast.show('❌ 薄弱点分析失败，点击按钮查看详情', 'error', 5000);
+      // 更新进度浮窗（如果开着）
+      var progStatus = document.getElementById('pm-weak-prog-status');
+      if (progStatus) progStatus.textContent = '❌ 分析失败';
+    });
+  }
+
+  // 查看薄弱点分析进度（非阻塞浮窗，可关闭，关闭后任务继续后台运行）
+  function viewWeaknessProgress(el) {
+    var task = activeTasks['weakness'];
+    if (!task) return;
+    var statusText = task.status === 'analyzing' ? '🔄 薄弱点分析中…' : task.status === 'error' ? '❌ 分析失败' : '✓ 分析完成';
+    var errorHtml = task.error ? '<div style="margin-top:8px;color:#cf1322;font-size:13px;white-space:pre-wrap">' + U.esc(task.error) + '</div>' : '';
+    var thinkDisplay = task.reasoning ? '' : 'display:none;';
+    var contentDisplay = task.content ? '' : 'display:none;';
+    var actions = [{ label: '关闭', kind: 'btn-ghost' }];
+    if (task.status === 'error') {
+      actions.push({ label: '重试', kind: 'btn-primary', onClick: function (close) {
+        close();
+        delete activeTasks['weakness'];
+        analyzeWeakness(el);
+      }});
+    }
+    Modal.open({
+      title: '🧠 薄弱点分析进度',
+      wide: true, dismissable: true,
+      html: '<div class="muted-sm" id="pm-weak-prog-status">' + statusText + '</div>'
+        + '<div class="muted-sm">依据疑难点标签生成薄弱点画像（主要用疑难点，省 token、更精准）…</div>'
+        + '<div id="pm-weak-prog-think-wrap" style="' + thinkDisplay + 'margin-top:8px">'
+        + '<div class="card-title-sm" style="opacity:.7">💭 思考过程</div>'
+        + '<pre class="report" id="pm-weak-prog-think" style="max-height:180px;overflow:auto;opacity:.72;font-size:12px;white-space:pre-wrap">' + U.esc(task.reasoning || '') + '</pre></div>'
+        + '<div id="pm-weak-prog-content-wrap" style="' + contentDisplay + 'margin-top:8px">'
+        + '<div class="card-title-sm">📝 分析内容</div>'
+        + '<pre class="report" id="pm-weak-prog-content" style="max-height:240px;overflow:auto;white-space:pre-wrap">' + U.esc(task.content || '') + '</pre></div>'
+        + errorHtml,
+      actions: actions
     });
   }
 
@@ -17764,43 +19239,6 @@ function bind(el, next) {
   const ALL = MAIN_TABS.concat(TOOL_TABS);
   let current = 'dashboard';
 
-  // 每页滚动位置缓存：切走再切回恢复，解决“切换页面不能保存状态”
-  const scrollCache = {};
-  function saveScroll(tab) {
-    const v = document.getElementById('view');
-    if (v) scrollCache[tab] = { top: v.scrollTop, winY: window.scrollY || window.pageYOffset || 0 };
-  }
-  function restoreScroll() {
-    const v = document.getElementById('view');
-    const s = scrollCache[current];
-    if (v && s) v.scrollTop = s.top;
-    if (s) window.scrollTo(0, s.winY);
-  }
-  // 每个 Tab 关心的 Store 顶层字段（云同步软刷新用）：仅这些字段变化时才重建该页面
-  //  '*' 表示“任意变化都刷新”（概览页/设置页）；未登记则保守刷新。
-  const TAB_DATA_KEYS = {
-    dashboard: '*',
-    scheduler: ['tasks', 'taskTomb', 'completions', 'taskArchive', 'studyHours', 'weeklyStats', 'focus', 'settings', 'alerts', 'decision'],
-    review: ['weeklyStats', 'progress', 'progressHistory', 'mistakes', 'mental', 'studyHours', 'taskArchive', 'completions', 'aiMemory', 'dailyBrief', 'weekPlan', 'deepReview', 'focus', 'heat'],
-    photomistake: ['mistakePhotos', 'weaknessProfile', 'ai', 'settings'],
-    quiz: ['quizBank', 'heat', 'dailyQuiz', 'dailyQuizHistory', 'mistakeDrills', 'ai', 'settings'],
-    essay: ['essays', 'ai', 'settings'],
-    mistakes: ['mistakes', 'heat', 'ai', 'settings'],
-    heatmap: ['heat', 'quizBank', 'mistakePhotos', 'settings'],
-    inspector: ['inspector', 'ai', 'settings'],
-    focus: ['focus', 'tasks', 'completions', 'studyHours', 'settings'],
-    concept: ['conceptAI', 'majorData', 'ai', 'settings'],
-    sprint: ['mistakePhotos', 'quizBank', 'heat', 'mistakeDrills', 'ai', 'settings', 'progress'],
-    decision: ['decision', 'progress', 'settings'],
-    mental: ['mental', 'settings'],
-    reading: ['reading', 'vocab', 'settings'],
-    wordbook: ['vocab', 'reading', 'settings'],
-    polrecite: ['polRecite', 'polReciteLog', 'settings'],
-    redline: ['settings', 'redline', 'mistakes', 'alerts'],
-    progress: ['progress', 'progressHistory', 'mistakeDrills', 'heat', 'settings'],
-    settings: '*'
-  };
-
   function rolloverIfNeeded() {
     const s = Store.get();
     const today = U.dkey();
@@ -17889,6 +19327,9 @@ function bind(el, next) {
     window.scrollTo(0, 0);
   }
 
+  // 各 Tab 的滚动位置缓存：切换栏目时保存离开页的滚动位置，返回时恢复
+  var tabScrollCache = {};
+
   const App = {
     go(tab) {
       // 深度专注进行中：拦截切页，避免计时器在后台空跑、状态错乱
@@ -17896,41 +19337,39 @@ function bind(el, next) {
         Toast.show('深度专注进行中，请先点「中断专注」结束再切换', 'warn', 3500);
         return;
       }
-      if (tab !== current) saveScroll(current);
-      current = tab; render(true); restoreScroll();
+      // 保存当前页滚动位置
+      var view = document.getElementById('view');
+      if (view && current) {
+        tabScrollCache[current] = { v: view.scrollTop, w: window.scrollY || window.pageYOffset || 0 };
+      }
+      current = tab; render(true);
+      // 恢复目标页滚动位置（首次进入仍回顶部）
+      var cached = tabScrollCache[tab];
+      if (cached) {
+        if (view) view.scrollTop = cached.v;
+        window.scrollTo(0, cached.w);
+      } else {
+        scrollToTop();
+      }
     },
-    // 原地刷新：保留滚动位置 + <details> 展开状态 + 表单未提交内容/焦点/光标
-    // （避免云同步、打卡等操作把页面滚回顶部、折叠面板收起、正在输入的文字被清空）
+    // 原地刷新：保留当前滚动位置 + <details> 展开状态（避免云同步/打卡等操作把页面滚回顶部、折叠面板收起）
     refresh() {
       const view = document.getElementById('view');
       const y = view ? view.scrollTop : 0;
       const wy = window.scrollY || window.pageYOffset || 0;
-      // 1) 收集当前所有已展开的 <details> 的 summary 文本（用于重建后恢复）
+      // 收集当前所有已展开的 <details> 的 summary 文本（用于重建后恢复）
       const openSummaries = [];
       if (view) view.querySelectorAll('details[open]').forEach(function (d) {
         var s = d.querySelector('summary');
         if (s) openSummaries.push(s.textContent.trim());
       });
-      // 2) 收集表单状态（仅带 id 的控件，重建后可精确对位）
-      const formState = {};
-      let focusId = '', selS = 0, selE = 0;
-      if (view) {
-        const ae = document.activeElement;
-        if (ae && ae.id && view.contains(ae)) {
-          focusId = ae.id;
-          try { selS = ae.selectionStart; selE = ae.selectionEnd; } catch (e) {}
-        }
-        view.querySelectorAll('input[id],textarea[id],select[id]').forEach(function (n) {
-          if (n.type === 'file') return;
-          formState[n.id] = (n.type === 'checkbox' || n.type === 'radio')
-            ? { c: n.checked } : { v: n.value };
-        });
-      }
       DB.syncSubjects();
       render(false);
       // 恢复滚动位置
       if (view) view.scrollTop = y;
       window.scrollTo(0, wy);
+      // 更新缓存（云同步后原地刷新的位置即为最新）
+      if (current) tabScrollCache[current] = { v: y, w: wy };
       // 恢复 <details> 展开状态
       if (openSummaries.length && view) {
         var allDetails = view.querySelectorAll('details');
@@ -17941,37 +19380,6 @@ function bind(el, next) {
           }
         });
       }
-      // 恢复表单内容与焦点/光标（只在新控件为空、即"确属重建产生的丢失"时回填，避免覆盖模块主动写入的新值）
-      if (view) {
-        Object.keys(formState).forEach(function (id) {
-          var n = view.querySelector('#' + (window.CSS && CSS.escape ? CSS.escape(id) : id));
-          if (!n) return;
-          var st = formState[id];
-          if (st.c !== undefined) { n.checked = st.c; }
-          else if (st.v !== undefined && st.v !== '' && !n.value) { n.value = st.v; }
-        });
-        if (focusId) {
-          var f = view.querySelector('#' + (window.CSS && CSS.escape ? CSS.escape(focusId) : focusId));
-          if (f && typeof f.focus === 'function') {
-            try { f.focus({ preventScroll: true }); } catch (e) { try { f.focus(); } catch (e2) {} }
-            try { if (f.setSelectionRange) f.setSelectionRange(selS, selE); } catch (e) {}
-          }
-        }
-      }
-    },
-    // 云同步软刷新：仅当变化的字段与当前页面相关时才重建，避免无关页面抖动/丢失滚动
-    softRefresh(changedKeys) {
-      changedKeys = changedKeys || [];
-      if (!changedKeys.length) return;            // 无变化：完全不动
-      const rel = TAB_DATA_KEYS[current];
-      if (rel === '*' || !rel) { App.refresh(); return; } // 概览/设置页 或 未登记：保守刷新（已自带滚动保护）
-      const hit = changedKeys.some(function (k) { return rel.indexOf(k) >= 0; });
-      if (!hit) return;                            // 当前页面数据未变化：跳过重建，零抖动
-      App.refresh();                               // 相关：重建并保留滚动位置
-      // 云同步命中本页：轻量淡入提示"内容已更新"，不闪不动其他无关页面
-      const v = document.getElementById('view');
-      if (v) { v.classList.remove('view-soft-update'); void v.offsetWidth; v.classList.add('view-soft-update');
-        setTimeout(function () { v.classList.remove('view-soft-update'); }, 280); }
     },
     get current() { return current; },
   init() {
