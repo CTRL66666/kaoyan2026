@@ -2864,7 +2864,13 @@ body.cp-lock { overflow: hidden; }
     const t0 = performance.now();
     setSyncPhase('downloading');
     const transfer = { pulled: [], pushed: [], bytes: 0 };
-    const resp = await apiReq('/gists/' + state.gistId, { etag: force ? null : meta.coreEtag });
+    let resp;
+    try {
+      resp = await apiReq('/gists/' + state.gistId, { etag: force ? null : meta.coreEtag });
+    } catch (e) {
+      if (e && e.status === 404) e.deadGist = true;   // 缓存的 gistId 已失效（被删除）→ 上层重新发现活跃 Gist
+      throw e;
+    }
     if (resp.status === 304) {                    // 全部无变化：零后续请求
       setSyncPhase('idle');
       recordSync('拉取', performance.now() - t0, '304 无变化', 0);
@@ -3188,6 +3194,20 @@ body.cp-lock { overflow: hidden; }
     }
   }
 
+  // 缓存的 gistId 已失效（被删除）→ 清空并重新发现活跃 Gist；
+  // 瞬时错误（限流/5xx）抛出交给定时重试，绝不新建 Gist
+  async function recoverDeadGist() {
+    state.gistId = null; meta.gistId = null; meta.coreEtag = null; meta.bulkEtag = null; state.lastPushedAt = 0;
+    try {
+      const id = await discoverCore();
+      if (id) { state.gistId = id; meta.gistId = id; state.bulkGistId = meta.bulkGistId || null; return true; }
+    } catch (e) {
+      if (e && e.transient) throw e;   // 不当作"无 gist"，留给轮询自愈
+      console.warn('[Cloud] 重发现 Gist 失败', e);
+    }
+    return false;
+  }
+
   // ---------- 令牌验证 + 启动同步 ----------
   async function startSync() {
     renderBadge('☁ 同步中…', 'busy');
@@ -3213,7 +3233,15 @@ body.cp-lock { overflow: hidden; }
         state.lastPushedAt = 0; meta.coreEtag = null; meta.bulkEtag = null;
       }
       state.bulkGistId = meta.bulkGistId || state.bulkGistId || null;
-      await pull();
+      try {
+        await pull();
+      } catch (e) {
+        // 缓存的 gistId 已被删除(404)：清空并重新发现活跃 Gist 后重试；真·无 gist 才新建
+        if (e && e.deadGist) {
+          const ok = await recoverDeadGist();
+          if (ok) { await pull(); } else { await push(); }
+        } else throw e;
+      }
       // ③ 仅当"确实没有任何 gistId 记录且发现为空"才真正新建（真·首次同步）
       if (!state.gistId) await push();
       setSyncPhase('idle');
@@ -3232,19 +3260,26 @@ body.cp-lock { overflow: hidden; }
     stopPolling();
     state.pollTimer = setInterval(async () => {
       if (isRateLimited()) return;
-      try {
-        // 自愈：若首启时因瞬时错误未绑定成功（meta 也无 gistId），重新发现→必要时新建
-        if (!state.gistId && !meta.gistId) {
+      // 自愈：若首启时因瞬时错误未绑定成功（meta 也无 gistId），重新发现→必要时新建
+      if (!state.gistId && !meta.gistId) {
           try { state.gistId = await discoverCore(); } catch (e) { if (e && e.transient) return; }
           if (!state.gistId) { await push(); return; }   // 真·首次才新建
         }
         // 周期拉取用 preserveLocal 深合并；ETag 命中(304)时零流量
         // v6 追加同步：拉取只取核心 Gist + 未应用的 op 文件，几乎零流量
-        await pull(false, { preserveLocal: true });
-        renderBadge('☁ 已同步', 'on');
-      } catch (e) {
-        if (e && e.status === 403) setRateLimitBackoff(0);
-      }
+        try {
+          await pull(false, { preserveLocal: true });
+          renderBadge('☁ 已同步', 'on');
+        } catch (e) {
+          if (e && e.status === 403) { setRateLimitBackoff(0); }
+          else if (e && e.deadGist) {
+            // 缓存 gistId 失效：重新发现；发现成功则立即重拉，否则下个周期再试（绝不新建）
+            try {
+              const ok = await recoverDeadGist();
+              if (ok) { await pull(false, { preserveLocal: true }); renderBadge('☁ 已同步', 'on'); }
+            } catch (_) { /* 瞬时错误，下个周期重试 */ }
+          }
+        }
     }, POLL_INTERVAL);
   }
   function stopPolling() { if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; } }
