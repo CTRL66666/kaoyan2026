@@ -3478,6 +3478,7 @@ body.cp-lock { overflow: hidden; }
       + ' 同步 AI Key 到云端（默认开，换设备免重填；Gist 链接可匿名访问，介意可取消）</label>'
       + '<div class="row"><button class="primary" id="cv-sync">拉取+推送</button><button class="ghost" id="cv-pull">仅拉取远端</button></div>'
       + '<div class="row"><button class="accent" id="cv-all">生成完整快照（压实 op 日志）</button></div>'
+      + '<div class="row"><button id="cv-clean" style="background:#c0392b;color:#fff;border:none;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:13px">🧹 清理孤儿 Gist（删除无用的重复同步文件）</button></div>'
       + '<div class="row"><button class="primary" id="cv-copy">复制同步令牌</button><button class="ghost" id="cv-out">退出</button></div>'
       + '<div class="err" id="cv-err"></div>'
       + '<div class="hint">退出仅清除本机令牌，云端数据不删；换设备用同一令牌仍可取回。</div>'
@@ -3508,12 +3509,102 @@ body.cp-lock { overflow: hidden; }
       else fail();
     };
     mask.querySelector('#cv-out').onclick = () => { logout(); closePanel(); };
+    mask.querySelector('#cv-clean').onclick = () => cleanupOrphanGists(mask);
     // 「去设置查看详情」链接
     const goSettings = mask.querySelector('#cv-go-settings');
     if (goSettings) goSettings.onclick = () => { closePanel(); if (window.App) App.go('settings'); };
   }
 
   function setErr(mask, msg) { const el = mask.querySelector('#cv-err'); if (el) el.textContent = msg; }
+
+  // ---------- 自助清理：删除本账号下所有「同名但非活跃」的同步 Gist ----------
+  // 保留规则（按优先级）：① 当前设备引用的 meta.gistId（若仍在账号且为新格式）；
+  // ② 否则取最新更新的新格式核心 Gist；③ 仍无则最新旧格式。bulk 取其 manifest 绑定的那份。
+  // 用用户自己的令牌操作，无需把令牌交给任何人；删除不可逆但只删不再被引用的孤儿。
+  async function cleanupOrphanGists(mask) {
+    if (!state.token) { setErr(mask, '未登录，无法清理'); return; }
+    const sure = window.confirm(
+      '将删除你 GitHub 账号下所有「同名但当前设备未在使用」的同步 Gist（保留当前活跃的那一对）。\n\n' +
+      '这能清掉旧版本反复新建产生的重复/垃圾同步文件，减少 API 配额占用、避免同步变慢。\n\n' +
+      '确认继续？此操作不可逆（但只删不再被任何设备引用的文件，活跃数据完好）。'
+    );
+    if (!sure) return;
+    setSyncPhase('uploading');
+    if (window.Toast) Toast.info('正在扫描云端 Gist…');
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    try {
+      // ① 枚举全部同名 Gist（最多 5 页 ×100）
+      const coreList = [], bulkList = [];
+      for (let page = 1; page <= 5; page++) {
+        let list;
+        try { list = (await apiReq('/gists?per_page=100&page=' + page)).data; }
+        catch (e) { if (e && e.status === 403) { setRateLimitBackoff(0); await sleep(30000); page--; continue; } throw e; }
+        if (!list || !list.length) break;
+        for (const g of list) {
+          const d = g.description || '';
+          if (d === GIST_DESC) coreList.push(g);
+          else if (d === BULK_DESC) bulkList.push(g);
+        }
+        if (list.length < 100) break;
+      }
+      // ② 选定保留的活跃对
+      let keeperCore = null;
+      if (meta.gistId) keeperCore = coreList.find(g => g.id === meta.gistId && g.files && g.files[MANIFEST_FILE]) || null;
+      if (!keeperCore) {
+        const withManifest = coreList.filter(g => g.files && g.files[MANIFEST_FILE]);
+        const sorted = (withManifest.length ? withManifest : coreList).slice()
+          .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+        keeperCore = sorted[0] || null;
+      }
+      let keeperBulk = null;
+      if (keeperCore && keeperCore.files && keeperCore.files[MANIFEST_FILE]) {
+        try {
+          const man = await readFileContent(keeperCore.files[MANIFEST_FILE]);
+          const m = man ? JSON.parse(man) : null;
+          if (m && m.bulkGistId) keeperBulk = bulkList.find(g => g.id === m.bulkGistId) || null;
+        } catch (e) {}
+      }
+      if (!keeperBulk && bulkList.length) {
+        keeperBulk = bulkList.slice().sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0] || null;
+      }
+      const keepCoreId = keeperCore ? keeperCore.id : null;
+      const keepBulkId = keeperBulk ? keeperBulk.id : null;
+      const toDel = coreList.filter(g => g.id !== keepCoreId).concat(bulkList.filter(g => g.id !== keepBulkId));
+      if (!toDel.length) {
+        if (window.Toast) Toast.success('没有需要清理的孤儿 Gist，你的云端很干净 ✅');
+        setSyncPhase('idle'); renderLoggedIn(mask); return;
+      }
+      if (window.Toast) Toast.info('发现 ' + toDel.length + ' 个孤儿 Gist，开始删除（保留活跃对）…');
+      let done = 0, fail = 0;
+      for (let i = 0; i < toDel.length; i++) {
+        const g = toDel[i];
+        let deleted = false, attempt = 0;
+        while (attempt < 5 && !deleted) {
+          try {
+            await apiReq('/gists/' + g.id, { method: 'DELETE' });
+            deleted = true;
+          } catch (e) {
+            if (e && e.status === 404) { deleted = true; }                 // 已被删，视作成功
+            else if (e && e.status === 403) { setRateLimitBackoff(attempt); await sleep(Math.min(30000 * Math.pow(2, attempt), 300000)); attempt++; }
+            else { fail++; break; }
+          }
+        }
+        if (deleted) done++;
+        setErr(mask, '清理中… 已删除 ' + done + ' / ' + toDel.length + (fail ? ('（失败 ' + fail + '）') : ''));
+        await sleep(200);   // 礼貌限速，避免触发二次限流
+      }
+      const summary = '清理完成：删除 ' + done + ' 个孤儿 Gist' + (fail ? ('，' + fail + ' 个失败') : '') + '，已保留活跃对';
+      if (window.Toast) Toast.success(summary);
+      setErr(mask, summary);
+      setSyncPhase('idle');
+      renderLoggedIn(mask);
+    } catch (e) {
+      setSyncPhase('idle');
+      const msg = '清理失败：' + (e && e.message ? e.message : e);
+      setErr(mask, msg);
+      if (window.Toast) Toast.danger(msg);
+    }
+  }
 
   // ---------- 数据分析与管理（供设置模块调用）----------
   function fmtKB(b) { return b >= 1024 ? (Math.round(b / 1024 * 10) / 10 + ' KB') : (b + ' B'); }
