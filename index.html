@@ -2088,6 +2088,7 @@ body.cp-lock { overflow: hidden; }
   }
 
   let cache = null;
+  let _rev = 0;   // 数据修订版本号：每次 Store.save() 自增，供云同步的哈希缓存失效（原地修改数组/对象也能被察觉）
 
   // ---------- 存储配额保护 ----------
   function isQuotaError(e) {
@@ -2172,6 +2173,7 @@ body.cp-lock { overflow: hidden; }
       return s;
     },
     save() {
+      _rev++;   // 任意写入（含原地修改）都让版本号自增，云同步据此刷新哈希缓存
       try {
         localStorage.setItem(KEY, JSON.stringify(cache));
       } catch (e) {
@@ -2192,6 +2194,8 @@ body.cp-lock { overflow: hidden; }
     // 函数式更新：Store.update(s => { s.xxx = ... })
     update(fn) { const s = Store.get(); fn(s); Store.save(); U.emit('store:change'); return s; },
     replace(data) { cache = Store.migrate(data); Store.save(); U.emit('store:change'); },
+    // 当前数据修订版本号（每次 save 自增），云同步用其让哈希缓存失效
+    rev() { return _rev; },
     // 带墓碑的删除：从集合数组移除，同时在 tomb[name][id] 打标记。
     // 合并（云端拉取）时按墓碑过滤被删项，使"本地删除"可跨设备传播，且不会被云端旧副本复活。
     // 对应集合：quizBank、mistakePhotos、essays（与 initialState().tomb 的键一致）。
@@ -2745,14 +2749,18 @@ body.cp-lock { overflow: hidden; }
   }
   function collHashOf(full, c) { return contentHash(JSON.stringify(full[c] || [])); }
 
-  // 大集合哈希按【活引用】缓存：未改的集合（Store 原地更新、引用不变）O(1) 命中，
-  // 避免每次上传/轮询都把多 MB 的 base64 照片再 JSON.stringify 一遍。
+  // 大集合哈希按【活引用 + 数据修订号】缓存：引用不变但 Store 原地修改（push/改字段）时，
+  // 仅靠引用会拿到陈旧哈希，故同时校验 Store.rev()；版本号自增即说明内容可能已变，重新计算。
   // WeakMap 以数组对象为键，集合被替换后旧键随 GC 回收，无内存泄漏。
+  function _storeRev() { try { return (window.Store && window.Store.rev) ? window.Store.rev() : 0; } catch (e) { return 0; } }
   const _hashCache = new WeakMap();
   function collHashLive(arr) {
-    if (arr && _hashCache.has(arr)) return _hashCache.get(arr);
+    if (arr && _hashCache.has(arr)) {
+      const cached = _hashCache.get(arr);
+      if (cached && cached.rev === _storeRev()) return cached.hash;   // 引用与版本号都未变才命中
+    }
     const h = contentHash(JSON.stringify(arr || []));
-    try { if (arr) _hashCache.set(arr, h); } catch (e) {}
+    try { if (arr) _hashCache.set(arr, { hash: h, rev: _storeRev() }); } catch (e) {}
     return h;
   }
   // 取本地"核心"JSON 字符串：直接读活状态、剔除大集合，避免 exportJSON 把多 MB 照片也序列化一遍。
@@ -3004,9 +3012,15 @@ body.cp-lock { overflow: hidden; }
       meta.appliedOps = meta.appliedOps || [];
       pending.forEach(of => { if (of.__name && meta.appliedOps.indexOf(of.__name) < 0) meta.appliedOps.push(of.__name); });
     }
-    // 刷新远端基准（供推送 diff）：拉取合并后本地即等于远端，直接以本地为基准，避免重传
+    // 刷新远端基准（供推送 diff）：拉取合并后本地即等于远端，直接以本地为基准，避免重传。
+    // ⚠️ 必须是【深拷贝】快照：Store 原地修改数组/对象（push/改字段），若存活引用基准会被污染，
+    // 导致 genOps 比对不出差异、不再写 op（照片永远进不了 bulk Gist、另一台设备收不到）。
     const liveNow = window.Store.get();
-    state._remoteColls = {}; BULK_COLLS.forEach(c => state._remoteColls[c] = liveNow[c] || []);
+    state._remoteColls = {};
+    BULK_COLLS.forEach(c => {
+      try { state._remoteColls[c] = liveNow[c] ? JSON.parse(JSON.stringify(liveNow[c])) : []; }
+      catch (e) { state._remoteColls[c] = liveNow[c] || []; }
+    });
     const mergeMs = performance.now() - tMerge;
     const totalMs = performance.now() - t0;
     setSyncPhase('idle');
@@ -3084,6 +3098,12 @@ body.cp-lock { overflow: hidden; }
         meta.compactGen = (meta.compactGen || 0) + 1;
         meta.appliedOps = []; meta.opCount = 0;
         didCompact = true;
+        // 压实后整包已上云，远端基线=当前本地（深拷贝，与 pull 末端一致）
+        state._remoteColls = {};
+        BULK_COLLS.forEach(c => {
+          try { state._remoteColls[c] = live2[c] ? JSON.parse(JSON.stringify(live2[c])) : []; }
+          catch (e) { state._remoteColls[c] = live2[c] || []; }
+        });
       }
 
       // ---------- 普通追加：仅对变化集合写新 op 文件 ----------
@@ -3099,6 +3119,13 @@ body.cp-lock { overflow: hidden; }
           meta.appliedOps = meta.appliedOps || [];
           if (meta.appliedOps.indexOf(fname) < 0) meta.appliedOps.push(fname);
           meta.opCount = (meta.opCount || 0) + 1;
+          // 本次 op 覆盖的集合现已上云，更新远端基线为当前本地快照，避免后续推送重复生成 add op
+          // （照片只在「新增」那一次进 op，之后不再重传）。用深拷贝，保持与 pull 末端一致。
+          if (!state._remoteColls) state._remoteColls = {};
+          changed.forEach(c => {
+            try { state._remoteColls[c] = live[c] ? JSON.parse(JSON.stringify(live[c])) : []; }
+            catch (e) { state._remoteColls[c] = live[c] || []; }
+          });
         }
       }
 
