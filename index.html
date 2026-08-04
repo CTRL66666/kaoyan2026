@@ -3478,7 +3478,6 @@ body.cp-lock { overflow: hidden; }
       + ' 同步 AI Key 到云端（默认开，换设备免重填；Gist 链接可匿名访问，介意可取消）</label>'
       + '<div class="row"><button class="primary" id="cv-sync">拉取+推送</button><button class="ghost" id="cv-pull">仅拉取远端</button></div>'
       + '<div class="row"><button class="accent" id="cv-all">生成完整快照（压实 op 日志）</button></div>'
-      + '<div class="row"><button id="cv-clean" style="background:#c0392b;color:#fff;border:none;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:13px">🧹 清理孤儿 Gist（删除无用的重复同步文件）</button></div>'
       + '<div class="row"><button class="primary" id="cv-copy">复制同步令牌</button><button class="ghost" id="cv-out">退出</button></div>'
       + '<div class="err" id="cv-err"></div>'
       + '<div class="hint">退出仅清除本机令牌，云端数据不删；换设备用同一令牌仍可取回。</div>'
@@ -3509,7 +3508,6 @@ body.cp-lock { overflow: hidden; }
       else fail();
     };
     mask.querySelector('#cv-out').onclick = () => { logout(); closePanel(); };
-    mask.querySelector('#cv-clean').onclick = () => cleanupOrphanGists(mask);
     // 「去设置查看详情」链接
     const goSettings = mask.querySelector('#cv-go-settings');
     if (goSettings) goSettings.onclick = () => { closePanel(); if (window.App) App.go('settings'); };
@@ -3521,17 +3519,30 @@ body.cp-lock { overflow: hidden; }
   // 保留规则（按优先级）：① 当前设备引用的 meta.gistId（若仍在账号且为新格式）；
   // ② 否则取最新更新的新格式核心 Gist；③ 仍无则最新旧格式。bulk 取其 manifest 绑定的那份。
   // 用用户自己的令牌操作，无需把令牌交给任何人；删除不可逆但只删不再被引用的孤儿。
-  async function cleanupOrphanGists(mask) {
-    if (!state.token) { setErr(mask, '未登录，无法清理'); return; }
-    const sure = window.confirm(
+  // hooks（均可选）：
+  //   confirm(msg) -> bool | Promise<bool>   二次确认（默认 window.confirm）
+  //   progress(text)                          进度文本（实时）
+  //   phase(name)                            同步阶段（默认忽略）
+  //   result(obj)                            完成结果（含 ok/deleted/failed/kept/total/finishedAt）
+  //   error(msg)                             失败提示（默认 Toast.danger）
+  // 返回结果对象；未登录/取消返回 null。展示与逻辑解耦：调方自行决定 UI 落点（云面板/设置页）。
+  async function cleanupOrphanGists(hooks) {
+    hooks = hooks || {};
+    const confirm = hooks.confirm || ((m) => (typeof window !== 'undefined' && window.confirm ? window.confirm(m) : true));
+    const progress = hooks.progress || (() => {});
+    const setPhase = hooks.phase || (() => {});
+    const onResult = hooks.result || (() => {});
+    const onError = hooks.error || ((m) => { if (window.Toast) Toast.danger(m); });
+    if (!state.token) { onError('未登录，无法清理'); return null; }
+    const sure = await confirm(
       '将删除你 GitHub 账号下所有「同名但当前设备未在使用」的同步 Gist（保留当前活跃的那一对）。\n\n' +
       '这能清掉旧版本反复新建产生的重复/垃圾同步文件，减少 API 配额占用、避免同步变慢。\n\n' +
       '确认继续？此操作不可逆（但只删不再被任何设备引用的文件，活跃数据完好）。'
     );
-    if (!sure) return;
-    setSyncPhase('uploading');
-    if (window.Toast) Toast.info('正在扫描云端 Gist…');
+    if (!sure) return null;
+    setPhase('uploading');
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const startedAt = Date.now();
     try {
       // ① 枚举全部同名 Gist（最多 5 页 ×100）
       const coreList = [], bulkList = [];
@@ -3571,10 +3582,11 @@ body.cp-lock { overflow: hidden; }
       const keepBulkId = keeperBulk ? keeperBulk.id : null;
       const toDel = coreList.filter(g => g.id !== keepCoreId).concat(bulkList.filter(g => g.id !== keepBulkId));
       if (!toDel.length) {
-        if (window.Toast) Toast.success('没有需要清理的孤儿 Gist，你的云端很干净 ✅');
-        setSyncPhase('idle'); renderLoggedIn(mask); return;
+        const r = { ok: true, deleted: 0, failed: 0, kept: { core: keepCoreId, bulk: keepBulkId }, total: 0, startedAt, finishedAt: Date.now(), message: '没有需要清理的孤儿 Gist，你的云端很干净 ✅' };
+        if (window.Toast) Toast.success(r.message);
+        onResult(r); setPhase('idle'); return r;
       }
-      if (window.Toast) Toast.info('发现 ' + toDel.length + ' 个孤儿 Gist，开始删除（保留活跃对）…');
+      progress('发现 ' + toDel.length + ' 个孤儿 Gist，开始删除（保留活跃对）…');
       let done = 0, fail = 0;
       for (let i = 0; i < toDel.length; i++) {
         const g = toDel[i];
@@ -3590,19 +3602,24 @@ body.cp-lock { overflow: hidden; }
           }
         }
         if (deleted) done++;
-        setErr(mask, '清理中… 已删除 ' + done + ' / ' + toDel.length + (fail ? ('（失败 ' + fail + '）') : ''));
+        progress('清理中… 已删除 ' + done + ' / ' + toDel.length + (fail ? ('（失败 ' + fail + '）') : ''));
         await sleep(200);   // 礼貌限速，避免触发二次限流
       }
-      const summary = '清理完成：删除 ' + done + ' 个孤儿 Gist' + (fail ? ('，' + fail + ' 个失败') : '') + '，已保留活跃对';
-      if (window.Toast) Toast.success(summary);
-      setErr(mask, summary);
-      setSyncPhase('idle');
-      renderLoggedIn(mask);
+      const finishedAt = Date.now();
+      const r = {
+        ok: true, deleted: done, failed: fail, kept: { core: keepCoreId, bulk: keepBulkId },
+        total: toDel.length, startedAt, finishedAt,
+        message: '清理完成：删除 ' + done + ' 个孤儿 Gist' + (fail ? ('，' + fail + ' 个失败') : '') + '，已保留活跃对'
+      };
+      if (window.Toast) Toast.success(r.message);
+      onResult(r);
+      setPhase('idle');
+      return r;
     } catch (e) {
-      setSyncPhase('idle');
+      setPhase('idle');
       const msg = '清理失败：' + (e && e.message ? e.message : e);
-      setErr(mask, msg);
-      if (window.Toast) Toast.danger(msg);
+      onError(msg);
+      return { ok: false, error: msg, startedAt, finishedAt: Date.now() };
     }
   }
 
@@ -3807,6 +3824,7 @@ body.cp-lock { overflow: hidden; }
     deleteCloudFile,   // 仅删云端单文件（不动本地）
     renderCloudStatsHtml,
     refreshCloudStatsIn,
+    cleanupOrphanGists,   // 自助清理孤儿 Gist（设置页调用，结果经 hooks 回调，不再硬绑云面板）
     // 同步操作（供设置模块调用）
     doSync: () => pull(true, undefined, true).then(push),
     doPull: () => pull(true, undefined, true),
@@ -16940,6 +16958,10 @@ function bind(el, next) {
           html += '</div>';
           // 云端分布（异步填充）
           html += '<div id="st-cloud-stats" style="padding:8px 10px;border:1px solid #e3e3e3;border-radius:8px;background:#fafbfc;margin:6px 0">☁ 正在读取云端数据分布…</div>';
+          // 孤儿 Gist 清理（按钮 + 常驻结果区，移到设置页，结果可视化保留）
+          html += '<div class="btn-row" style="margin-top:8px">'
+            + '<button class="btn btn-danger" id="st-cloud-clean">🧹 清理孤儿 Gist（删除重复同步文件）</button></div>';
+          html += '<div id="st-clean-result" style="margin-top:8px;font-size:12px;min-height:18px"></div>';
           // 同步操作按钮
           html += '<div class="btn-row" style="margin-top:6px">'
             + '<button class="btn btn-primary" id="st-cloud-sync">拉取+推送</button>'
@@ -17605,6 +17627,57 @@ function bind(el, next) {
         this.disabled = true; this.textContent = '压实中…';
         cloud.doCompact().then(function () { Toast.success('已压实'); App.refresh(); })
           .catch(function (e) { Toast.danger('压实失败：' + ((e && e.message) || e)); App.refresh(); });
+      };
+    })();
+
+    // ---------- 清理孤儿 Gist（按钮在设置页，结果常驻显示 + 持久化）----------
+    (function () {
+      var cloud = window.Cloud;
+      if (!cloud) return;
+      var cleanBtn = el.querySelector('#st-cloud-clean');
+      var cleanRes = el.querySelector('#st-clean-result');
+      if (!cleanBtn || !cleanRes) return;
+      var CLEAN_KEY = 'kaoyan2026_clean_result';
+      function esc(s) { return U.esc(s); }
+      function renderCleanResult(r) {
+        if (!r) { cleanRes.innerHTML = '<span class="muted-sm" style="color:#888">尚未清理过。若云端存在多个同名同步 Gist（旧版反复新建所致），点上方按钮即可清理。</span>'; return; }
+        var t = new Date(r.finishedAt).toLocaleString();
+        if (r.ok && r.total === 0) {
+          cleanRes.innerHTML = '<div style="padding:6px 10px;background:#e8f6ee;color:#1a7f37;border:1px solid #b7e2c5;border-radius:6px">✅ ' + esc(r.message) + '<br><span class="muted-sm" style="color:#5a7d63">上次执行：' + t + '</span></div>';
+        } else if (r.ok) {
+          cleanRes.innerHTML = '<div style="padding:6px 10px;background:#e8f6ee;color:#1a7f37;border:1px solid #b7e2c5;border-radius:6px">✅ ' + esc(r.message) + '<br><span class="muted-sm" style="color:#5a7d63">删除 ' + r.deleted + ' 个 · 失败 ' + r.failed + ' 个 · 保留核心 ' + (r.kept.core || '').slice(0, 8) + ' / 图库 ' + (r.kept.bulk || '').slice(0, 8) + '　·　' + t + '</span></div>';
+        } else {
+          cleanRes.innerHTML = '<div style="padding:6px 10px;background:#fdecea;color:#c0392b;border:1px solid #f5c6cb;border-radius:6px">❌ ' + esc(r.error || '清理失败') + '<br><span class="muted-sm" style="color:#a05a52">' + t + '</span></div>';
+        }
+      }
+      var last = null;
+      try { last = JSON.parse(localStorage.getItem(CLEAN_KEY) || 'null'); } catch (e) {}
+      renderCleanResult(last);   // 刷新设置页仍显示上次结果（常驻）
+      cleanBtn.onclick = function () {
+        if (!cloud.isLoggedIn) { Toast.warn('请先登录云端同步'); return; }
+        Modal.confirm('清理孤儿 Gist',
+          '<p>将删除你 GitHub 账号下所有<b>同名但当前设备未在使用</b>的同步 Gist，只保留当前活跃的那一对。</p><p class="muted-sm">不可逆，但只删不再被任何设备引用的文件，活跃数据完好。可清掉旧版反复新建产生的重复文件、减少 API 配额占用。</p>',
+          '确认清理', function () {
+            cleanBtn.disabled = true; cleanBtn.textContent = '清理中…';
+            cleanRes.innerHTML = '<div style="padding:6px 10px;background:#fff8e6;color:#8a6d00;border:1px solid #f0e0a8;border-radius:6px">⏳ 正在扫描并清理云端 Gist…</div>';
+            cloud.cleanupOrphanGists({
+              confirm: function () { return true; },   // 二次确认已由 Modal.confirm 完成
+              progress: function (text) { cleanRes.innerHTML = '<div style="padding:6px 10px;background:#fff8e6;color:#8a6d00;border:1px solid #f0e0a8;border-radius:6px">⏳ ' + esc(text) + '</div>'; },
+              result: function (r) {
+                try { localStorage.setItem(CLEAN_KEY, JSON.stringify(r)); } catch (e) {}
+                renderCleanResult(r);
+                if (r.ok && r.total > 0) Toast.success(r.message);
+                App.refresh();   // 刷新云端分布等
+              },
+              error: function (m) {
+                cleanRes.innerHTML = '<div style="padding:6px 10px;background:#fdecea;color:#c0392b;border:1px solid #f5c6cb;border-radius:6px">❌ ' + esc(m) + '</div>';
+              }
+            }).then(function () {
+              cleanBtn.disabled = false; cleanBtn.textContent = '🧹 清理孤儿 Gist（删除重复同步文件）';
+            }).catch(function () {
+              cleanBtn.disabled = false; cleanBtn.textContent = '🧹 清理孤儿 Gist（删除重复同步文件）';
+            });
+          }, true);
       };
     })();
 
