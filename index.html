@@ -2684,34 +2684,52 @@ body.cp-lock { overflow: hidden; }
     return await createGistFiles(BULK_DESC, collFiles(collJson));
   }
 
-  // 同一令牌下按文件/描述发现已有 Gist（换设备无 gistId 时）：优先新格式核心，回退旧格式整包
+  // 同一令牌下发现已有 Gist【仅用于"全新设备/清缓存"且 meta 中无 gistId 的场景】。
+  // 日常同步一律复用 meta.gistId，绝不调用本函数——这是防止反复新建 Gist 的关键。
+  // 选取 updated_at 最新 且含 manifest.json 的那份（即当前活跃同步），确保新设备加入的是活数据；
+  // 回退到旧格式整包（kaoyan2026.json）体积最大者。
+  // 遇限流(403/429)/服务端(5xx)/网络等瞬时错误时抛 e.transient=true，
+  // 调用方据此【不新建 Gist、留待轮询重试】，避免瞬时失败就重复建。
   async function discoverCore() {
-    let page = 1, newFmt = null, oldFmt = null, oldBest = -1;
-    while (page <= 3) {
-      const list = (await apiReq('/gists?per_page=100&page=' + page)).data;
+    let page = 1, newBest = null, newTs = '', oldBest = null, oldSz = -1;
+    while (page <= 10) {
+      let list;
+      try { list = (await apiReq('/gists?per_page=100&page=' + page)).data; }
+      catch (e) {
+        if (e && (e.status === 403 || e.status === 429 || (e.status >= 500))) e.transient = true;
+        throw e;
+      }
       if (!list || !list.length) break;
       for (const g of list) {
         const files = g.files || {};
-        if (files[MANIFEST_FILE] && !newFmt) newFmt = g.id;   // 列表按 updated 倒序，取最新的新格式
-        if (files[GIST_FILENAME]) {
+        if (files[MANIFEST_FILE]) {
+          const ts = g.updated_at || '';
+          if (!newBest || ts > newTs) { newBest = g.id; newTs = ts; }
+        } else if (files[GIST_FILENAME]) {
           const sz = files[GIST_FILENAME].size || 0;
-          if (sz > oldBest) { oldBest = sz; oldFmt = g.id; }
+          if (sz > oldSz) { oldSz = sz; oldBest = g.id; }
         }
       }
-      if (newFmt) break;
       page++;
     }
-    return newFmt || oldFmt || null;
+    return newBest || oldBest || null;
   }
   async function discoverBulk() {
-    let page = 1;
-    while (page <= 3) {
-      const list = (await apiReq('/gists?per_page=100&page=' + page)).data;
+    let page = 1, best = null, bestTs = '';
+    while (page <= 10) {
+      let list;
+      try { list = (await apiReq('/gists?per_page=100&page=' + page)).data; }
+      catch (e) { if (e && (e.status === 403 || e.status === 429 || (e.status >= 500))) e.transient = true; throw e; }
       if (!list || !list.length) break;
-      for (const g of list) { if (g.description === BULK_DESC) return g.id; }
+      for (const g of list) {
+        if (g.description === BULK_DESC) {
+          const ts = g.updated_at || '';
+          if (!best || ts > bestTs) { best = g.id; bestTs = ts; }
+        }
+      }
       page++;
     }
-    return null;
+    return best;
   }
 
   // ---------- 载荷拆分 / 哈希 ----------
@@ -3039,13 +3057,18 @@ body.cp-lock { overflow: hidden; }
         try { suppressPush = true; try { await pull(true, { preserveLocal: true }); } finally { suppressPush = false; } }
         catch (e) { console.warn('[Cloud] 压实前合并失败，已跳过（可能丢远端新增）', e); }
         const live2 = window.Store.get();
-        if (!state.bulkGistId) { try { state.bulkGistId = await discoverBulk(); } catch (e) {} }
+        let bulkDiscoverTransient = false;
+        if (!state.bulkGistId) {
+          try { state.bulkGistId = await discoverBulk(); }
+          catch (e) { if (e && e.transient) bulkDiscoverTransient = true; }
+        }
         const collJson = {};
         BULK_COLLS.forEach(c => { collJson[c] = JSON.stringify(live2[c] || []); });
         HEAVY_FIELDS.forEach(h => { collJson[h] = JSON.stringify(live2[h] || null); });
         let betag = null;
-        if (!state.bulkGistId) state.bulkGistId = await createBulkGist(collJson);
-        else betag = await patchGistFiles(state.bulkGistId, collFiles(collJson));
+        if (state.bulkGistId) betag = await patchGistFiles(state.bulkGistId, collFiles(collJson));
+        else if (!bulkDiscoverTransient) state.bulkGistId = await createBulkGist(collJson); // 瞬时失败不新建，留待重试
+        else console.warn('[Cloud] 大数据 Gist 发现遇瞬时错误，本次跳过整包上传（避免重复建）');
         if (betag) meta.bulkEtag = betag;
         transfer.pushed.push('整包快照'); transfer.bytes += JSON.stringify(collJson).length;
         // 删除所有现存 v6 op 文件 + v5 旧 op 文件
@@ -3116,12 +3139,22 @@ body.cp-lock { overflow: hidden; }
           const cetag = await patchGistFiles(state.gistId, files);
           if (cetag) meta.coreEtag = cetag;
         } catch (e) {
-          // Gist 丢失/令牌换号：重新发现或新建，避免卡死
+          // Gist 丢失/令牌换号：重新发现并改指已有 Gist；【绝不在发现失败/为空时新建】，
+          // 否则瞬时错误会再次繁殖出多余 Gist。本次推送放弃核心写入，等下次轮询/手动同步重试。
           if (e && (e.status === 404 || e.status === 401)) {
             state.gistId = null;
-            try { const id = await discoverCore(); if (id) state.gistId = id; } catch (_) {}
-            if (!state.gistId) state.gistId = await createGistFiles(GIST_DESC, files);
-            else { const cetag2 = await patchGistFiles(state.gistId, files); if (cetag2) meta.coreEtag = cetag2; }
+            let found = null;
+            try { found = await discoverCore(); } catch (de) { console.warn('[Cloud] 重发现 Gist 失败（不新建）', de); }
+            if (found) {
+              state.gistId = found;
+              try {
+                const cetag2 = await patchGistFiles(state.gistId, files);
+                if (cetag2) meta.coreEtag = cetag2;
+                transfer.pushed.unshift('核心'); transfer.bytes += coreJson.length + manifestJson.length;
+              } catch (pe) { console.warn('[Cloud] 重指向后补丁失败', pe); }
+            } else {
+              console.warn('[Cloud] Gist 404 但未能重新发现，跳过本次核心写入（避免重复建）');
+            }
           } else if (e && e.status === 403) { setRateLimitBackoff(0); throw e; }
           else throw e;
         }
@@ -3159,12 +3192,29 @@ body.cp-lock { overflow: hidden; }
   async function startSync() {
     renderBadge('☁ 同步中…', 'busy');
     try {
+      // ① 优先复用上次成功同步记下的 gistId（最可靠，不依赖 API 列表，直接切断"反复新建"循环）
+      if (!state.gistId && meta.gistId) {
+        state.gistId = meta.gistId;
+        state.bulkGistId = meta.bulkGistId || null;
+      }
+      // ② 仅"全新设备/清缓存（meta 无 gistId）"才去发现；瞬时失败绝不新建，留待轮询重试
       if (!state.gistId) {
-        try { const id = await discoverCore(); if (id) state.gistId = id; } catch (e) { console.warn('[Cloud] 发现 Gist 失败', e); }
+        try {
+          state.gistId = await discoverCore();
+        } catch (e) {
+          if (e && e.transient) {
+            console.warn('[Cloud] 发现 Gist 遭遇瞬时错误，将在轮询中自愈重试', e.message);
+            setSyncPhase('idle');
+            startPolling();   // 立即启动轮询以便自愈
+            return;
+          }
+          console.warn('[Cloud] 发现 Gist 失败', e);
+        }
         state.lastPushedAt = 0; meta.coreEtag = null; meta.bulkEtag = null;
       }
-      state.bulkGistId = meta.bulkGistId || null;
+      state.bulkGistId = meta.bulkGistId || state.bulkGistId || null;
       await pull();
+      // ③ 仅当"确实没有任何 gistId 记录且发现为空"才真正新建（真·首次同步）
       if (!state.gistId) await push();
       setSyncPhase('idle');
       startPolling();
@@ -3175,6 +3225,7 @@ body.cp-lock { overflow: hidden; }
       renderBadge('☁ 同步失败', 'err');
       if (state.badge) state.badge.title = '同步失败：' + msg;
       if (window.Toast) Toast.danger('☁ 同步失败：' + msg);
+      startPolling();   // 即使首启失败也启动轮询，便于自愈
     }
   }
   function startPolling() {
@@ -3182,6 +3233,11 @@ body.cp-lock { overflow: hidden; }
     state.pollTimer = setInterval(async () => {
       if (isRateLimited()) return;
       try {
+        // 自愈：若首启时因瞬时错误未绑定成功（meta 也无 gistId），重新发现→必要时新建
+        if (!state.gistId && !meta.gistId) {
+          try { state.gistId = await discoverCore(); } catch (e) { if (e && e.transient) return; }
+          if (!state.gistId) { await push(); return; }   // 真·首次才新建
+        }
         // 周期拉取用 preserveLocal 深合并；ETag 命中(304)时零流量
         // v6 追加同步：拉取只取核心 Gist + 未应用的 op 文件，几乎零流量
         await pull(false, { preserveLocal: true });
@@ -20408,15 +20464,17 @@ function bind(el, next) {
   }
   function genFrameworkAI() {
     const all = list();
+    console.log('[polrecite] AI生成框架 点击', { hasAI: hasAI(), count: all.length });
     if (!all.length) { Toast.warn('还没有大题，先录入或载入示例'); return; }
     if (!hasAI()) { Toast.warn('未配置 AI，无法生成框架'); return; }
-    Toast.show('🤖 AI 归纳框架中…', 'info');
+    Toast.show('🤖 AI 归纳框架中…（稍候，大题多时需 10-30 秒）', 'info', 4000);
     const material = all.slice(0, 80).map(function (p, i) {
       return (i + 1) + '. [' + (p.subject || '未分') + '] ' + (p.topic || '').slice(0, 60);
     }).join('\n');
     const sys = '你是考研政治辅导专家，只输出JSON数组，不要多余文字。';
     const user = '从以下考研政治大题考点中，归纳出 科目→章节→考点 三级树。只输出JSON数组，每个元素 {"subject":"马原/毛中特/史纲/思修/当代","chapter":"章节名","name":"考点名"}（reciteIds 不要填，由前端回填）。科目必须取这五个之一。大题清单：\n' + material;
     AI.chatJSON(sys, user, null, { cache: false }).then(function (r) {
+      console.log('[polrecite] 框架AI返回', r);
       const arr = Array.isArray(r) ? r : (r && Array.isArray(r.nodes) ? r.nodes : []);
       if (!arr.length) throw new Error('AI 未返回框架');
       let added = 0;
@@ -20438,7 +20496,7 @@ function bind(el, next) {
       });
       Toast.success('AI 已生成框架，新增 ' + added + ' 个考点节点');
       App.refresh();
-    }).catch(function (e) { Toast.warn('生成失败：' + (e && e.message ? e.message : '')); });
+    }).catch(function (e) { console.error('[polrecite] 框架AI失败', e); Toast.warn('生成失败：' + (e && e.message ? e.message : String(e)), 'warn', 6000); });
   }
   // ============================================================
   // 特性② 答题模板库（polTemplates：纯数据 + 新视图）
@@ -20739,9 +20797,10 @@ function bind(el, next) {
   }
   function genChoiceAI() {
     const all = list();
+    console.log('[polrecite] AI出选择题 点击', { hasAI: hasAI(), count: all.length });
     if (!all.length) { Toast.warn('还没有大题，先录入或载入示例（AI 基于大题出选择题）'); return; }
     if (!hasAI()) { Toast.warn('未配置 AI，无法出题'); return; }
-    Toast.show('🤖 AI 出选择题中…', 'info');
+    Toast.show('🤖 AI 出选择题中…（稍候 5-15 秒）', 'info', 4000);
     const pick = all[U.randInt(0, all.length - 1)];
     const sys = '你是考研政治命题专家，只输出JSON对象，不要多余文字。';
     const user = '基于以下考研政治大题考点，命制一道单项选择题（4 个选项，1 个正确）。只输出JSON：{"stem":"题干","options":["A选项","B选项","C选项","D选项"],"answer":0到3的整数,"analysis":"解析","subject":"马原/毛中特/史纲/思修/当代"}。考点：' + (pick.topic || '') + '；要点：' + (pick.points || []).join('；');
@@ -20752,7 +20811,7 @@ function bind(el, next) {
       if (!r.stem) throw new Error('AI 未返回题干');
       addChoice({ stem: String(r.stem), options: opts, answer: ans, analysis: r.analysis ? String(r.analysis) : '', subject: r.subject ? String(r.subject) : (pick.subject || ''), source: pick.source || 'AI出题', year: pick.year || '' });
       Toast.success('AI 已生成一道选择题'); App.refresh();
-    }).catch(function (e) { Toast.warn('出题失败：' + (e && e.message ? e.message : '')); });
+    }).catch(function (e) { console.error('[polrecite] 选择题AI失败', e); Toast.warn('出题失败：' + (e && e.message ? e.message : String(e)), 'warn', 6000); });
   }
   // 选择题连续刷题（单弹窗逐题，参照 startDrill）
   function startChoiceDrill(n) {
