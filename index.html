@@ -2881,7 +2881,7 @@ body.cp-lock { overflow: hidden; }
     if (!files[MANIFEST_FILE] && files[GIST_FILENAME]) {
       const content = await readFileContent(files[GIST_FILENAME]);
       if (content) {
-        transfer.bytes += content.length; transfer.pulled.push('整包(旧格式)');
+        transfer.bytes += byteLen(content); transfer.pulled.push('整包(旧格式)');
         try {
           const localHash = contentHash(JSON.stringify(localSnapshot()));
           if (contentHash(content) !== localHash) mergeRemote(JSON.parse(content), mergeOpts);
@@ -2896,7 +2896,7 @@ body.cp-lock { overflow: hidden; }
     const coreStr = await readFileContent(files[CORE_FILE]);
     const manStr = await readFileContent(files[MANIFEST_FILE]);
     if (!coreStr || !manStr) { state.lastSyncAt = Date.now(); saveMeta(); return; }
-    transfer.bytes += coreStr.length + manStr.length; transfer.pulled.push('核心');
+    transfer.bytes += byteLen(coreStr) + byteLen(manStr); transfer.pulled.push('核心');
     let core, manifest;
     try { core = JSON.parse(coreStr); manifest = JSON.parse(manStr); }
     catch (e) { console.error('[Cloud] 核心数据解析失败', e); return; }
@@ -2927,11 +2927,11 @@ body.cp-lock { overflow: hidden; }
         meta.bulkEtag = bresp.etag;
         for (const c of BULK_COLLS) {
           const f = bresp.data.files[c + '.json'];
-          if (f) { const s = await readFileContent(f); if (s != null) { transfer.bytes += s.length; transfer.pulled.push(COLL_LABEL[c] + '(快照)'); remoteColls[c] = JSON.parse(s); } }
+          if (f) { const s = await readFileContent(f); if (s != null) { transfer.bytes += byteLen(s); transfer.pulled.push(COLL_LABEL[c] + '(快照)'); remoteColls[c] = JSON.parse(s); } }
         }
         for (const h of HEAVY_FIELDS) {
           const f = bresp.data.files[h + '.json'];
-          if (f) { const s = await readFileContent(f); if (s != null) { transfer.bytes += s.length; transfer.pulled.push((HEAVY_LABEL[h] || h) + '(快照)'); remoteHeavy[h] = JSON.parse(s); } }
+          if (f) { const s = await readFileContent(f); if (s != null) { transfer.bytes += byteLen(s); transfer.pulled.push((HEAVY_LABEL[h] || h) + '(快照)'); remoteHeavy[h] = JSON.parse(s); } }
         }
       }
       meta.compactGen = remoteGen || (isV5Mig ? 1 : (meta.compactGen || 0));
@@ -2951,7 +2951,7 @@ body.cp-lock { overflow: hidden; }
         if (!of || !of.ops) continue;
         of.__name = k;
         pending.push(of);
-        transfer.bytes += s.length;
+        transfer.bytes += byteLen(s);
       } catch (e) {}
     }
     pending.sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -2978,7 +2978,7 @@ body.cp-lock { overflow: hidden; }
           if (bresp.data && bresp.data.files) {
             for (const h of needHeavy) {
               const f = bresp.data.files[h + '.json'];
-              if (f) { const s = await readFileContent(f); if (s != null) { transfer.bytes += s.length; transfer.pulled.push(HEAVY_LABEL[h] || h); remoteObj[h] = JSON.parse(s); } }
+              if (f) { const s = await readFileContent(f); if (s != null) { transfer.bytes += byteLen(s); transfer.pulled.push(HEAVY_LABEL[h] || h); remoteObj[h] = JSON.parse(s); } }
             }
           }
         } catch (e) { console.warn('[Cloud] 重量级字段拉取失败', e); }
@@ -3070,7 +3070,7 @@ body.cp-lock { overflow: hidden; }
         else if (!bulkDiscoverTransient) state.bulkGistId = await createBulkGist(collJson); // 瞬时失败不新建，留待重试
         else console.warn('[Cloud] 大数据 Gist 发现遇瞬时错误，本次跳过整包上传（避免重复建）');
         if (betag) meta.bulkEtag = betag;
-        transfer.pushed.push('整包快照'); transfer.bytes += JSON.stringify(collJson).length;
+        transfer.pushed.push('整包快照'); transfer.bytes += byteLen(JSON.stringify(collJson));
         // 删除所有现存 v6 op 文件 + v5 旧 op 文件
         opDel = {};
         (meta.appliedOps || []).forEach(n => { if (OP_FILE_RE.test(n)) opDel[n] = null; });
@@ -3088,7 +3088,7 @@ body.cp-lock { overflow: hidden; }
         if (of) {
           const fname = genOpFileName(Date.now(), meta.deviceId);
           opFiles[fname] = { content: JSON.stringify(of) };
-          transfer.bytes += JSON.stringify(of).length;
+          transfer.bytes += byteLen(JSON.stringify(of));
           transfer.pushed.push('op:' + changed.map(c => COLL_LABEL[c]).join('/'));
           meta.appliedOps = meta.appliedOps || [];
           if (meta.appliedOps.indexOf(fname) < 0) meta.appliedOps.push(fname);
@@ -3112,7 +3112,7 @@ body.cp-lock { overflow: hidden; }
             const htag = await patchGistFiles(state.bulkGistId, collFiles(heavyJson, heavyChanged));
             if (htag) meta.bulkEtag = htag;
           } catch (e) { console.warn('[Cloud] 重量级字段上传失败', e); }
-          heavyChanged.forEach(h => { transfer.pushed.push(HEAVY_LABEL[h] || h); transfer.bytes += (heavyJson[h] || '').length; });
+          heavyChanged.forEach(h => { transfer.pushed.push(HEAVY_LABEL[h] || h); transfer.bytes += byteLen(heavyJson[h] || ''); });
         }
       }
 
@@ -3133,7 +3133,7 @@ body.cp-lock { overflow: hidden; }
       const writeCore = !state.gistId || coreChanged || Object.keys(opFiles).length || (didCompact && opDel && Object.keys(opDel).length);
       if (!state.gistId) {
         state.gistId = await createGistFiles(GIST_DESC, files);
-        transfer.pushed.unshift('核心'); transfer.bytes += coreJson.length + manifestJson.length;
+        transfer.pushed.unshift('核心'); transfer.bytes += byteLen(coreJson) + byteLen(manifestJson);
       } else if (writeCore) {
         try {
           const cetag = await patchGistFiles(state.gistId, files);
@@ -3150,7 +3150,7 @@ body.cp-lock { overflow: hidden; }
               try {
                 const cetag2 = await patchGistFiles(state.gistId, files);
                 if (cetag2) meta.coreEtag = cetag2;
-                transfer.pushed.unshift('核心'); transfer.bytes += coreJson.length + manifestJson.length;
+                transfer.pushed.unshift('核心'); transfer.bytes += byteLen(coreJson) + byteLen(manifestJson);
               } catch (pe) { console.warn('[Cloud] 重指向后补丁失败', pe); }
             } else {
               console.warn('[Cloud] Gist 404 但未能重新发现，跳过本次核心写入（避免重复建）');
@@ -3158,7 +3158,7 @@ body.cp-lock { overflow: hidden; }
           } else if (e && e.status === 403) { setRateLimitBackoff(0); throw e; }
           else throw e;
         }
-        transfer.pushed.unshift('核心'); transfer.bytes += coreJson.length + manifestJson.length;
+        transfer.pushed.unshift('核心'); transfer.bytes += byteLen(coreJson) + byteLen(manifestJson);
       }
 
       // 记录已推哈希（下次据此判定分区是否需要上传）；保留本次 PATCH 返回的 ETag 作为下次拉取闸门
@@ -3482,6 +3482,16 @@ body.cp-lock { overflow: hidden; }
 
   // ---------- 数据分析与管理（供设置模块调用）----------
   function fmtKB(b) { return b >= 1024 ? (Math.round(b / 1024 * 10) / 10 + ' KB') : (b + ' B'); }
+  // 真实 UTF-8 字节数（与 GitHub Gist 的 files[].size 口径一致；JS 字符串 .length 是 UTF-16 码元数，
+  // 对含中文的 JSON 会明显偏小，导致同步流量日志与「云端数据分布」显示的字节数对不上）
+  function byteLen(s) {
+    if (s == null) return 0;
+    s = String(s);
+    if (typeof TextEncoder !== 'undefined') { try { return new TextEncoder().encode(s).length; } catch (e) {} }
+    let n = 0;
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); n += c < 0x80 ? 1 : (c < 0x800 ? 2 : 3); }
+    return n;
+  }
   function opTime(name) { const m = /^op-(\d+)-/.exec(name); if (!m) return ''; try { return new Date(+m[1]).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } }
 
   // 核心体积诊断：逐字段量大小（同步，返回 HTML 片段）
