@@ -1257,6 +1257,19 @@ body.cp-lock { overflow: hidden; }
 .vb-bookcard { transition: border-color .12s; }
 .vb-bookcard:hover { border-color: var(--text-muted); }
 
+/* ---------- 错题 AI 归因图谱（attr-*） ---------- */
+.attr-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 6px; }
+@media (max-width: 560px) { .attr-cols { grid-template-columns: 1fr; } }
+.attr-bar-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 12px; }
+.attr-bar-label { flex: 0 0 64px; text-align: right; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.attr-bar { flex: 1; height: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
+.attr-bar-fill { height: 100%; border-radius: 99px; min-width: 2px; transition: width .3s; }
+.attr-bar-num { flex: 0 0 auto; min-width: 56px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.attr-pattern { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 10px 12px; margin: 8px 0; }
+.attr-pattern-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.attr-pattern-no { flex: 0 0 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; background: var(--text-primary); color: #fff; font-size: 11px; }
+.attr-pattern-line { font-size: 12.5px; line-height: 1.7; color: var(--text-secondary); }
+
 </style>
 </head>
 <body>
@@ -9232,6 +9245,8 @@ function bind(el, next) {
 
       + clusterCardHtml(s)
 
+      + analysisCardHtml(s)
+
       + '<div class="card"><div class="card-title">记录新错题</div>'
       + '<div class="form-grid">'
       + '<label class="fld"><span>科目</span><select id="ms-subj" class="input input-sel">'
@@ -9451,6 +9466,7 @@ function bind(el, next) {
       sp.onclick = () => markReview(sp.getAttribute('data-rvd-id'), parseInt(sp.getAttribute('data-rvd-stage'), 10));
     });
     bindCluster(el);
+    bindAnalysis(el);
   }
 
   // ---------- 统计概览 chips ----------
@@ -9776,6 +9792,120 @@ function bind(el, next) {
     });
   }
 
+  // ==================== AI 错因归因图谱（量化层，与聚类互补） ====================
+  // 数据：s.mistakeAnalysis = { generatedAt, items:[{id,cause,topic}], topPatterns:[{pattern,rootCause,fix}], advice }
+  // 聚类 = 定性（哪些题同一病根）；归因图谱 = 定量（错因占比 / 易错点排行 / Top 模式），一次生成持久化缓存
+  var ATTR_CAUSES = ['概念混淆', '计算失误', '审题偏差', '方法缺失', '粗心大意', '记忆遗忘'];
+  function attrCauseOf(c) {
+    return ATTR_CAUSES.indexOf(c) >= 0 ? c : '其他';
+  }
+  // 本地聚合 items → 错因分布 + 易错点排行（数据准确，不依赖 AI 统计）
+  function attrAggregate(items) {
+    var causes = {}, topics = {};
+    items.forEach(function (it) {
+      var c = attrCauseOf(it.cause);
+      causes[c] = (causes[c] || 0) + 1;
+      var t = String(it.topic || '').trim() || '未归类';
+      topics[t] = (topics[t] || 0) + 1;
+    });
+    var causeList = ATTR_CAUSES.map(function (c) { return { name: c, count: causes[c] || 0 }; })
+      .concat((causes['其他'] || 0) ? [{ name: '其他', count: causes['其他'] }] : [])
+      .filter(function (c) { return c.count > 0; });
+    var topicList = Object.keys(topics).map(function (t) { return { name: t, count: topics[t] }; })
+      .sort(function (a, b) { return b.count - a.count; }).slice(0, 8);
+    return { causeList: causeList, topicList: topicList };
+  }
+  function analysisCardHtml(s) {
+    var a = s.mistakeAnalysis;
+    var header = '<div class="card"><div class="card-title-row"><span class="card-title">📊 AI 错因归因图谱</span>'
+      + '<span><button class="link-btn" id="ms-attr-run">🤖 ' + (a && a.items && a.items.length ? '更新图谱' : '生成图谱') + '</button></span></div>';
+    if (!a || !a.items || !a.items.length) {
+      return header + '<div class="muted-sm">把每道错题归因到六大错因（概念混淆/计算失误/审题偏差/方法缺失/粗心大意/记忆遗忘），'
+        + '聚合出<b>错因占比 + 易错点排行 + 三大易错模式</b>，结果持久化缓存（跨设备同步可见）。'
+        + '<br>与「智能聚类」互补：聚类回答"哪些题是同一个病根"，图谱回答"你的病根分布长什么样"。需至少 3 条错题。</div></div>';
+    }
+    var agg = attrAggregate(a.items);
+    var total = a.items.length;
+    var maxCause = Math.max.apply(null, agg.causeList.map(function (c) { return c.count; }));
+    var causeBars = agg.causeList.map(function (c) {
+      var pct = Math.round(c.count / total * 100);
+      var color = c.name === '粗心大意' ? '#d48806' : c.name === '概念混淆' ? '#2f54eb' : c.name === '计算失误' ? '#cf1322' : '#595959';
+      return '<div class="attr-bar-row"><div class="attr-bar-label">' + c.name + '</div>'
+        + '<div class="attr-bar"><div class="attr-bar-fill" style="width:' + Math.round(c.count / maxCause * 100) + '%;background:' + color + '"></div></div>'
+        + '<div class="attr-bar-num">' + c.count + ' · ' + pct + '%</div></div>';
+    }).join('');
+    var topicBars = agg.topicList.map(function (t, i) {
+      return '<div class="attr-bar-row"><div class="attr-bar-label">' + U.esc(t.name) + '</div>'
+        + '<div class="attr-bar"><div class="attr-bar-fill" style="width:' + Math.round(t.count / agg.topicList[0].count * 100) + '%;background:#722ed1"></div></div>'
+        + '<div class="attr-bar-num">' + t.count + ' 题</div></div>';
+    }).join('');
+    var patterns = (a.topPatterns || []).slice(0, 3).map(function (p, i) {
+      return '<div class="attr-pattern" style="border-left:3px solid ' + ['#cf1322', '#d48806', '#2f54eb'][i] + '">'
+        + '<div class="attr-pattern-title"><span class="attr-pattern-no">' + (i + 1) + '</span>' + U.esc(p.pattern || '') + '</div>'
+        + '<div class="attr-pattern-line"><b>根因：</b>' + U.esc(p.rootCause || '') + '</div>'
+        + '<div class="attr-pattern-line"><b>防呆：</b>' + U.esc(p.fix || '') + '</div></div>';
+    }).join('');
+    return header
+      + '<div class="mis-stats">' + chip('分析错题', total) + chip('错因类型', agg.causeList.length) + chip('易错点', agg.topicList.length) + chip('生成日期', a.generatedAt ? String(a.generatedAt).slice(0, 10) : '-') + '</div>'
+      + '<div class="attr-cols">'
+      + '<div class="attr-col"><div class="card-title-sm">错因分布</div>' + causeBars + '</div>'
+      + '<div class="attr-col"><div class="card-title-sm">易错点 Top ' + agg.topicList.length + '</div>' + topicBars + '</div>'
+      + '</div>'
+      + (patterns ? '<div class="card-title-sm" style="margin-top:12px">三大易错模式</div>' + patterns : '')
+      + (a.advice ? '<div class="alert alert-warn" style="margin-top:10px">💡 建议：' + U.esc(a.advice) + '</div>' : '')
+      + '</div>';
+  }
+  function bindAnalysis(el) {
+    var runBtn = el.querySelector('#ms-attr-run');
+    if (runBtn) runBtn.onclick = function () { runMistakeAnalysis(el); };
+  }
+  function runMistakeAnalysis(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+    var s = Store.get();
+    var all = U.clone(s.mistakes || []).sort(function (a, b) { return (a.createdAt < b.createdAt ? 1 : -1); });
+    if (all.length < 3) { Toast.warn('错题还不够 3 条，再攒攒'); return; }
+    var batch = all.slice(0, 30);
+    var runBtn = el.querySelector('#ms-attr-run');
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = '🤖 归因中…（15-40 秒）'; }
+    var lines = batch.map(function (m, i) {
+      return (i + 1) + '. ' + m.id + '||' + ((DB.MISTAKE_TYPES[m.type] || {}).name || m.type) + '：' + String(m.desc || '').slice(0, 80);
+    }).join('\n');
+    var sys = '你是考研学情分析师，只输出JSON对象，不要任何多余文字。';
+    var user = '以下是考生最近 ' + batch.length + ' 条错题（格式：序号. id||类型：描述）。请逐条归因：'
+      + '①cause 必须取「概念混淆/计算失误/审题偏差/方法缺失/粗心大意/记忆遗忘」之一（跨科目通用维度，拿不准取最接近的）；'
+      + '②topic 给 2-6 字考点名（如：极限、定积分、长难句、史纲时间线、虚拟语气）；'
+      + '③topPatterns：最多 3 个反复出现的错误模式，各含 pattern（模式名）、rootCause（一句话根因）、fix（今天就能执行的防呆动作）；'
+      + '④advice：一句总体建议。'
+      + '只输出JSON：{"items":[{"id":"...","cause":"...","topic":"..."}],"topPatterns":[{"pattern":"...","rootCause":"...","fix":"..."}],"advice":"..."}'
+      + '\n错题清单：\n' + lines;
+    AI.chatJSON(sys, user, null, { cache: false, maxTokens: 8000 }).then(function (r) {
+      var items = Array.isArray(r.items) ? r.items : [];
+      var itemsOk = items.map(function (it) {
+        var m = batch.find(function (x) { return x.id === it.id; });
+        return m ? { id: m.id, cause: attrCauseOf(String(it.cause || '')), topic: String(it.topic || '').trim() || '未归类' } : null;
+      }).filter(Boolean);
+      if (!itemsOk.length) throw new Error('AI 未返回有效归因');
+      var covered = {};
+      itemsOk.forEach(function (it) { covered[it.id] = true; });
+      batch.forEach(function (m) { if (!covered[m.id]) itemsOk.push({ id: m.id, cause: '其他', topic: '未归类' }); });
+      Store.update(function (st) {
+        st.mistakeAnalysis = {
+          generatedAt: new Date().toISOString(),
+          items: itemsOk,
+          topPatterns: Array.isArray(r.topPatterns) ? r.topPatterns.slice(0, 3).map(function (p) {
+            return { pattern: String(p.pattern || ''), rootCause: String(p.rootCause || ''), fix: String(p.fix || '') };
+          }) : [],
+          advice: r.advice ? String(r.advice) : ''
+        };
+      });
+      Toast.success('归因图谱已生成（' + itemsOk.length + ' 题）');
+      App.refresh();
+    }).catch(function (e) {
+      Toast.warn('归因失败：' + (e && e.message ? e.message : String(e)));
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = '🤖 生成图谱'; }
+    });
+  }
+
   // 执行 AI 聚类
   function runCluster(el) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
@@ -10084,7 +10214,7 @@ function bind(el, next) {
     });
   }
 
-  window.MistakesModule = { render };
+  window.MistakesModule = { render, attrCauseOf, attrAggregate, runMistakeAnalysis };  // attr* 供归因图谱单测
 })();
 
 
