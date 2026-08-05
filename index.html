@@ -1181,6 +1181,82 @@ body.cp-lock { overflow: hidden; }
 .pr-write-ai { margin-top: 8px; }
 .pr-write-ai .muted-sm { margin-top: 4px; line-height: 1.7; }
 
+/* ============================================================
+ * 政治背诵 + 单词本 UI 美化增强
+ * 规范内：黑白灰主调 / 无渐变无阴影 / 圆角 6-8-12 / 字重 400-500
+ * 覆盖式追加：不改变布局与功能，只提升视觉层级与交互反馈
+ * ============================================================ */
+
+/* ① 空状态：两模块 empty-hint 之前无样式 → 居中 + 顶部细线 */
+.empty-hint {
+  text-align: center; color: var(--text-muted); font-size: 13px;
+  padding: 26px 14px; line-height: 1.8;
+}
+.empty-hint::before {
+  content: ""; display: block; width: 34px; height: 3px; border-radius: 2px;
+  background: var(--line); margin: 0 auto 10px;
+}
+
+/* ② 统计小卡：加细边框，在浅灰卡片上层次更分明（全局 stat 一并受益） */
+.stat-row .stat { border: 1px solid var(--line); }
+
+/* ③ Leitner 盒点：未点亮 = 空心圈，更精致 */
+.box-dot { width: 8px; height: 8px; }
+.box-dot:not(.on) { border: 1px solid var(--text-muted); background: transparent; }
+
+/* ④ 政治大题卡片：hover 背景微深 */
+.pr-card { transition: background .15s; }
+.pr-card:hover { background: #ececec; }
+
+/* ⑤ 今日待背清单项：hover 反馈 + 文本加粗 */
+.pr-dueitem { transition: border-color .12s, background .12s; }
+.pr-dueitem:hover { border-color: var(--text-muted); background: var(--surface-muted); }
+.pr-duetext { font-weight: 500; }
+
+/* ⑥ 选择题选项：左侧 3px 色条（选中/对/错态）+ 字母圆点填充 */
+.pr-ch-opt { border-left: 3px solid transparent; padding-left: 8px; }
+.pr-ch-opt:hover { border-color: var(--text-muted); border-left-color: var(--text-muted); background: var(--surface-muted); }
+.pr-ch-opt.selected { border-color: var(--text-primary); border-left-color: var(--text-primary); background: var(--surface-muted); font-weight: 500; }
+.pr-ch-opt.selected .pr-ch-letter { background: var(--text-primary); color: #fff; }
+.pr-ch-opt.pr-ch-ok .pr-ch-letter { background: var(--ok); color: #fff; }
+.pr-ch-opt.pr-ch-bad .pr-ch-letter { background: var(--danger); color: #fff; }
+
+/* ⑦ 答题模板卡：hover 边框 + 类型标签字重 + 成稿示例块 */
+.pr-tpl-card { transition: border-color .12s; }
+.pr-tpl-card:hover { border-color: var(--text-muted); }
+.pr-tpl-type { font-weight: 500; }
+.pr-tpl-filled {
+  font-size: 12.5px; line-height: 1.8; color: var(--text-secondary);
+  background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--ok);
+  border-radius: var(--r-btn); padding: 8px 10px; margin-bottom: 6px;
+}
+
+/* ⑧ 框架树：章节行 hover 反馈（与节点一致） */
+.pr-fw-ch > summary { border-radius: var(--r-btn); transition: background .12s; }
+.pr-fw-ch > summary:hover { background: var(--surface-muted); }
+
+/* ⑨ 挖空输入框：加粗字 + 焦点蓝色下划线 */
+.st-blank { min-width: 56px; font-weight: 500; }
+.st-blank:focus { border-bottom-width: 2px; border-bottom-color: var(--blue); }
+
+/* ⑩ 单词本：flashcard 更精致（hover 边框 + 单词字距） */
+.flashcard { transition: border-color .12s, background .12s; }
+.flashcard:hover { border-color: var(--text-muted); }
+.fc-word { letter-spacing: .5px; }
+
+/* ⑪ 评分按钮：hover 反馈 + 间隔预览字更清晰 */
+.vb-grade { transition: border-color .12s, background .12s; }
+.vb-grade:hover { border-color: var(--text-primary); background: var(--surface-muted); }
+.vb-grade span { opacity: .9; font-weight: 400; }
+
+/* ⑫ 看义选词选项：hover + 左侧色条（与政治选择题交互一致） */
+.vb-choice-opt { border-left-width: 3px; padding-left: 13px; }
+.vb-choice-opt:hover { border-color: var(--text-muted); border-left-color: var(--text-muted); background: var(--surface-muted); }
+
+/* ⑬ 词书卡：hover 边框 */
+.vb-bookcard { transition: border-color .12s; }
+.vb-bookcard:hover { border-color: var(--text-muted); }
+
 </style>
 </head>
 <body>
