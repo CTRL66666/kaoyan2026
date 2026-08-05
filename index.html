@@ -1050,6 +1050,8 @@ body.cp-lock { overflow: hidden; }
 .stat-chip-l { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .stat-chip-danger .stat-chip-n { color: var(--danger); }
 .stat-chip-danger { border-color: var(--danger); }
+.stat-chip-ok .stat-chip-n { color: var(--ok); }
+.stat-chip-ok { border-color: var(--ok); }
 .pm-search, .mis-search { display: flex; gap: 6px; margin: 8px 0; align-items: center; }
 .pm-search .input-sm, .mis-search .input-sm { flex: 1; }
 .mis-count, .pm-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
@@ -8817,6 +8819,212 @@ function bind(el, next) {
   'use strict';
 
   // 生成本周复盘数据
+  // ==================== 学习数据周报（自动聚合，零录入，与手填周报互补） ====================
+  // 周期 keys：offset=0 本周，1 上周 → ['YYYY-MM-DD' x7]
+  function rptRangeKeys(offset) {
+    var keys = U.weekKeys();
+    if (!offset) return keys;
+    return keys.map(function (k) {
+      var d = new Date(k);
+      d.setDate(d.getDate() - 7);
+      return U.dkey(d);
+    });
+  }
+  // 聚合周期内统计（纯本地，数字准确）
+  function rptStats(keys) {
+    var s = Store.get();
+    var set = {};
+    keys.forEach(function (k) { set[k] = true; });
+    var inRng = function (d) { return !!set[d]; };
+    var hours = 0, hourDays = 0, checkDays = 0, activeDays = 0;
+    keys.forEach(function (k) {
+      var h = s.studyHours[k] || 0;
+      hours += h;
+      if (h > 0) hourDays++;
+      if ((s.completions[k] || []).length > 0) checkDays++;
+      if (h > 0 || (s.completions[k] || []).length > 0) activeDays++;
+    });
+    var misByDay = {}, misCount = 0, misTop = {};
+    (s.mistakes || []).forEach(function (m) {
+      var d = (m.createdAt || '').slice(0, 10);
+      if (!inRng(d)) return;
+      misCount++;
+      misByDay[d] = (misByDay[d] || 0) + 1;
+      var t = (DB.MISTAKE_TYPES[m.type] || {}).name || m.type;
+      misTop[t] = (misTop[t] || 0) + 1;
+    });
+    var vocabN = (s.vocabLog || []).filter(function (l) { return inRng(l.date); }).length;
+    var polN = (s.polReciteLog || []).filter(function (l) { return inRng(l.date); }).length;
+    var focusMins = ((s.focus && s.focus.sessions) || []).filter(function (x) { return inRng(x.date); }).reduce(function (a, x) { return a + (x.mins || 0); }, 0);
+    var photoN = (s.mistakePhotos || []).filter(function (p) { return inRng((p.createdAt || '').slice(0, 10)); }).length;
+    return { keys: keys, hours: hours, hourDays: hourDays, checkDays: checkDays, activeDays: activeDays,
+      misCount: misCount, misByDay: misByDay, misTop: misTop, vocabN: vocabN, polN: polN, focusMins: focusMins, photoN: photoN };
+  }
+  // 薄弱考点（heat 掌握度最低的 n 个，含科目前缀）
+  function rptWeakTopics(n) {
+    var s = Store.get();
+    var heat = s.heat || {};
+    var out = [];
+    ['math', 'ctrl', 'eng', 'pol'].forEach(function (subj) {
+      var arr = (DB.TOPICS && DB.TOPICS[subj]) || [];
+      arr.forEach(function (t) {
+        var h = heat[t.id];
+        if (!h) return;
+        var score = typeof h.score === 'number' ? h.score : (h.level === 0 ? 30 : h.level === 1 ? 60 : 85);
+        var label = ((DB.SUBJECTS[subj] || {}).short || subj) + '·' + t.name;
+        out.push({ label: label, value: Math.round(score) });
+      });
+    });
+    return out.sort(function (a, b) { return a.value - b.value; }).slice(0, n || 5);
+  }
+  function dataReportCard(s) {
+    var offset = (typeof s._reportOffset === 'number') ? s._reportOffset : 0;
+    var keys = rptRangeKeys(offset);
+    var st = rptStats(keys);
+    var target = s.settings.weeklyTargetHours || 50;
+    var rate = st.activeDays ? Math.round(st.checkDays / st.activeDays * 100) : 0;
+    var pct = target ? Math.min(100, Math.round(st.hours / target * 100)) : 0;
+    var rangeLabel = keys[0].slice(5) + ' ~ ' + keys[6].slice(5);
+    // 每日错题趋势
+    var misTrend = keys.map(function (k) { return { label: k.slice(5), value: st.misByDay[k] || 0 }; });
+    // 复习量（单词+政治）
+    var revByDay = {};
+    (s.vocabLog || []).forEach(function (l) { if (keys.indexOf(l.date) >= 0) revByDay[l.date] = (revByDay[l.date] || 0) + 1; });
+    (s.polReciteLog || []).forEach(function (l) { if (keys.indexOf(l.date) >= 0) revByDay[l.date] = (revByDay[l.date] || 0) + 1; });
+    var revTrend = keys.map(function (k) { return { label: k.slice(5), value: revByDay[k] || 0 }; });
+    // 进度趋势（近 14 条）
+    var ph = (s.progressHistory || []).slice(-14).map(function (p) { return { label: p.d || '', value: Math.round(p.overall || 0) }; });
+    // 薄弱考点
+    var weak = rptWeakTopics(5);
+    var misTopStr = Object.keys(st.misTop).sort(function (a, b) { return st.misTop[b] - st.misTop[a]; }).slice(0, 3)
+      .map(function (k) { return k + '×' + st.misTop[k]; }).join('、') || '无';
+    return '<div class="card"><div class="card-title-row"><span class="card-title">📊 学习数据周报（自动）</span>'
+      + '<span class="seg-row" style="margin:0">'
+      + '<button class="seg' + (offset === 0 ? ' seg-on' : '') + '" id="rpt-w0">本周</button>'
+      + '<button class="seg' + (offset === 1 ? ' seg-on' : '') + '" id="rpt-w1">上周</button></span></div>'
+      + '<div class="muted-sm">' + rangeLabel + ' · 纯使用数据自动聚合，无需手动录入。与上方手填周报互补。</div>'
+      + '<div class="mis-stats">'
+      + chip2('学习时长', U.round1(st.hours) + 'h', pct >= 100 ? 'ok' : (pct < 60 ? 'warn' : ''))
+      + chip2('目标达成', pct + '%', pct >= 100 ? 'ok' : (pct < 60 ? 'warn' : ''))
+      + chip2('打卡率', (rate || 0) + '%', rate >= 70 ? 'ok' : (rate < 50 ? 'warn' : ''))
+      + chip2('新增错题', st.misCount)
+      + chip2('单词复习', st.vocabN)
+      + chip2('政治背诵', st.polN)
+      + chip2('专注时长', U.round1(st.focusMins / 60) + 'h')
+      + chip2('拍题', st.photoN)
+      + '</div>'
+      + '<div class="attr-cols">'
+      + '<div class="attr-col"><div class="card-title-sm">每日错题新增</div>' + Charts.bar(misTrend, { height: 120, color: '#cf1322' })
+      + '<div class="card-title-sm">每日复习量（单词+政治）</div>' + Charts.bar(revTrend, { height: 120, color: '#2f54eb' }) + '</div>'
+      + '<div class="attr-col"><div class="card-title-sm">总体进度趋势（近14条）</div>' + (ph.length >= 2 ? Charts.line(ph, { height: 120, min: 0, max: 100, unit: '%' }) : '<div class="empty">进度数据不足</div>')
+      + '<div class="card-title-sm">薄弱考点（掌握度越低越需补）</div>' + (weak.length ? Charts.bar(weak, { height: 130, color: '#722ed1' }) : '<div class="empty">暂无考点掌握数据</div>') + '</div>'
+      + '</div>'
+      + '<div class="muted-sm" style="margin-top:6px">主要错因：' + misTopStr + '</div>'
+      + '<div class="btn-row" style="margin-top:8px">'
+      + (window.AI && AI.configured() ? '<button class="btn btn-sm btn-primary" id="rpt-ai">🤖 AI 总结本周</button>' : '')
+      + '<button class="btn btn-sm btn-ghost" id="rpt-img">🖼 导出周报图片</button></div>'
+      + '<div id="rpt-ai-out" class="pm-ai-body" style="margin-top:6px;font-size:13px;line-height:1.7;white-space:pre-wrap"></div>'
+      + '</div>';
+  }
+  function chip2(label, n, cls) {
+    return '<div class="stat-chip' + (cls === 'ok' ? ' stat-chip-ok' : cls === 'warn' ? ' stat-chip-danger' : '') + '"><div class="stat-chip-n">' + n + '</div><div class="stat-chip-l">' + label + '</div></div>';
+  }
+  function bindReport(el) {
+    var w0 = el.querySelector('#rpt-w0');
+    if (w0) w0.onclick = function () { Store.update(function (s) { s._reportOffset = 0; }); render(el); };
+    var w1 = el.querySelector('#rpt-w1');
+    if (w1) w1.onclick = function () { Store.update(function (s) { s._reportOffset = 1; }); render(el); };
+    var aiBtn = el.querySelector('#rpt-ai');
+    if (aiBtn) aiBtn.onclick = function () { runReportAI(el); };
+    var imgBtn = el.querySelector('#rpt-img');
+    if (imgBtn) imgBtn.onclick = function () { exportReportImage(el); };
+  }
+  // AI 总结本周（流式）
+  function runReportAI(el) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var s = Store.get();
+    var offset = (typeof s._reportOffset === 'number') ? s._reportOffset : 0;
+    var keys = rptRangeKeys(offset);
+    var st = rptStats(keys);
+    var outEl = el.querySelector('#rpt-ai-out');
+    if (outEl) outEl.textContent = '';
+    var btn = el.querySelector('#rpt-ai');
+    if (btn) { btn.disabled = true; btn.textContent = '🤖 总结中…'; }
+    var weak = rptWeakTopics(3).map(function (w) { return w.label + ':' + w.value + '%'; }).join('、') || '暂无';
+    var sys = '你是考研学习数据分析师。根据以下本周学习数据，输出：1) 本周学习状态一句话判断；2) 2-3 个亮点；3) 2-3 个问题；4) 下周 3 条具体可执行建议。简洁犀利，120-200字，简体中文，不要JSON。';
+    var usr = '周期：' + keys[0] + ' ~ ' + keys[6] + '\n'
+      + '学习时长：' + st.hours + 'h（目标 ' + (s.settings.weeklyTargetHours || 50) + 'h）\n'
+      + '打卡天数：' + st.checkDays + '/' + st.activeDays + ' 天\n'
+      + '新增错题：' + st.misCount + ' 条（主要错因：' + (Object.keys(st.misTop).map(function (k) { return k + '×' + st.misTop[k]; }).join('、') || '无') + '）\n'
+      + '单词复习：' + st.vocabN + ' 次；政治背诵：' + st.polN + ' 次；专注：' + U.round1(st.focusMins / 60) + 'h；拍题：' + st.photoN + ' 道\n'
+      + '薄弱考点（掌握度最低）：' + weak;
+    AI.chatStream(sys, usr, function (full) {
+      if (outEl) outEl.textContent = full || '';
+    }).then(function (full) {
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 总结本周'; }
+      if (outEl && full) outEl.textContent = full;
+      if (window.AiMemory && full) AiMemory.recordEvent('完成学习周报AI总结', full.slice(0, 60));
+    }).catch(function (e) {
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 AI 总结本周'; }
+      if (outEl) outEl.textContent = '总结失败：' + (e && e.message ? e.message : String(e));
+    });
+  }
+  // 导出周报图片（canvas 自绘，零依赖）
+  function exportReportImage(el) {
+    var s = Store.get();
+    var offset = (typeof s._reportOffset === 'number') ? s._reportOffset : 0;
+    var keys = rptRangeKeys(offset);
+    var st = rptStats(keys);
+    var target = s.settings.weeklyTargetHours || 50;
+    var W = 720, H = 640;
+    var cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    var g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#000';
+    g.font = '500 24px sans-serif';
+    g.fillText('26 考研 · 学习数据周报', 32, 48);
+    g.font = '400 14px sans-serif';
+    g.fillStyle = '#595959';
+    g.fillText(keys[0] + ' ~ ' + keys[6], 32, 74);
+    // 统计行
+    var items = [
+      ['学习时长', U.round1(st.hours) + 'h'], ['目标达成', Math.min(100, Math.round(st.hours / target * 100)) + '%'],
+      ['打卡率', (st.activeDays ? Math.round(st.checkDays / st.activeDays * 100) : 0) + '%'], ['新增错题', st.misCount + ' 条'],
+      ['单词复习', st.vocabN + ' 次'], ['政治背诵', st.polN + ' 次']
+    ];
+    g.font = '500 20px sans-serif'; g.fillStyle = '#000';
+    for (var i = 0; i < items.length; i++) {
+      var col = i % 3, row = Math.floor(i / 3);
+      var x = 32 + col * 232, y = 108 + row * 56;
+      g.fillText(items[i][1], x, y);
+      g.font = '400 12px sans-serif'; g.fillStyle = '#8c8c8c';
+      g.fillText(items[i][0], x, y + 18);
+      g.font = '500 20px sans-serif'; g.fillStyle = '#000';
+    }
+    // 错题每日趋势（简化柱状）
+    var bw = (W - 96) / 7, maxMis = Math.max(1, Math.max.apply(null, keys.map(function (k) { return st.misByDay[k] || 0; })));
+    g.fillStyle = '#cf1322';
+    g.font = '400 11px sans-serif'; g.fillStyle = '#595959';
+    keys.forEach(function (k, i) {
+      var v = st.misByDay[k] || 0;
+      var hgt = Math.max(2, v / maxMis * 90);
+      g.fillStyle = '#cf1322';
+      g.fillRect(48 + i * bw + 6, 300 - hgt, bw - 12, hgt);
+      g.fillStyle = '#8c8c8c';
+      g.fillText(k.slice(5), 48 + i * bw + 6, 314);
+      g.fillStyle = '#cf1322';
+    });
+    g.fillStyle = '#000'; g.font = '500 14px sans-serif';
+    g.fillText('每日错题新增（' + st.misCount + ' 条）', 32, 250);
+    // 底部
+    g.fillStyle = '#8c8c8c'; g.font = '400 12px sans-serif';
+    g.fillText('生成于 ' + U.dkey() + ' · 离线生成', 32, H - 24);
+    var url = cv.toDataURL('image/png');
+    U.download('kaoyan_week_report_' + keys[0] + '.png', url);
+    Toast.success('周报图片已导出');
+  }
+
   function weekData() {
     const s = Store.get();
     const wk = Store.weekKey();
@@ -8879,6 +9087,9 @@ function bind(el, next) {
       + '<button class="btn btn-ghost btn-block" id="go-mental">' + U.icon('mental') + ' 去做今日心理状态记录（1分钟）</button>'
       + '</div>'
 
+      // 学习数据周报（自动聚合，零录入）
+      + dataReportCard(s)
+
       // 周复盘表单
       + '<div class="card"><div class="card-title">周复盘数据录入（' + wk + '）</div>'
       + '<div class="form-grid">'
@@ -8939,6 +9150,7 @@ function bind(el, next) {
   }
 
   function bind(el) {
+    bindReport(el);   // 学习数据周报（周期切换 / AI 总结 / 导出图片）
     el.querySelector('#go-mental').onclick = () => App.go('mental');
     el.querySelector('#rv-deep-btn').onclick = () => {
       if (!window.AI || !AI.configured()) { Toast.warn('请先在「设置」中配置 AI'); return; }
@@ -9172,7 +9384,7 @@ function bind(el, next) {
     }
   }
 
-  window.ReviewModule = { render, reportText, weekData };
+  window.ReviewModule = { render, reportText, weekData, rptRangeKeys, rptStats, rptWeakTopics };  // rpt* 供学习周报单测
 })();
 
 
