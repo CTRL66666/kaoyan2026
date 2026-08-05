@@ -2585,6 +2585,7 @@ body.cp-lock { overflow: hidden; }
     m.appliedOps = Array.isArray(m.appliedOps) ? m.appliedOps : [];  // 已应用的 v6 op 文件名集合
     m.compactGen = m.compactGen || 0; // 当前已同步的压实代次（bulk 整包快照的代）
     m.opCount = m.opCount || 0;       // 自上次压实以来累计的追加 op 文件数
+    m.bulkHashes = m.bulkHashes || {}; // bulk 远端各集合快照哈希（压实判断"真变化"用，普通 push 不更新）
     return m;
   }
   function saveMeta() {
@@ -3112,17 +3113,40 @@ body.cp-lock { overflow: hidden; }
         BULK_COLLS.forEach(c => { collJson[c] = JSON.stringify(live2[c] || []); });
         HEAVY_FIELDS.forEach(h => { collJson[h] = JSON.stringify(live2[h] || null); });
         let betag = null;
-        if (state.bulkGistId) betag = await patchGistFiles(state.bulkGistId, collFiles(collJson));
-        else if (!bulkDiscoverTransient) state.bulkGistId = await createBulkGist(collJson); // 瞬时失败不新建，留待重试
+        if (state.bulkGistId) {
+          // 压实只重传【自上次写入 bulk 以来内容变化】的集合（meta.bulkHashes 记录 bulk 远端快照哈希），
+          // 未变集合跳过——避免每次压实都全量重传几十 MB 照片。注意：绝不能用 meta.pushedHashes 判断，
+          // 因为普通 push 只写 op 文件、不改 bulk 远端，pushedHashes 与 bulk 远端哈希不同步，误判"没变"
+          // 会导致不重传 bulk、删 op 后照片丢失。meta.bulkHashes 仅在压实/首次播种时更新。
+          const compactChanged = BULK_COLLS.concat(HEAVY_FIELDS).filter(k => {
+            const cur = collJson[k] != null ? collJson[k] : 'null';
+            return contentHash(cur) !== (meta.bulkHashes[k] || '');
+          });
+          if (compactChanged.length) {
+            const changedJson = {};
+            compactChanged.forEach(k => { changedJson[k] = collJson[k]; });
+            betag = await patchGistFiles(state.bulkGistId, collFiles(changedJson, compactChanged));
+            transfer.pushed.push('整包快照(' + compactChanged.length + '/' + (BULK_COLLS.length + HEAVY_FIELDS.length) + ' 变化集合)');
+            transfer.bytes += byteLen(JSON.stringify(changedJson));
+          } else {
+            transfer.pushed.push('整包快照(无变化,跳过)');
+          }
+        }
+        else if (!bulkDiscoverTransient) {
+          state.bulkGistId = await createBulkGist(collJson); // 首次全量播种
+          transfer.pushed.push('整包快照'); transfer.bytes += byteLen(JSON.stringify(collJson));
+        }
         else console.warn('[Cloud] 大数据 Gist 发现遇瞬时错误，本次跳过整包上传（避免重复建）');
         if (betag) meta.bulkEtag = betag;
-        transfer.pushed.push('整包快照'); transfer.bytes += byteLen(JSON.stringify(collJson));
         // 删除所有现存 v6 op 文件 + v5 旧 op 文件
         opDel = {};
         (meta.appliedOps || []).forEach(n => { if (OP_FILE_RE.test(n)) opDel[n] = null; });
         if (legacy) BULK_COLLS.forEach(c => opDel[c + '.ops.json'] = null);
         meta.compactGen = (meta.compactGen || 0) + 1;
         meta.appliedOps = []; meta.opCount = 0;
+        // 压实后 bulk 远端 = 本地全量，更新 bulk 快照哈希（供下次压实判断"哪些集合真的变化"）
+        meta.bulkHashes = meta.bulkHashes || {};
+        BULK_COLLS.concat(HEAVY_FIELDS).forEach(k => { meta.bulkHashes[k] = contentHash(collJson[k] != null ? collJson[k] : 'null'); });
         didCompact = true;
         // 压实后整包已上云，远端基线=当前本地（一层快照，与 pull 末端一致）
         state._remoteColls = {};
@@ -3361,7 +3385,7 @@ body.cp-lock { overflow: hidden; }
     clearToken();
     state.token = null; state.enabled = false; state.gistId = null; state.bulkGistId = null;
     state.rateLimitBackoffUntil = 0; state.lastTransfer = null;
-    meta = { syncAiKey: meta.syncAiKey, pushedHashes: {}, appliedOps: [], compactGen: 0, opCount: 0 }; saveMeta();
+    meta = { syncAiKey: meta.syncAiKey, pushedHashes: {}, bulkHashes: {}, appliedOps: [], compactGen: 0, opCount: 0 }; saveMeta();
     renderBadge('☁ 未同步', 'off');
   }
 
@@ -3530,7 +3554,11 @@ body.cp-lock { overflow: hidden; }
       + '<div class="hint">退出仅清除本机令牌，云端数据不删；换设备用同一令牌仍可取回。</div>'
       + '</div>';
     mask.querySelector('#cv-ai').onchange = (e) => {
-      meta.syncAiKey = e.target.checked; meta.pushedHashes = {}; saveMeta();   // 改变剥离口径 → 强制重算核心哈希
+      meta.syncAiKey = e.target.checked;
+      // ⚠️ 仅让核心(core/manifest)哈希失效：syncAiKey 只改变 core.ai 的剥离口径，不影响 bulk/heavy 集合内容。
+      // 切勿清空整个 pushedHashes——否则下次推送会把所有照片/大字段当成"新增"全量重传（切一个开关却上传一分钟）。
+      delete meta.pushedHashes.core; delete meta.pushedHashes.manifest;
+      saveMeta();
       push().then(() => renderBadge('☁ 已同步', 'on')).catch(() => {});
     };
     mask.querySelector('#cv-sync').onclick = () => {
