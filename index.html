@@ -3241,8 +3241,10 @@ body.cp-lock { overflow: hidden; }
       // 记录已推哈希（下次据此判定分区是否需要上传）；保留本次 PATCH 返回的 ETag 作为下次拉取闸门
       meta.pushedHashes = Object.assign({ core: coreHash, manifest: manifestHash }, collHashes, heavyHashes);
       meta.legacyRemote = false;
-      // 乐观推送完成：后台异步合并远端新增（不阻塞用户感知；远端无变化走 304，零流量零解析）
-      if (state.gistId && !isRateLimited()) {
+      // 条件化后台拉取：仅当本次产生了 op 文件时才需要合并远端新增（op 可能与其他设备冲突）。
+      // 纯 core 变化（切换开关、改设置等）不存在跨设备冲突，跳过可省一次完整 GET（94.4KB + 网络 ~60s）。
+      const hasOps = Object.keys(opFiles).length > 0;
+      if (state.gistId && !isRateLimited() && hasOps) {
         pull(false, { preserveLocal: true }).catch(e => { console.warn('[Cloud] 后台合并跳过', e); });
       }
       state.lastPushedAt = Date.now(); state.lastSyncAt = Date.now();
