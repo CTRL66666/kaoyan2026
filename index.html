@@ -9857,9 +9857,11 @@ function bind(el, next) {
   }
   function bindAnalysis(el) {
     var runBtn = el.querySelector('#ms-attr-run');
-    if (runBtn) runBtn.onclick = function () { runMistakeAnalysis(el); };
+    if (runBtn) runBtn.onclick = function () { runMistakeAnalysis(el, false); };   // false = 跟随全局思考模式开关
   }
-  function runMistakeAnalysis(el) {
+  // noThink 控制：默认跟随全局思考模式开关（noThink:false 放行 thinkingMode 分支，提升归因质量）；
+  // 思考模式下若 JSON 输出被 reasoning 挤断导致解析失败，自动降级为强制非思考重试一次。
+  function runMistakeAnalysis(el, noThink) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
     var s = Store.get();
     var all = U.clone(s.mistakes || []).sort(function (a, b) { return (a.createdAt < b.createdAt ? 1 : -1); });
@@ -9878,7 +9880,7 @@ function bind(el, next) {
       + '④advice：一句总体建议。'
       + '只输出JSON：{"items":[{"id":"...","cause":"...","topic":"..."}],"topPatterns":[{"pattern":"...","rootCause":"...","fix":"..."}],"advice":"..."}'
       + '\n错题清单：\n' + lines;
-    AI.chatJSON(sys, user, null, { cache: false, maxTokens: 8000 }).then(function (r) {
+    AI.chatJSON(sys, user, null, { cache: false, maxTokens: 8000, noThink: noThink === true }).then(function (r) {
       var items = Array.isArray(r.items) ? r.items : [];
       var itemsOk = items.map(function (it) {
         var m = batch.find(function (x) { return x.id === it.id; });
@@ -9901,6 +9903,12 @@ function bind(el, next) {
       Toast.success('归因图谱已生成（' + itemsOk.length + ' 题）');
       App.refresh();
     }).catch(function (e) {
+      // 思考模式失败（JSON 截断/解析错误）→ 自动降级为非思考重试一次，保证出结果
+      if (noThink !== true) {
+        Toast.show('思考模式归因输出异常，已自动切换普通模式重试…', 'warn', 3000);
+        runMistakeAnalysis(el, true);
+        return;
+      }
       Toast.warn('归因失败：' + (e && e.message ? e.message : String(e)));
       if (runBtn) { runBtn.disabled = false; runBtn.textContent = '🤖 生成图谱'; }
     });
