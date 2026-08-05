@@ -926,6 +926,14 @@ body.cp-lock { overflow: hidden; }
 .essay-up s { color: var(--text-muted); }
 .essay-row .tag { color: #fff; }
 
+/* ---------- 作文批改升级：雷达图 / 范文对比 / 润色 ---------- */
+.essay-dim { margin-top: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px; }
+.essay-model { white-space: pre-wrap; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: var(--r-btn); padding: 10px 12px; font-size: 13px; line-height: 1.8; }
+.essay-compare { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 10px 12px; margin-top: 6px; font-size: 13px; line-height: 1.7; }
+.essay-cp-row { display: flex; gap: 6px; align-items: flex-start; margin: 3px 0; color: var(--text-secondary); }
+.essay-cp-tag { flex: 0 0 auto; font-size: 11px; background: var(--text-primary); color: #fff; border-radius: 4px; padding: 0 6px; margin-top: 3px; }
+.essay-cp-diff { color: var(--warn); margin-top: 3px; font-size: 12.5px; }
+
 /* ---------- AI 周计划 (scheduler) ---------- */
 .wp-day { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 10px; margin-top: 8px; background: var(--surface); }
 .wp-day.wp-today { border-color: var(--text-primary); border-width: 2px; }
@@ -5187,6 +5195,61 @@ body.cp-lock { overflow: hidden; }
     progressBar(pct, color, height) {
       pct = U.clamp(pct, 0, 100);
       return '<div class="pbar" style="height:' + (height || 8) + 'px"><div class="pbar-fill" style="width:0%;background:' + color + '" data-w="' + pct + '"></div></div>';
+    },
+
+    // 雷达图（SVG 自绘）：data=[{label, value}]，value 0-100；opts={height, color, fill}
+    // 轴数 = data.length（≤8）；右侧自动列维度分值
+    radar(data, opts) {
+      opts = opts || {};
+      const W = 680, H = opts.height || 200;
+      const n = data.length || 4;
+      const cx = 128, cy = H / 2;
+      const R = Math.max(40, Math.min(92, (H - 24) / 2 - 10));
+      const color = opts.color || '#2f54eb';
+      const ang = i => -Math.PI / 2 + (2 * Math.PI * i) / n;
+      const pt = (i, rr) => [cx + rr * Math.cos(ang(i)), cy + rr * Math.sin(ang(i))];
+      let s = svgOpen(W, H);
+      // 4 层刻度网格（25/50/75/100 环）
+      for (let ring = 1; ring <= 4; ring++) {
+        const rr = R * ring / 4;
+        let p = '';
+        for (let i = 0; i <= n; i++) {
+          const c = pt(i % n, rr);
+          p += (i === 0 ? 'M' : 'L') + c[0] + ' ' + c[1];
+        }
+        s += '<path d="' + p + ' Z" fill="none" stroke="#e8e8e8" stroke-width="0.5"/>';
+      }
+      // 轴线 + 轴标签 + 顶点分值
+      for (let i = 0; i < n; i++) {
+        const [x, y] = pt(i, R);
+        s += '<line x1="' + cx + '" y1="' + cy + '" x2="' + x + '" y2="' + y + '" stroke="#e8e8e8" stroke-width="0.5"/>';
+        const lx = cx + (R + 22) * Math.cos(ang(i));
+        const ly = cy + (R + 22) * Math.sin(ang(i));
+        s += '<text x="' + lx + '" y="' + (ly + 4) + '" text-anchor="middle" font-size="12" fill="#595959">' + U.esc(data[i].label) + '</text>';
+        const [vx, vy] = pt(i, R * (U.clamp(data[i].value, 0, 100) / 100));
+        s += '<text x="' + vx + '" y="' + (vy - 7) + '" text-anchor="middle" font-size="11" font-weight="500" fill="#000">' + Math.round(data[i].value) + '</text>';
+      }
+      // 数据多边形
+      let dp = '';
+      for (let i = 0; i <= n; i++) {
+        const c = pt(i % n, R * (U.clamp(data[i % n].value, 0, 100) / 100));
+        dp += (i === 0 ? 'M' : 'L') + c[0] + ' ' + c[1];
+      }
+      s += '<path d="' + dp + ' Z" fill="' + (opts.fill || 'rgba(47,84,235,0.16)') + '" stroke="' + color + '" stroke-width="1.5"/>';
+      for (let i = 0; i < n; i++) {
+        const c = pt(i, R * (U.clamp(data[i].value, 0, 100) / 100));
+        s += '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="3" fill="' + color + '"/>';
+      }
+      // 右侧维度分值列表
+      let ly = 24;
+      data.forEach(function (d, i) {
+        const c = ['#185FA5', '#0F6E56', '#993C1D', '#854F0B', '#534AB7', '#A32D2D', '#5F5E5A', '#639922'][i % 8];
+        s += '<circle cx="' + (W - 108) + '" cy="' + (ly - 3) + '" r="4" fill="' + c + '"/>';
+        s += '<text x="' + (W - 96) + '" y="' + ly + '" font-size="12" fill="#262626">' + U.esc(d.label) + '</text>';
+        s += '<text x="' + (W - 14) + '" y="' + ly + '" text-anchor="end" font-size="12" font-weight="500" fill="#000">' + Math.round(d.value) + '</text>';
+        ly += 20;
+      });
+      return s + '</svg>';
     }
   };
 
@@ -16696,11 +16759,16 @@ function bind(el, next) {
       + (mem ? '\n' + mem + '\n' : '')
       + '只输出 JSON，不要多余文字、不要 markdown 代码块。格式：'
       + '{"score":0-' + t.max + '整数,"band":"第X档","summary":"总体评价(≤70字)",'
+      + '"dimensions":{"content":0-100,"structure":0-100,"language":0-100,"logic":0-100},'
       + '"issues":[{"quote":"原文摘句","problem":"问题(语法/用词/逻辑/结构)","fix":"修改后句子"}],'
       + '"upgrades":[{"from":"原文普通表达","to":"高级替换表达"}],'
-      + '"modelSentence":"一个可直接背诵的高分句型","advice":"一句话备考建议"}。'
+      + '"modelSentence":"一个可直接背诵的高分句型","modelEssay":"同一题目的一篇120-180词高分范文全文",'
+      + '"compare":[{"point":"要点","mine":"你的处理(简述)","model":"范文处理(简述)","diff":"差距一句话"}],'
+      + '"advice":"一句话备考建议"}。'
       + '评分纪律：1) 严格按考研标准，第五档（满分档）极罕见；2) issues 给3-5个，quote 必须从原文摘抄；'
-      + '3) 若图片字迹无法辨认，score 填 -1 并在 summary 说明；4) 用简体中文。';
+      + '3) dimensions 四维各给 0-100 分：content=内容切题/要点完整，structure=段落结构/衔接，language=语法词汇准确度，logic=逻辑连贯/论证充分；'
+      + '4) modelEssay 与原文同题目、同题型，词汇句式明显更高一档；compare 给 2-3 个关键差异点；'
+      + '5) 若图片字迹无法辨认，score 填 -1 并在 summary 说明；6) 用简体中文。';
   }
 
   // ---------- 渲染 ----------
@@ -16712,7 +16780,7 @@ function bind(el, next) {
 
     el.innerHTML =
       '<div class="card"><div class="card-title">📝 英语作文 AI 批改</div>'
-      + '<div class="muted-sm">按考研统考评分档批改：给分、逐句问题、高级替换、范文句。拍照（手写）或粘贴文本均可。</div>'
+      + '<div class="muted-sm">按考研统考评分档批改：四维雷达评分（切题/结构/语言/逻辑）、逐句润色、高级替换、高分范文对比。拍照（手写）或粘贴文本均可。</div>'
       + '<div class="seg-row" style="margin-top:10px">'
       + keys.map(function (k) {
         return '<button class="seg' + (curType === k ? ' seg-on' : '') + '" data-tk="' + k + '">' + ESSAY_TYPES[k].name + '·' + ESSAY_TYPES[k].max + '分</button>';
@@ -16769,18 +16837,41 @@ function bind(el, next) {
     var html = '<div class="essay-score-row"><div class="essay-score" style="color:' + color + '">' + r.score + '<span class="essay-max">/' + t.max + '</span></div>'
       + '<div class="essay-band" style="color:' + color + '">' + U.esc(r.band || '') + '</div></div>'
       + '<div class="pm-ai-section"><b>📋 总评：</b><div class="pm-ai-body">' + U.esc(r.summary || '') + '</div></div>';
+    // 四维评分雷达图（dimensions 存在时展示）
+    var dims = r.dimensions;
+    if (dims && typeof dims === 'object') {
+      var dLabels = [['content', '内容切题'], ['structure', '结构衔接'], ['language', '语言准确'], ['logic', '逻辑连贯']];
+      var dData = dLabels.filter(function (d) { return dims[d[0]] != null; }).map(function (d) {
+        return { label: d[1], value: U.clamp(Math.round(+dims[d[0]]), 0, 100) };
+      });
+      if (dData.length >= 3) {
+        html += '<div class="pm-ai-section"><b>🎯 四维评分雷达：</b>'
+          + '<div class="essay-dim">' + Charts.radar(dData, { height: 200 }) + '</div></div>';
+      }
+    }
+    // 逐句润色对照（原句 → 问题 → 修改）
     if (r.issues && r.issues.length) {
-      html += '<div class="pm-ai-section"><b>🔍 逐句问题（' + r.issues.length + '）：</b>'
+      html += '<div class="pm-ai-section"><b>🔍 逐句润色（' + r.issues.length + '）：</b>'
         + r.issues.map(function (i, n) {
           return '<div class="essay-issue"><div class="essay-q">' + (n + 1) + '. 原文：<i>' + U.esc(i.quote || '') + '</i></div>'
             + '<div class="essay-p">⚠️ ' + U.esc(i.problem || '') + '</div>'
-            + '<div class="essay-f">✏️ 改为：' + U.esc(i.fix || '') + '</div></div>';
+            + '<div class="essay-f">✏️ 润色后：' + U.esc(i.fix || '') + '</div></div>';
         }).join('') + '</div>';
     }
     if (r.upgrades && r.upgrades.length) {
       html += '<div class="pm-ai-section"><b>⬆️ 表达升级：</b><div class="pm-ai-body">'
         + r.upgrades.map(function (u) { return '<div class="essay-up"><s>' + U.esc(u.from || '') + '</s> → <b>' + U.esc(u.to || '') + '</b></div>'; }).join('')
         + '</div></div>';
+    }
+    if (r.modelEssay) html += '<div class="pm-ai-section"><b>🏆 高分范文（同题对比）：</b><div class="pm-ai-body essay-model">' + U.esc(r.modelEssay) + '</div></div>';
+    if (r.compare && r.compare.length) {
+      html += '<div class="pm-ai-section"><b>⚖️ 你的作文 vs 范文：</b>'
+        + r.compare.map(function (c, n) {
+          return '<div class="essay-compare"><div class="essay-cp"><b>' + (n + 1) + '. ' + U.esc(c.point || '') + '</b>'
+            + '<div class="essay-cp-row"><span class="essay-cp-tag">你</span>' + U.esc(c.mine || '') + '</div>'
+            + '<div class="essay-cp-row"><span class="essay-cp-tag" style="background:#237804">范文</span>' + U.esc(c.model || '') + '</div>'
+            + '<div class="essay-cp-diff">差距：' + U.esc(c.diff || '') + '</div></div></div>';
+        }).join('') + '</div>';
     }
     if (r.modelSentence) html += '<div class="pm-ai-section"><b>💎 背诵句型：</b><div class="pm-ai-body">' + U.esc(r.modelSentence) + '</div></div>';
     if (r.advice) html += '<div class="pm-ai-section"><b>🎯 备考建议：</b><div class="pm-ai-body">' + U.esc(r.advice) + '</div></div>';
@@ -16919,7 +17010,7 @@ function bind(el, next) {
     });
   }
 
-  window.EssayModule = { render };
+  window.EssayModule = { render, resultHtml };  // resultHtml 供作文批改升级单测
 })();
 
 
