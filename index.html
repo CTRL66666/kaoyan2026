@@ -2763,6 +2763,17 @@ body.cp-lock { overflow: hidden; }
     try { if (arr) _hashCache.set(arr, { hash: h, rev: _storeRev() }); } catch (e) {}
     return h;
   }
+
+  // 一层快照：新建数组 + 每个元素用展开做新对象。
+  // 目的：切断「远端基准」与「活状态」的引用联系，防止 Store 原地 push/改字段污染 _remoteColls，
+  // 导致 genOps 比对不出差异、不再写 op（照片无法跨设备同步）。
+  // 不用 JSON.parse(JSON.stringify()) 深拷贝——照片 base64 动辄数百 KB，深拷贝会逐字符复制所有字符串，
+  // 784KB 照片集合深拷贝需 30-50ms+ 且产生大量垃圾回收；而一层展开只复制对象属性描述符，
+  // 字符串等原始值按值语义共享（不可变），速度提升 1~2 个数量级。
+  function snapshotColl(arr) {
+    if (!arr || !arr.length) return [];
+    return arr.map(function(o) { return Object.assign({}, o); });
+  }
   // 取本地"核心"JSON 字符串：直接读活状态、剔除大集合，避免 exportJSON 把多 MB 照片也序列化一遍。
   // 注意：syncAiKey=false 仅剥离 AI Key 时，先深拷贝 ai 再改，避免改动活状态。
   function liveCoreJson() {
@@ -3013,14 +3024,13 @@ body.cp-lock { overflow: hidden; }
       pending.forEach(of => { if (of.__name && meta.appliedOps.indexOf(of.__name) < 0) meta.appliedOps.push(of.__name); });
     }
     // 刷新远端基准（供推送 diff）：拉取合并后本地即等于远端，直接以本地为基准，避免重传。
-    // ⚠️ 必须是【深拷贝】快照：Store 原地修改数组/对象（push/改字段），若存活引用基准会被污染，
+    // ⚠️ 必须是【一层快照】（非活引用）：Store 原地修改数组/对象（push/改字段），若存活引用基准会被污染，
     // 导致 genOps 比对不出差异、不再写 op（照片永远进不了 bulk Gist、另一台设备收不到）。
+    // 用 snapshotColl 而非 JSON.parse(JSON.stringify()) —— 照片 base64 很大，深拷贝会逐字符复制所有字符串，
+    // 784KB 集合深拷贝需 30-50ms+；一层展开只复制对象属性描述符，字符串按值共享，快 1~2 个数量级。
     const liveNow = window.Store.get();
     state._remoteColls = {};
-    BULK_COLLS.forEach(c => {
-      try { state._remoteColls[c] = liveNow[c] ? JSON.parse(JSON.stringify(liveNow[c])) : []; }
-      catch (e) { state._remoteColls[c] = liveNow[c] || []; }
-    });
+    BULK_COLLS.forEach(c => { state._remoteColls[c] = snapshotColl(liveNow[c]); });
     const mergeMs = performance.now() - tMerge;
     const totalMs = performance.now() - t0;
     setSyncPhase('idle');
@@ -3098,12 +3108,9 @@ body.cp-lock { overflow: hidden; }
         meta.compactGen = (meta.compactGen || 0) + 1;
         meta.appliedOps = []; meta.opCount = 0;
         didCompact = true;
-        // 压实后整包已上云，远端基线=当前本地（深拷贝，与 pull 末端一致）
+        // 压实后整包已上云，远端基线=当前本地（一层快照，与 pull 末端一致）
         state._remoteColls = {};
-        BULK_COLLS.forEach(c => {
-          try { state._remoteColls[c] = live2[c] ? JSON.parse(JSON.stringify(live2[c])) : []; }
-          catch (e) { state._remoteColls[c] = live2[c] || []; }
-        });
+        BULK_COLLS.forEach(c => { state._remoteColls[c] = snapshotColl(live2[c]); });
       }
 
       // ---------- 普通追加：仅对变化集合写新 op 文件 ----------
@@ -3120,12 +3127,9 @@ body.cp-lock { overflow: hidden; }
           if (meta.appliedOps.indexOf(fname) < 0) meta.appliedOps.push(fname);
           meta.opCount = (meta.opCount || 0) + 1;
           // 本次 op 覆盖的集合现已上云，更新远端基线为当前本地快照，避免后续推送重复生成 add op
-          // （照片只在「新增」那一次进 op，之后不再重传）。用深拷贝，保持与 pull 末端一致。
+          // （照片只在「新增」那一次进 op，之后不再重传）。用一层快照，保持与 pull 末端一致。
           if (!state._remoteColls) state._remoteColls = {};
-          changed.forEach(c => {
-            try { state._remoteColls[c] = live[c] ? JSON.parse(JSON.stringify(live[c])) : []; }
-            catch (e) { state._remoteColls[c] = live[c] || []; }
-          });
+          changed.forEach(c => { state._remoteColls[c] = snapshotColl(live[c]); });
         }
       }
 
