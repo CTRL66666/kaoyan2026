@@ -1163,6 +1163,7 @@ body.cp-lock { overflow: hidden; }
 .pr-ch-opt.pr-ch-bad { border-color: var(--danger); background: #fff1f0; color: var(--danger); text-decoration: line-through; }
 .pr-ch-card.pr-ch-locked .pr-ch-opt { cursor: default; }
 .pr-ch-letter { flex: 0 0 auto; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; border: 1px solid var(--line); font-size: 11px; color: var(--text-muted); }
+.pr-ch-opt.pr-ch-multi .pr-ch-letter { border-radius: 3px; }   /* 多选题选项字母用方形（checkbox 语义），区分单选圆点 */
 .pr-ch-opt.selected .pr-ch-letter { border-color: var(--text-primary); color: var(--text-primary); }
 .pr-ch-opt.pr-ch-ok .pr-ch-letter { border-color: var(--ok); color: var(--ok); }
 .pr-ch-opt.pr-ch-bad .pr-ch-letter { border-color: var(--danger); color: var(--danger); }
@@ -15064,6 +15065,55 @@ function bind(el, next) {
     return (n >= 1 && n <= 100) ? n : 15;
   }
 
+  // ---------- 智能算法（特性⑤）：动态配额 / 智能题型 / 队列加权 ----------
+  // 近 7 天记住率（q>=3 视为记住）；日志不足 10 条返回 null（数据太少不调整）
+  function recentRetention7() {
+    var log = Store.get().vocabLog || [];
+    if (log.length < 10) return null;
+    var since = daysFromNow(-6);
+    var total = 0, rem = 0;
+    log.forEach(function (l) { if (l.date >= since) { total++; if (l.q >= 3) rem++; } });
+    return total >= 10 ? rem / total : null;
+  }
+  // 智能每日新词配额：记住率高（≥85%）→ 上限 +5；低（<60%）→ 上限 -5；封顶 100、保底 5
+  function smartDailyNew() {
+    var base = dailyNew();
+    var ret = recentRetention7();
+    if (ret == null) return base;
+    if (ret >= 0.85) return Math.min(100, base + 5);
+    if (ret < 0.60) return Math.max(5, base - 5);
+    return base;
+  }
+  // 距离考研（examDate）天数；无设置/已过期返回 null
+  function daysUntilExam() {
+    var d = Store.get().settings.examDate;
+    if (!d) return null;
+    var t = new Date(d);
+    if (isNaN(t.getTime())) return null;
+    var days = Math.round((t.getTime() - Date.now()) / 86400000);
+    return days >= 0 ? days : null;
+  }
+  // 复习队列加权分：逾期久优先排序之外的困难度加权（遗忘多 / EF 低 / 临考）
+  function stressScore(c, examDays) {
+    var s = (c.lapses || 0) * 2 + (c.ef < 2.0 ? 2 : 0) + (c.ef < 1.8 ? 1 : 0);
+    if (examDays != null && examDays <= 30) s += 3;   // 临考冲刺：全部复习加权
+    return s;
+  }
+  // 智能题型分配（替代纯随机）：按单词特征 + 掌握度选最合适的复习题型；
+  // 困难词优先主动回忆型（choice 看义选词 / cloze 填空 / listen 听写），跳过被动翻面
+  function pickQType(card) {
+    var pool = [];
+    if (card.example) pool.push('cloze');
+    if (window.speechSynthesis) pool.push('listen');
+    pool.push('flip', 'choice');
+    var hard = card.ef < 2.0 || (card.lapses || 0) >= 3;
+    if (hard) {
+      var active = pool.filter(function (t) { return t !== 'flip'; });
+      if (active.length) return active[rint(active.length)];
+    }
+    return pool[rint(pool.length)];
+  }
+
   // ---------- 卡片生命周期 ----------
   function newCard(d) {
     return {
@@ -15403,19 +15453,20 @@ function bind(el, next) {
   var lastEl = null;             // 最近一次渲染容器（判断用户是否还留在单词本页）
   var extractJob = null;         // 后台 AI 提取任务 {status:'running'|'done'|'error', source, startedAt, thumb, items, error}
 
-  // 构造今日会话队列：重学/学习中 → 到期复习（逾期久 + 遗忘多的优先）→ 新词（限每日上限）
+  // 构造今日会话队列：重学/学习中 → 到期复习（逾期久 + 遗忘多 + 临考加权优先）→ 新词（智能配额）
   function buildSession() {
     var learning = learningCards().filter(function (c) { return c.lastReview; }); // 重学/学习中
-    // 排序：逾期久（due 小）优先；同 due 下遗忘次数多（lapses 大）的优先，重点回收困难词
+    var examDays = daysUntilExam();
+    // 排序：逾期久（due 小）优先；同 due 下困难度加权（lapses 多 / EF 低 / 临考冲刺）优先
     var due = dueCards().sort(function (a, b) {
       if (a.due !== b.due) return a.due < b.due ? -1 : 1;
-      return (b.lapses || 0) - (a.lapses || 0);
+      return stressScore(b, examDays) - stressScore(a, examDays);
     });
-    var quota = Math.max(0, dailyNew() - newIntroducedToday());
+    var quota = Math.max(0, smartDailyNew() - newIntroducedToday());
     var news = newCards().slice(0, quota);
-    // 仅 review 阶段卡片随机赋题型（learn/relearn 保持 flip，稳定学习）；存 session.qtypes 供渲染读取
+    // 仅 review 阶段卡片智能分配题型（learn/relearn 保持 flip，稳定学习）；按单词特征 + 掌握度选型
     var qtypes = {};
-    due.forEach(function (c) { qtypes[c.id] = QTYPES[rint(QTYPES.length)]; });
+    due.forEach(function (c) { qtypes[c.id] = pickQType(c); });
     var queue = learning.concat(due).concat(news).map(function (c) { return c.id; });
     return { queue: queue, stats: { again: 0, hard: 0, good: 0, easy: 0 }, done: 0, newLearned: 0, qtypes: qtypes };
   }
@@ -15609,8 +15660,17 @@ function bind(el, next) {
     if (!session) {
       var q = buildSession();
       var learnN = q.queue.length;
+      var ret = recentRetention7();
+      var smartCap = smartDailyNew();
+      var capNote = ret == null
+        ? '新词上限 ' + dailyNew() + ' 个（复习数据积累 10 条后开启智能调节）'
+        : (smartCap !== dailyNew()
+          ? '新词上限 ' + dailyNew() + ' → <b>智能调节为 ' + smartCap + ' 个</b>（近 7 天记住率 ' + Math.round(ret * 100) + '%，' + (ret >= 0.85 ? '状态好，加量' : '状态一般，减量') + '）'
+          : '新词上限 ' + dailyNew() + ' 个（近 7 天记住率 ' + Math.round(ret * 100) + '%，保持稳定）');
+      var examDays = daysUntilExam();
+      var examNote = examDays != null ? '；距考研 <b>' + examDays + '</b> 天，困难词与临考加权优先复习' : '';
       var html = '<div class="card"><div class="card-title">今日复习队列</div>'
-        + '<div class="muted-sm">队列共 <b>' + learnN + '</b> 张卡（重学/到期优先，新词每日上限 ' + dailyNew() + ' 个）。SM-2 算法按你的评分自适应安排下次复习日。</div>';
+        + '<div class="muted-sm">队列共 <b>' + learnN + '</b> 张卡（重学/到期优先，' + capNote + examNote + '）。SM-2 算法按你的评分自适应安排下次复习日。</div>';
       if (!learnN) {
         html += '<div class="empty" style="margin-top:12px">🎉 今日队列已清空。去「收录单词」补充词库，或明天再来。</div>';
       } else {
@@ -16375,7 +16435,7 @@ function bind(el, next) {
     });
   }
 
-  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade };
+  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam };
 })();
 
 
@@ -20804,8 +20864,9 @@ function bind(el, next) {
     seedTemplatesIfEmpty(); // 首次进入若空则播种内置 5 条
     const all = tplList();
     const toolbar = '<div class="card"><div class="card-title-row"><span class="card-title">📝 答题模板库</span>'
+      + (hasAI() ? '<button class="btn btn-primary btn-sm" id="pr-tpl-ai">🤖 AI 按题定制模板</button>' : '')
       + '<button class="btn btn-ghost btn-sm" id="pr-tpl-add">＋ 新建模板</button></div>'
-      + '<div class="muted-sm">分类型收藏万能答题骨架；可「套用」到某道大题的提示（hint）字段，翻卡片时复习。</div></div>';
+      + '<div class="muted-sm">分类型收藏万能答题骨架；「AI 按题定制」会根据具体大题生成可直接背诵的个性化模板（骨架已填入考点）；可「套用」到某道大题的提示（hint）字段，翻卡片时复习。</div></div>';
     if (!all.length) return toolbar + '<div class="card empty-hint">暂无模板</div>';
     const byType = {};
     all.forEach(function (t) { const k = t.type || '其他'; if (!byType[k]) byType[k] = []; byType[k].push(t); });
@@ -20817,6 +20878,7 @@ function bind(el, next) {
           + '<span class="pr-tpl-type">' + U.esc(t.type || k) + '</span></summary>'
           + '<div class="pr-tpl-body">'
           + '<div class="pr-tpl-template">' + U.esc(t.template || '') + '</div>'
+          + (t.filled ? '<div class="pr-tpl-filled">📌 成稿示例：<span>' + U.esc(t.filled) + '</span></div>' : '')
           + (t.keywords ? '<div class="muted-sm"><b>触发词：</b>' + U.esc(t.keywords) + '</div>' : '')
           + (t.usage ? '<div class="muted-sm"><b>适用：</b>' + U.esc(t.usage) + '</div>' : '')
           + '<div class="pr-tpl-acts">'
@@ -20831,6 +20893,7 @@ function bind(el, next) {
     return toolbar + cards;
   }
   function bindTemplate(el) {
+    const ai = el.querySelector('#pr-tpl-ai'); if (ai) ai.onclick = openTplAI;
     const add = el.querySelector('#pr-tpl-add'); if (add) add.onclick = function () { openTplEdit(null); };
     el.querySelectorAll('.pr-tpl-edit').forEach(function (b) { b.onclick = function () { openTplEdit(b.getAttribute('data-id')); }; });
     el.querySelectorAll('.pr-tpl-del').forEach(function (b) {
@@ -20890,6 +20953,81 @@ function bind(el, next) {
       } }]
     });
   }
+  // AI 按题定制模板：选一道大题 → AI 判断题型并生成个性化模板（骨架已填入考点，可直接背）
+  function openTplAI() {
+    const all = list();
+    if (!all.length) { Toast.warn('还没有大题，先录入或载入示例'); return; }
+    if (!hasAI()) { Toast.warn('未配置 AI，无法生成模板'); return; }
+    const opts = all.map(function (p) { return '<option value="' + p.id + '">' + U.esc((p.topic || '一道大题').slice(0, 34)) + '（' + U.esc(p.subject || '未分') + '）</option>'; }).join('');
+    Modal.open({
+      title: '🤖 AI 按题定制模板',
+      wide: true,
+      html: '<div class="form-col">'
+        + '<div class="muted-sm">AI 会先判断这道题属于哪种题型（原因/意义/措施/认识/关系），再生成<b>针对本题考点</b>的答题模板——骨架已填入本题关键词，可直接背诵使用。</div>'
+        + '<label class="fld fld-full"><span>选择大题</span><select id="pr-tpl-ai-target" class="input">' + opts + '</select></label>'
+        + '<button class="btn btn-primary" id="pr-tpl-ai-go" type="button">🤖 生成定制模板</button>'
+        + '<div id="pr-tpl-ai-msg"></div>'
+        + '<div id="pr-tpl-ai-result"></div></div>',
+      actions: [{ label: '关闭' }]
+    });
+    document.getElementById('pr-tpl-ai-go').onclick = function () {
+      const id = document.getElementById('pr-tpl-ai-target').value;
+      const it = getOne(id);
+      if (!it) return;
+      const go = document.getElementById('pr-tpl-ai-go');
+      go.disabled = true; go.textContent = '🤖 生成中…（10-25 秒）';
+      const msg = document.getElementById('pr-tpl-ai-msg');
+      if (msg) msg.innerHTML = '<div class="muted-sm" style="margin-top:6px">⏳ AI 正在分析题型并定制模板，可稍候…</div>';
+      const sys = '你是考研政治答题模板专家，只输出JSON对象，不要多余文字。';
+      const user = '请为下面这道考研政治大题定制答题模板。要求：①先判断题型，type 只能取「原因类/意义类/措施类/认识类/关系类」之一；'
+        + '②template 是本题专属的答题骨架（4-5条，每条以①开头，用「……/（考点）」占位但必须自然融入本题的考点名词）；'
+        + '③filled 是把 template 骨架按本题具体内容填充好的<b>成稿示例</b>（可直接背诵的完整答案雏形）；'
+        + '④keywords 给 3-6 个触发词/得分词；⑤usage 一句话说明适用场景；⑥name 起一个简短模板名。'
+        + '只输出JSON：{"type":"原因类","name":"模板名","template":"①…②…","filled":"①…②…","keywords":"a,b,c","usage":"…"}。'
+        + '大题考点：' + (it.topic || '') + '\n答案要点：' + (it.points || []).join('\n')
+        + (it.subject ? '\n科目：' + it.subject : '');
+      AI.chatJSON(sys, user, null, { cache: false }).then(function (r) {
+        const type = TPL_TYPES.indexOf(r.type) >= 0 ? r.type : '其他';
+        const name = (r.name ? String(r.name) : (type + '定制模板')).slice(0, 40);
+        const template = r.template ? String(r.template) : '';
+        const filled = r.filled ? String(r.filled) : '';
+        if (!template) throw new Error('AI 未返回模板骨架');
+        const rec = {
+          id: cuid('tpl'), type: type, name: name, template: template,
+          keywords: r.keywords ? String(r.keywords) : '', usage: r.usage ? String(r.usage) : '',
+          filled: filled, refId: it.id, createdAt: U.dkey()
+        };
+        // 展示结果 + 确认入库
+        const resEl = document.getElementById('pr-tpl-ai-result');
+        if (resEl) {
+          resEl.innerHTML = '<div class="card" style="margin-top:8px;border-left:3px solid var(--accent)">'
+            + '<div class="card-title-sm">' + U.esc(name) + ' <span class="tag">' + U.esc(type) + '</span>'
+            + '<span class="tag" style="margin-left:4px">依据：' + U.esc((it.topic || '').slice(0, 20)) + '…</span></div>'
+            + '<div class="muted-sm"><b>答题骨架：</b></div><div class="pr-tpl-template">' + U.esc(template) + '</div>'
+            + (filled ? '<div class="muted-sm" style="margin-top:6px"><b>成稿示例（已填充本题内容）：</b></div><div class="pr-tpl-template" style="background:var(--bg-card);border-left:3px solid var(--ok)">' + U.esc(filled) + '</div>' : '')
+            + (rec.keywords ? '<div class="muted-sm" style="margin-top:6px"><b>触发词：</b>' + U.esc(rec.keywords) + '</div>' : '')
+            + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary btn-sm" id="pr-tpl-ai-save">✓ 存入模板库</button>'
+            + '<button class="btn btn-ghost btn-sm" id="pr-tpl-ai-regen">🔄 重新生成</button></div></div>';
+          document.getElementById('pr-tpl-ai-save').onclick = function () {
+            Store.update(function (s) { s.polTemplates = s.polTemplates || []; s.polTemplates.unshift(rec); });
+            Toast.success('已存入模板库');
+            Modal.close(); App.refresh();
+          };
+          document.getElementById('pr-tpl-ai-regen').onclick = function () {
+            document.getElementById('pr-tpl-ai-go').disabled = false;
+            document.getElementById('pr-tpl-ai-go').textContent = '🤖 生成定制模板';
+            if (msg) msg.innerHTML = '';
+            resEl.innerHTML = '';
+          };
+        }
+        go.disabled = false; go.textContent = '🤖 生成定制模板';
+        if (msg) msg.innerHTML = '';
+      }).catch(function (e) {
+        go.disabled = false; go.textContent = '🤖 生成定制模板';
+        if (msg) msg.innerHTML = '<div class="alert alert-danger" style="margin-top:6px">生成失败：' + U.esc(e && e.message ? e.message : String(e)) + '。可换一道题重试，或手动新建模板。</div>';
+      });
+    };
+  }
   function openTplApply(id) {
     const t = tplList().find(function (x) { return x.id === id; });
     if (!t) return;
@@ -20918,6 +21056,23 @@ function bind(el, next) {
   // ============================================================
   function choiceList() { return Store.get().polChoice || []; }
   function getChoice(id) { return choiceList().find(function (x) { return x.id === id; }); }
+  // 是否多选：multi 标记 + answers 数组（≥2 项）才视为多选；旧数据无 multi 视为单选
+  function isChoiceMulti(q) { return !!(q && q.multi && Array.isArray(q.answers) && q.answers.length > 1); }
+  // 统一取正确答案索引数组（单选 [n]，多选 [n1,n2,...]）
+  function choiceAnswer(q) {
+    if (!q) return [];
+    if (isChoiceMulti(q)) return q.answers.map(Number).filter(function (n) { return n >= 0 && n <= 3; });
+    const a = (q.answer != null ? q.answer : 0);
+    return [Math.min(3, Math.max(0, +a))];
+  }
+  // 判断选中索引集合是否判对（对齐考研规则：多选必须全选对才得分）
+  function choicePickedRight(picks, q) {
+    const correct = choiceAnswer(q);
+    if (isChoiceMulti(q)) {
+      return picks.length === correct.length && correct.every(function (n) { return picks.indexOf(n) >= 0; });
+    }
+    return picks.length === 1 && picks[0] === correct[0];
+  }
   function dueChoice() {
     const today = U.dkey();
     return choiceList().filter(function (q) { return (q.box || 1) < 5 && (!q.due || q.due <= today); });
@@ -20936,9 +21091,12 @@ function bind(el, next) {
   function addChoice(data) {
     Store.update(function (s) {
       s.polChoice = s.polChoice || [];
+      const multi = !!data.multi;
       s.polChoice.unshift({
         id: cuid('ch'), stem: data.stem || '', options: data.options || ['', '', '', ''],
-        answer: data.answer != null ? data.answer : 0, analysis: data.analysis || '',
+        answer: multi ? 0 : (data.answer != null ? data.answer : 0),
+        answers: multi ? (data.answers || []).map(Number).filter(function (n) { return n >= 0 && n <= 3; }) : [],
+        multi: multi, analysis: data.analysis || '',
         subject: data.subject || '', source: data.source || '自定义', year: data.year || '',
         box: 1, due: U.dkey(), lastReview: '', wrongCount: 0, createdAt: U.dkey()
       });
@@ -20968,11 +21126,12 @@ function bind(el, next) {
     const due = !q.due || q.due <= U.dkey();
     const status = box >= 5 ? '<span class="tag tag-ok">已牢固</span>' : (due ? '<span class="tag tag-warn">待刷</span>' : '<span class="tag">' + U.esc(q.due) + '</span>');
     const wrong = (q.wrongCount || 0) > 0 ? '<span class="tag tag-warn">错' + q.wrongCount + '</span>' : '';
+    const multiTag = isChoiceMulti(q) ? '<span class="tag" style="background:#2f54eb;color:#fff">多选</span>' : '';
     const opts = (q.options || []).map(function (op, i) {
-      return '<div class="pr-ch-opt" data-ch-idx="' + i + '"><span class="pr-ch-letter">' + 'ABCD'[i] + '</span><span class="pr-ch-opttext">' + U.esc(op || '') + '</span></div>';
+      return '<div class="pr-ch-opt' + (isChoiceMulti(q) ? ' pr-ch-multi' : '') + '" data-ch-idx="' + i + '"><span class="pr-ch-letter">' + 'ABCD'[i] + '</span><span class="pr-ch-opttext">' + U.esc(op || '') + '</span></div>';
     }).join('');
     return '<div class="card pr-ch-card" data-id="' + q.id + '">'
-      + '<div class="pr-ch-stem">' + U.esc(q.stem || '（无题干）') + '</div>'
+      + '<div class="pr-ch-stem">' + U.esc(q.stem || '（无题干）') + multiTag + '</div>'
       + '<div class="pr-meta">' + (q.subject ? '<span class="tag">' + U.esc(q.subject) + '</span>' : '') + '<span class="tag">' + U.esc(q.source || '自定义') + '</span>' + (q.year ? '<span class="tag">' + U.esc(q.year) + '</span>' : '') + wrong + status + '<span class="box-wrap">' + dots + '</span>'
       + '<button class="btn btn-sm btn-ghost pr-ch-del" data-id="' + q.id + '" style="margin-left:auto">🗑</button></div>'
       + '<div class="pr-ch-opts">' + opts + '</div>'
@@ -20988,33 +21147,38 @@ function bind(el, next) {
     const srcOpts = '<option value="">全部来源</option>' + SOURCES.map(function (x) { return '<option value="' + x + '">' + x + '</option>'; }).join('');
     const header = '<div class="card"><div class="card-title-row"><span class="card-title">🔘 选择题练习</span>'
       + '<button class="btn btn-primary btn-sm" id="pr-ch-drill">🎲 开始刷题</button>'
-      + '<button class="btn btn-ghost btn-sm" id="pr-ch-ai">🤖 AI 出选择题</button>'
+      + '<button class="btn btn-ghost btn-sm" id="pr-ch-ai">🤖 AI 批量出题</button>'
       + '<button class="btn btn-ghost btn-sm" id="pr-ch-add">＋ 添加</button></div>'
       + '<div class="pr-filter"><select id="pr-ch-subjf" class="input input-sm">' + subjOpts + '</select>'
       + '<select id="pr-ch-srcf" class="input input-sm">' + srcOpts + '</select>'
       + '<input id="pr-ch-search" class="input input-sm" placeholder="搜索题干 / 解析…">'
       + '<label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap"><input type="checkbox" id="pr-ch-wrong"> 只看错题</label></div>'
-      + '<div class="muted-sm">独立 Leitner 调度（1/2/4/7/15 天）。点选项→提交→高亮对错→评级；"开始刷题"进入连续练习。</div></div>';
-    if (!all.length) return stats + header + '<div class="card empty-hint">还没有选择题。点「🤖 AI 出选择题」从已有大题生成，或「＋ 添加」手动录入。</div>';
+      + '<div class="muted-sm">独立 Leitner 调度（1/2/4/7/15 天），支持单选与<b>多选</b>（多选按考研规则判分）。「AI 批量出题」可按科目/数量/题型生成，优先覆盖薄弱考点。</div></div>';
+    if (!all.length) return stats + header + '<div class="card empty-hint">还没有选择题。点「🤖 AI 批量出题」按科目生成一组（含多选），或「＋ 添加」手动录入。</div>';
     const filtered = choiceFilter(all);
     const body = filtered.length ? filtered.map(choiceCardHtml).join('') : '<div class="card empty-hint">没有匹配的选择题。</div>';
     return stats + header + body;
   }
   function bindChoice(el) {
     const drill = el.querySelector('#pr-ch-drill'); if (drill) drill.onclick = function () { startChoiceDrill(5); };
-    const ai = el.querySelector('#pr-ch-ai'); if (ai) ai.onclick = genChoiceAI;
+    const ai = el.querySelector('#pr-ch-ai'); if (ai) ai.onclick = openChoiceGen;
     const add = el.querySelector('#pr-ch-add'); if (add) add.onclick = openChoiceAdd;
     const subjf = el.querySelector('#pr-ch-subjf'); if (subjf) subjf.onchange = function () { render(el); };
     const srcf = el.querySelector('#pr-ch-srcf'); if (srcf) srcf.onchange = function () { render(el); };
     const wrong = el.querySelector('#pr-ch-wrong'); if (wrong) wrong.onchange = function () { render(el); };
     const search = el.querySelector('#pr-ch-search'); if (search) search.oninput = U.debounce(function () { render(el); const s2 = el.querySelector('#pr-ch-search'); if (s2) s2.focus(); }, 250);
-    // 选项点击：单选高亮（锁定后不可改）
+    // 选项点击：单选高亮互斥；多选点击切换（考研多选可多选/全选，锁定后不可改）
     el.querySelectorAll('.pr-ch-opt').forEach(function (o) {
       o.onclick = function () {
         const card = o.closest('.pr-ch-card');
         if (!card || card.classList.contains('pr-ch-locked')) return;
-        card.querySelectorAll('.pr-ch-opt').forEach(function (x) { x.classList.remove('selected'); });
-        o.classList.add('selected');
+        const q = getChoice(card.getAttribute('data-id'));
+        if (q && isChoiceMulti(q)) {
+          o.classList.toggle('selected');
+        } else {
+          card.querySelectorAll('.pr-ch-opt').forEach(function (x) { x.classList.remove('selected'); });
+          o.classList.add('selected');
+        }
       };
     });
     el.querySelectorAll('.pr-ch-submit').forEach(function (b) {
@@ -21024,20 +21188,21 @@ function bind(el, next) {
         if (!q) return;
         const card = b.closest('.pr-ch-card');
         if (!card || card.classList.contains('pr-ch-locked')) return;
-        const sel = card.querySelector('.pr-ch-opt.selected');
-        const pick = sel ? parseInt(sel.getAttribute('data-ch-idx'), 10) : -1;
-        const correct = q.answer != null ? q.answer : 0;
+        const multi = isChoiceMulti(q);
+        const picks = Array.prototype.map.call(card.querySelectorAll('.pr-ch-opt.selected'), function (x) { return parseInt(x.getAttribute('data-ch-idx'), 10); });
+        const correctArr = choiceAnswer(q);
+        const right = choicePickedRight(picks, q);
         card.classList.add('pr-ch-locked');
         card.querySelectorAll('.pr-ch-opt').forEach(function (x) {
           const idx = parseInt(x.getAttribute('data-ch-idx'), 10);
           x.classList.remove('selected');
-          if (idx === correct) x.classList.add('pr-ch-ok');
-          if (idx === pick && pick !== correct) x.classList.add('pr-ch-bad');
+          if (correctArr.indexOf(idx) >= 0) x.classList.add('pr-ch-ok');
+          if (picks.indexOf(idx) >= 0 && correctArr.indexOf(idx) < 0) x.classList.add('pr-ch-bad');
         });
-        const right = pick === correct;
+        const answerLabel = multi ? correctArr.map(function (i) { return 'ABCD'[i]; }).join('、') : 'ABCD'[correctArr[0]];
         const act = document.getElementById('pr-ch-act-' + id);
         if (!act) return;
-        act.innerHTML = '<div class="pr-ch-result ' + (right ? 'pr-ch-ok-txt' : 'pr-ch-bad-txt') + '">' + (right ? '✅ 回答正确' : '❌ 回答错误（正确答案：' + 'ABCD'[correct] + '）') + '</div>'
+        act.innerHTML = '<div class="pr-ch-result ' + (right ? 'pr-ch-ok-txt' : 'pr-ch-bad-txt') + '">' + (right ? '✅ 回答正确' : '❌ 回答错误（正确答案：' + answerLabel + '）') + '</div>'
           + (q.analysis ? '<div class="pr-ch-analysis"><b>解析：</b>' + U.esc(q.analysis) + '</div>' : '')
           + '<div class="flip-grade"><button class="btn btn-sm btn-primary pr-ch-yes">😎 记住了</button><button class="btn btn-sm btn-ghost pr-ch-no">🤔 没记住</button></div>';
         // 评级后保留解析显示，仅替换评级区为"已评级"（不立即 App.refresh，避免解析一闪而过）
@@ -21060,7 +21225,9 @@ function bind(el, next) {
       html: '<div class="form-col">'
         + '<label class="fld fld-full"><span>题干</span><textarea id="pr-ch-stem" class="input" rows="2" placeholder="如：马克思主义最根本的世界观是？"></textarea></label>'
         + '<div id="pr-ch-opts-edit"></div>'
-        + '<label class="fld fld-full"><span>正确答案（0-3 对应 A/B/C/D）</span><input id="pr-ch-ans" class="input" type="number" min="0" max="3" value="0"></label>'
+        + '<label class="fld fld-full"><span>题型</span><select id="pr-ch-mode" class="input">'
+        + '<option value="0">单选题（4 选 1）</option><option value="1">多选题（考研规则：少选/错选不得分）</option></select></label>'
+        + '<div id="pr-ch-ans-edit"></div>'
         + '<label class="fld fld-full"><span>解析</span><textarea id="pr-ch-analysis" class="input" rows="2"></textarea></label>'
         + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
         + '<label class="fld" style="flex:1;min-width:90px"><span>科目</span><select id="pr-ch-subj" class="input">' + subjOpts + '</select></label>'
@@ -21073,33 +21240,134 @@ function bind(el, next) {
         for (let i = 0; i < 4; i++) { const v = (document.getElementById('pr-ch-opt-' + i) || {}).value; opts.push((v || '').trim()); }
         if (!stem) { document.getElementById('pr-ch-msg').innerHTML = '<div class="alert alert-danger">请填题干</div>'; return; }
         if (opts.some(function (x) { return !x; })) { document.getElementById('pr-ch-msg').innerHTML = '<div class="alert alert-danger">4 个选项都要填</div>'; return; }
-        const ans = U.clamp(parseInt(document.getElementById('pr-ch-ans').value, 10) || 0, 0, 3);
-        addChoice({ stem: stem, options: opts, answer: ans, analysis: document.getElementById('pr-ch-analysis').value.trim(), subject: document.getElementById('pr-ch-subj').value, source: document.getElementById('pr-ch-src').value, year: document.getElementById('pr-ch-year').value.trim() });
-        Toast.success('已添加'); close(); App.refresh();
+        const multi = document.getElementById('pr-ch-mode').value === '1';
+        let answer, answers;
+        if (multi) {
+          answers = [];
+          for (let i = 0; i < 4; i++) { const cb = document.getElementById('pr-ch-multi-' + i); if (cb && cb.checked) answers.push(i); }
+          if (answers.length < 2) { document.getElementById('pr-ch-msg').innerHTML = '<div class="alert alert-danger">多选题请勾选至少 2 个正确答案</div>'; return; }
+          answer = 0;
+        } else {
+          answer = U.clamp(parseInt(document.getElementById('pr-ch-ans').value, 10) || 0, 0, 3);
+          answers = [];
+        }
+        addChoice({ stem: stem, options: opts, answer: answer, answers: answers, multi: multi, analysis: document.getElementById('pr-ch-analysis').value.trim(), subject: document.getElementById('pr-ch-subj').value, source: document.getElementById('pr-ch-src').value, year: document.getElementById('pr-ch-year').value.trim() });
+        Toast.success('已添加' + (multi ? '（多选）' : '')); close(); App.refresh();
       } }]
     });
-    // 动态生成 4 个选项输入
+    // 动态生成 4 个选项输入 + 答案区（随单选/多选切换）
     const oe = document.getElementById('pr-ch-opts-edit');
     if (oe) { let h = ''; for (let i = 0; i < 4; i++) h += '<label class="fld fld-full"><span>选项 ' + 'ABCD'[i] + '</span><input id="pr-ch-opt-' + i + '" class="input"></label>'; oe.innerHTML = h; }
+    const modeSel = document.getElementById('pr-ch-mode');
+    function renderAns() {
+      const multi = modeSel.value === '1';
+      const ae = document.getElementById('pr-ch-ans-edit');
+      if (!ae) return;
+      ae.innerHTML = multi
+        ? '<label class="fld fld-full"><span>正确答案（可多选）</span><div style="display:flex;gap:10px;margin-top:4px">'
+          + [0, 1, 2, 3].map(function (i) { return '<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="pr-ch-multi-' + i + '"' + (i === 0 || i === 1 ? ' checked' : '') + '> ' + 'ABCD'[i] + '</label>'; }).join('')
+          + '</div><div class="muted-sm">勾选所有正确答案；少选/错选都不得分（对齐考研多选规则）</div></label>'
+        : '<label class="fld fld-full"><span>正确答案（0-3 对应 A/B/C/D）</span><input id="pr-ch-ans" class="input" type="number" min="0" max="3" value="0"></label>';
+    }
+    renderAns();
+    if (modeSel) modeSel.onchange = renderAns;
   }
-  function genChoiceAI() {
-    const all = list();
-    console.log('[polrecite] AI出选择题 点击', { hasAI: hasAI(), count: all.length });
-    if (!all.length) { Toast.warn('还没有大题，先录入或载入示例（AI 基于大题出选择题）'); return; }
+  // 政治薄弱考点（供定向出题）：heat 中 score<80 或未测(level<2) 的政治考点，最多 n 个
+  function weakPolTopics(n) {
+    const heat = Store.get().heat || {};
+    const topics = (window.DB && DB.TOPICS && DB.TOPICS.pol) || [];
+    const weak = [];
+    topics.forEach(function (t) {
+      const h = heat[t.id];
+      const weakFlag = !h || (h.score != null ? h.score < 80 : (h.level || 0) < 2);
+      if (weakFlag) weak.push(t.name);
+    });
+    return weak.slice(0, n || 8);
+  }
+  // 出题结果本地校验/清洗：选项 4 个不重复、答案合法、科目合法；不合法返回 null
+  function sanitizeChoice(r) {
+    const stem = String(r.stem || '').trim();
+    const opts = (Array.isArray(r.options) ? r.options.map(String) : []).slice(0, 4);
+    while (opts.length < 4) opts.push('');
+    if (!stem || opts.some(function (o) { return !(o || '').trim(); })) return null;
+    const seen = {};
+    let dup = false;
+    opts.forEach(function (o) { const k = o.trim().toLowerCase(); if (seen[k]) dup = true; seen[k] = true; });
+    if (dup) return null;   // 选项重复 → 质量不合格，丢弃
+    const multi = !!(r.multi);
+    let answer, answers;
+    if (multi) {
+      answers = (Array.isArray(r.answers) ? r.answers : []).map(Number).filter(function (n) { return n >= 0 && n <= 3; });
+      if (answers.length < 2) return null;   // 多选至少 2 个答案
+      answer = 0;
+    } else {
+      answer = U.clamp(parseInt(r.answer, 10) || 0, 0, 3);
+      answers = [];
+    }
+    const subj = SUBJECTS.indexOf(r.subject) >= 0 ? r.subject : '';
+    return { stem: stem, options: opts, answer: answer, answers: answers, multi: multi, analysis: String(r.analysis || '').trim(), subject: subj, source: 'AI出题', year: '' };
+  }
+  // 批量定向出题弹窗：科目 × 数量 × 题型（单选/多选/混合），AI 一次返回一组
+  function openChoiceGen() {
+    if (!list().length && !weakPolTopics(8).length) { Toast.warn('还没有大题，先录入或载入示例（AI 基于大题+薄弱考点出题）'); return; }
     if (!hasAI()) { Toast.warn('未配置 AI，无法出题'); return; }
-    Toast.show('🤖 AI 出选择题中…（稍候 5-15 秒）', 'info', 4000);
-    const pick = all[U.randInt(0, all.length - 1)];
-    const sys = '你是考研政治命题专家，只输出JSON对象，不要多余文字。';
-    const user = '基于以下考研政治大题考点，命制一道单项选择题（4 个选项，1 个正确）。只输出JSON：{"stem":"题干","options":["A选项","B选项","C选项","D选项"],"answer":0到3的整数,"analysis":"解析","subject":"马原/毛中特/史纲/思修/当代"}。考点：' + (pick.topic || '') + '；要点：' + (pick.points || []).join('；');
-    AI.chatJSON(sys, user, null, { cache: false }).then(function (r) {
-      const opts = Array.isArray(r.options) ? r.options.map(String).slice(0, 4) : [];
-      while (opts.length < 4) opts.push('');
-      const ans = U.clamp(parseInt(r.answer, 10) || 0, 0, 3);
-      if (!r.stem) throw new Error('AI 未返回题干');
-      addChoice({ stem: String(r.stem), options: opts, answer: ans, analysis: r.analysis ? String(r.analysis) : '', subject: r.subject ? String(r.subject) : (pick.subject || ''), source: pick.source || 'AI出题', year: pick.year || '' });
-      Toast.success('AI 已生成一道选择题'); App.refresh();
-    }).catch(function (e) { console.error('[polrecite] 选择题AI失败', e); Toast.warn('出题失败：' + (e && e.message ? e.message : String(e)), 'warn', 6000); });
+    const subjOpts = '<option value="">全部科目</option>' + SUBJECTS.map(function (x) { return '<option value="' + x + '">' + x + '</option>'; }).join('');
+    const cntOpts = [3, 5, 10].map(function (n) { return '<option value="' + n + '">' + n + ' 题</option>'; }).join('');
+    Modal.open({
+      title: '🤖 AI 批量出选择题',
+      html: '<div class="form-col">'
+        + '<div class="muted-sm">支持<b>多选</b>（考研多选 34 分）与单选混合；优先覆盖你的薄弱考点（热力图掌握度&lt;80% 的政治考点）。一次生成一组，可反复出。</div>'
+        + '<label class="fld"><span>科目</span><select id="pr-chg-subj" class="input">' + subjOpts + '</select></label>'
+        + '<label class="fld"><span>数量</span><select id="pr-chg-cnt" class="input">' + cntOpts + '</select></label>'
+        + '<label class="fld"><span>题型</span><select id="pr-chg-mode" class="input">'
+        + '<option value="mix">单选 + 多选混合</option><option value="single">全单选</option><option value="multi">全多选</option></select></label>'
+        + '<button class="btn btn-primary" id="pr-chg-go" type="button">🎲 生成这组题</button>'
+        + '<div id="pr-chg-msg"></div><div id="pr-chg-result"></div></div>',
+      actions: [{ label: '关闭' }]
+    });
+    document.getElementById('pr-chg-go').onclick = function () {
+      const subj = document.getElementById('pr-chg-subj').value;
+      const cnt = U.clamp(parseInt(document.getElementById('pr-chg-cnt').value, 10) || 5, 1, 15);
+      const mode = document.getElementById('pr-chg-mode').value;
+      const go = document.getElementById('pr-chg-go');
+      go.disabled = true; go.textContent = '🤖 生成中…（15-40 秒）';
+      const msg = document.getElementById('pr-chg-msg');
+      if (msg) msg.innerHTML = '<div class="muted-sm" style="margin-top:6px">⏳ AI 正在按真题风格命制 ' + cnt + ' 道题（' + (subj || '全科目') + '·' + (mode === 'single' ? '单选' : mode === 'multi' ? '多选' : '混合') + '）…</div>';
+      // 薄弱考点优先 + 可参考大题（同科目优先，最多 12 条）
+      const weak = weakPolTopics(8);
+      const pool = list().filter(function (p) { return !subj || (p.subject || '') === subj; }).slice(0, 12);
+      const refText = pool.length ? '\n可参考的大题考点：\n' + pool.map(function (p, i) { return (i + 1) + '. ' + (p.topic || '').slice(0, 50); }).join('\n') : '';
+      const weakText = weak.length ? '\n优先覆盖以下薄弱考点：' + weak.join('、') : '';
+      const modeRule = mode === 'single' ? '全部出单选题'
+        : mode === 'multi' ? '全部出多选题（正确答案 2-3 个）'
+        : '单选与多选混合（多选约占一半，考研实际占比更高）';
+      const sys = '你是考研政治命题专家，只输出JSON数组，不要任何多余文字、不要markdown围栏。';
+      const user = '为考研政治命制 ' + cnt + ' 道选择题（' + (subj || '科目不限') + '，' + modeRule + '），风格贴合真题：'
+        + '①题干可为直问式或小材料式（材料简练，选自时政/原著引文/概念辨析）；'
+        + '②4 个选项词数相近、表述规范；'
+        + '③干扰项必须有明确错误依据（偷换概念、绝对化表述、张冠李戴、与题干无关等），不能一眼看出荒谬；'
+        + '④正确选项务必无争议；'
+        + '⑤每题附解析（说明正确依据 + 各干扰项错在哪）。'
+        + '只输出JSON数组，每个元素：{"stem":"题干","options":["A","B","C","D"],"answer":0到3的整数(单选),"answers":[1,2](多选时),"multi":true或false,"analysis":"解析","subject":"马原/毛中特/史纲/思修/当代"}'
+        + weakText + refText;
+      AI.chatJSON(sys, user, null, { cache: false, maxTokens: 8000 }).then(function (r) {
+        const arr = Array.isArray(r) ? r : (r && Array.isArray(r.questions) ? r.questions : []);
+        let ok = 0, bad = 0;
+        arr.forEach(function (raw) { const c = sanitizeChoice(raw); if (c) { addChoice(c); ok++; } else bad++; });
+        if (!ok) throw new Error('AI 返回的题质量不合格（选项重复/答案缺失），请重试');
+        const resEl = document.getElementById('pr-chg-result');
+        if (resEl) resEl.innerHTML = '<div class="alert alert-ok" style="margin-top:8px">✓ 已入库 ' + ok + ' 道' + (bad ? '，丢弃 ' + bad + ' 道不合格' : '') + '。可关闭窗口到选择题列表刷题。</div>';
+        Toast.success('已生成 ' + ok + ' 道选择题' + (bad ? '（丢弃 ' + bad + ' 道）' : ''));
+        go.disabled = false; go.textContent = '🎲 再生成一组';
+        if (msg) msg.innerHTML = '';
+      }).catch(function (e) {
+        go.disabled = false; go.textContent = '🎲 生成这组题';
+        if (msg) msg.innerHTML = '<div class="alert alert-danger" style="margin-top:6px">出题失败：' + U.esc(e && e.message ? e.message : String(e)) + '。可减少数量或换科目重试。</div>';
+      });
+    };
   }
+  // 保留旧函数名引用（防止其他入口调用报错）；实际入口已改为 openChoiceGen
+  function genChoiceAI() { openChoiceGen(); }
   // 选择题连续刷题（单弹窗逐题，参照 startDrill）
   function startChoiceDrill(n) {
     let pool = dueChoice();
@@ -21113,34 +21381,44 @@ function bind(el, next) {
       const q = getChoice(picks[i].id);
       if (!q) { show(i + 1); return; }
       const box = document.getElementById('ch-drill-box');
-      const correct = q.answer != null ? q.answer : 0;
+      const multi = isChoiceMulti(q);
+      const correctArr = choiceAnswer(q);
+      const multiTag = multi ? '<span class="tag" style="background:#2f54eb;color:#fff;margin-left:6px">多选</span>' : '';
       const opts = (q.options || []).map(function (op, j) {
-        return '<div class="pr-ch-opt" data-didx="' + j + '"><span class="pr-ch-letter">' + 'ABCD'[j] + '</span><span class="pr-ch-opttext">' + U.esc(op || '') + '</span></div>';
+        return '<div class="pr-ch-opt' + (multi ? ' pr-ch-multi' : '') + '" data-didx="' + j + '"><span class="pr-ch-letter">' + 'ABCD'[j] + '</span><span class="pr-ch-opttext">' + U.esc(op || '') + '</span></div>';
       }).join('');
       box.innerHTML = '<div class="muted-sm">第 ' + (i + 1) + '/' + picks.length + ' 题</div>'
-        + '<div class="pr-ch-stem">' + U.esc(q.stem || '') + '</div>'
+        + '<div class="pr-ch-stem">' + U.esc(q.stem || '') + multiTag + '</div>'
+        + (multi ? '<div class="muted-sm" style="margin:4px 0 0;font-size:12px">多选：少选/错选不得分，请选出所有正确答案</div>' : '')
         + '<div class="pr-ch-opts" id="ch-drill-opts">' + opts + '</div>'
         + '<div id="ch-drill-act"><button class="btn btn-primary btn-sm" id="ch-drill-submit">提交</button></div>';
-      let picked = -1;
+      const pickedSet = {};
       box.querySelectorAll('.pr-ch-opt').forEach(function (o) {
         o.onclick = function () {
           if (box.classList.contains('locked')) return;
-          box.querySelectorAll('.pr-ch-opt').forEach(function (x) { x.classList.remove('selected'); });
-          o.classList.add('selected');
-          picked = parseInt(o.getAttribute('data-didx'), 10);
+          const j = parseInt(o.getAttribute('data-didx'), 10);
+          if (multi) {
+            o.classList.toggle('selected');
+            if (o.classList.contains('selected')) pickedSet[j] = true; else delete pickedSet[j];
+          } else {
+            box.querySelectorAll('.pr-ch-opt').forEach(function (x) { x.classList.remove('selected'); delete pickedSet[parseInt(x.getAttribute('data-didx'), 10)]; });
+            o.classList.add('selected'); pickedSet[j] = true;
+          }
         };
       });
       document.getElementById('ch-drill-submit').onclick = function () {
         box.classList.add('locked');
-        const right = picked === correct;
+        const picks2 = Object.keys(pickedSet).map(Number);
+        const right = choicePickedRight(picks2, q);
         box.querySelectorAll('.pr-ch-opt').forEach(function (x) {
           const j = parseInt(x.getAttribute('data-didx'), 10);
           x.classList.remove('selected');
-          if (j === correct) x.classList.add('pr-ch-ok');
-          if (j === picked && picked !== correct) x.classList.add('pr-ch-bad');
+          if (correctArr.indexOf(j) >= 0) x.classList.add('pr-ch-ok');
+          if (picks2.indexOf(j) >= 0 && correctArr.indexOf(j) < 0) x.classList.add('pr-ch-bad');
         });
+        const answerLabel = multi ? correctArr.map(function (j) { return 'ABCD'[j]; }).join('、') : 'ABCD'[correctArr[0]];
         const act = document.getElementById('ch-drill-act');
-        act.innerHTML = '<div class="pr-ch-result ' + (right ? 'pr-ch-ok-txt' : 'pr-ch-bad-txt') + '">' + (right ? '✅ 正确' : '❌ 错误（正确：' + 'ABCD'[correct] + '）') + '</div>'
+        act.innerHTML = '<div class="pr-ch-result ' + (right ? 'pr-ch-ok-txt' : 'pr-ch-bad-txt') + '">' + (right ? '✅ 正确' : '❌ 错误（正确：' + answerLabel + '）') + '</div>'
           + (q.analysis ? '<div class="pr-ch-analysis"><b>解析：</b>' + U.esc(q.analysis) + '</div>' : '')
           + '<div class="flip-grade"><button class="btn btn-sm btn-primary" id="ch-drill-yes">😎 记住了</button><button class="btn btn-sm btn-ghost" id="ch-drill-no">🤔 没记住</button></div>';
         document.getElementById('ch-drill-yes').onclick = function () { gradeChoice(q.id, true); show(i + 1); };
@@ -21149,7 +21427,7 @@ function bind(el, next) {
     }
     show(0);
   }
-  window.PolReciteModule = { render: render, grade: grade, openReview: openFlip, openSelfTest: openSelfTest, openWrite: openWrite, startDrill: startDrill };
+  window.PolReciteModule = { render: render, grade: grade, openReview: openFlip, openSelfTest: openSelfTest, openWrite: openWrite, startDrill: startDrill, isChoiceMulti: isChoiceMulti, choiceAnswer: choiceAnswer, choicePickedRight: choicePickedRight, sanitizeChoice: sanitizeChoice };
 })();
 
 /* ===== js/app.js ===== */
