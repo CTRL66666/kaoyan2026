@@ -131,11 +131,14 @@ b, strong, .card-title, .btn, .prog-name, .stat-num, .cd-num { font-weight: 500;
 
 /* ---------- 标签 ---------- */
 .tag {
-  display: inline-block; font-size: 11px; color: #fff; padding: 2px 8px;
+  display: inline-block; font-size: 11px; color: var(--text-secondary); padding: 2px 8px;
   border-radius: var(--r-tag); line-height: 1.5; cursor: default;
+  background: var(--surface-muted); border: 1px solid var(--line);
 }
 .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .tag-mod { background: var(--surface); color: var(--text-secondary); border: 1px solid var(--line); cursor: pointer; }
+/* 带颜色背景的变体：白字（覆盖默认深色字） */
+.tag-red, .tag-new, .tag-warn, .tag-ok, .tag-prio { color: #fff; border-color: transparent; }
 .tag-red { background: var(--danger); }
 .tag-new { background: var(--blue); }
 .tag-warn { background: var(--warn); }
@@ -234,7 +237,7 @@ textarea.input { resize: vertical; }
 /* ---------- 统计 ---------- */
 .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; }
 .stat { background: var(--surface); border-radius: var(--r-btn); padding: 10px 4px; text-align: center; }
-.stat-num { font-size: 20px; font-weight: 500; }
+.stat-num { font-size: 20px; font-weight: 500; color: var(--text-primary); }   /* 显式设色，避免父级 color 覆盖导致白字 */
 .stat-label { font-size: 11px; color: var(--text-muted); }
 .muted-sm { font-size: 12px; color: var(--text-muted); }
 .empty { text-align: center; color: var(--text-muted); font-size: 13px; padding: 20px 0; }
