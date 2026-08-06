@@ -6873,6 +6873,85 @@ body.cp-lock { overflow: hidden; }
 })();
 
 
+/* ===== js/core/mastery.js ===== */
+/* ============================================================
+ * mastery.js — 掌握度统一服务（S2/S1：口径统一 + 判分闭环）
+ * 全站唯一事实来源：
+ *   1) scoreToLevel(score)：掌握度分 0-100 → level 0|1|2 的唯一换算（80/50 阈值）
+ *   2) effScore(h)：heat 条目 → 有效掌握度分（无 score 时按 level 折算，供排序/展示）
+ *   3) recordAnswer(opts)：一次作答的统一判分回写
+ *      heat + heatHistory(趋势) + quizHistory(正确率) + 可选错题录入 + 必拿层罚练 + 正确率重算
+ * 各模块（quiz/conceptmap/heatmap/sprint/progress/review）统一复用，杜绝口径漂移。
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  var Mastery = {
+    // score(0-100) → level(0|1|2)。全局唯一换算：80 分以上=掌握(2)，50 分以上=薄弱(1)，否则危险(0)
+    scoreToLevel: function (score) {
+      score = +score;
+      if (isNaN(score)) return 0;
+      return score >= 80 ? 2 : score >= 50 ? 1 : 0;
+    },
+    // heat 条目 → 有效掌握度分（0-100）。有 score 直接用；无 score 按 level 折算（供排序/展示/统计）
+    effScore: function (h) {
+      if (!h) return null;
+      if (typeof h.score === 'number' && !isNaN(h.score)) return Math.round(h.score);
+      if (h.level === 2) return 85;
+      if (h.level === 1) return 60;
+      if (h.level === 0) return 30;
+      return null;
+    },
+    // 统一判分回写。opts: {topicId, topicName, subject, score, verdict, source, sourceLabel,
+    //   errorType, comment, stem, answer, solution, trap, tier, penaltyBelow, penaltyCount, noMistake}
+    recordAnswer: function (o) {
+      if (!o || !o.topicId || typeof o.score !== 'number') return;
+      var level = Mastery.scoreToLevel(o.score);
+      var now = new Date().toISOString();
+      Store.update(function (s) {
+        // 1) heat 主数据
+        s.heat = s.heat || {};
+        s.heat[o.topicId] = { level: level, score: o.score, updatedAt: now };
+        // 2) heatHistory 趋势（上限 30 条）
+        s.heatHistory = s.heatHistory || {};
+        s.heatHistory[o.topicId] = s.heatHistory[o.topicId] || [];
+        s.heatHistory[o.topicId].push({ score: o.score, level: level, at: now });
+        if (s.heatHistory[o.topicId].length > 30) s.heatHistory[o.topicId] = s.heatHistory[o.topicId].slice(-30);
+        // 3) 错题录入（可选，默认 score<80 且有错因时录）
+        if (!o.noMistake && o.score < 80 && o.errorType && o.errorType !== 'none') {
+          s.mistakes = s.mistakes || [];
+          var label = o.sourceLabel || '测验';
+          s.mistakes.push({
+            id: U.uid(), subject: o.subject || 'math', type: o.errorType,
+            desc: '【' + label + '】' + o.topicName + '：' + (o.comment || '作答有误'),
+            stem: o.stem || '', answer: o.answer || '', solution: o.solution || '', trap: o.trap || '',
+            refId: o.topicId, source: o.source || 'quiz',
+            dedupKey: (o.source || 'quiz') + ':' + o.topicId + ':' + U.shortDate(),
+            date: U.shortDate(), createdAt: now
+          });
+        }
+        // 4) 必拿层罚练（tier1 且低于阈值；可参数化，默认 <90 罚 5）
+        if (o.tier === 1 && o.score < (o.penaltyBelow != null ? o.penaltyBelow : 90)) {
+          var n = o.penaltyCount || 5;
+          s.mistakeDrills = s.mistakeDrills || [];
+          for (var i = 0; i < n; i++) {
+            s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: o.topicId, title: '【罚练】' + o.topicName + ' 同类题 ' + (i + 1) + '/' + n, subject: o.subject || 'math', status: 'pending', penaltyOf: o.topicId, createdAt: now });
+          }
+        }
+        // 5) quizHistory（正确率统计口径）
+        s.quizHistory = s.quizHistory || [];
+        s.quizHistory.push({ id: U.uid(), topicId: o.topicId, topicName: o.topicName, score: o.score, verdict: o.verdict || '', date: U.shortDate(), createdAt: now, source: o.source || 'quiz' });
+        if (s.quizHistory.length > 100) s.quizHistory = s.quizHistory.slice(-100);
+      });
+      // 6) 闭环：汇入本周正确率 → 排程/预警/AI 记忆信号
+      try { if (Store.recomputeMathAccuracy) Store.recomputeMathAccuracy(); } catch (e) {}
+    }
+  };
+
+  window.Mastery = Mastery;
+})();
+
+
 /* ===== js/modules/dashboard.js ===== */
 /* ============================================================
  * dashboard.js — 作战台（好用版）
@@ -8860,7 +8939,7 @@ function bind(el, next) {
     return { keys: keys, hours: hours, hourDays: hourDays, checkDays: checkDays, activeDays: activeDays,
       misCount: misCount, misByDay: misByDay, misTop: misTop, vocabN: vocabN, polN: polN, focusMins: focusMins, photoN: photoN };
   }
-  // 薄弱考点（heat 掌握度最低的 n 个，含科目前缀）
+  // 薄弱考点（heat 掌握度最低的 n 个，含科目前缀；统一 Mastery.effScore 口径）
   function rptWeakTopics(n) {
     var s = Store.get();
     var heat = s.heat || {};
@@ -8870,9 +8949,10 @@ function bind(el, next) {
       arr.forEach(function (t) {
         var h = heat[t.id];
         if (!h) return;
-        var score = typeof h.score === 'number' ? h.score : (h.level === 0 ? 30 : h.level === 1 ? 60 : 85);
+        var score = Mastery.effScore(h);
+        if (score == null) return;
         var label = ((DB.SUBJECTS[subj] || {}).short || subj) + '·' + t.name;
-        out.push({ label: label, value: Math.round(score) });
+        out.push({ label: label, value: score });
       });
     });
     return out.sort(function (a, b) { return a.value - b.value; }).slice(0, n || 5);
@@ -11018,6 +11098,7 @@ function bind(el, next) {
               Toast.warn('必拿层正确率<90%：按规则罚5道同类题，已加入重练队列');
             }
           });
+          try { Store.recomputeMathAccuracy(); } catch (e) {}   // 统一闭环：正确率重算
           close(); App.refresh();
         }}
       ]
@@ -11725,36 +11806,17 @@ function bind(el, next) {
     return { score, verdict: score >= 80 ? '对' : score >= 40 ? '部分对' : '错', steps: flags, errorType: errType, comment: '本地规则评分（无AI，配置Key可得逐点精评）。', source: 'local' };
   }
 
-  // ==================== 自动回写 ====================
+  // ==================== 自动回写（统一走 Mastery.recordAnswer，口径唯一，补 heatHistory 趋势） ====================
   function commitResult(answerText) {
     const topic = allTopics().find(t => t.id === topicId);
     const score = judge.score;
-    const level = score >= 80 ? 2 : score >= 50 ? 1 : 0;
-    Store.update(s => {
-      s.heat[topicId] = { level, score, updatedAt: new Date().toISOString() };
-      if (score < 80 && judge.errorType && judge.errorType !== 'none') {
-        s.mistakes.push({
-          id: U.uid(), subject: topicIdToSubj(topicId), type: judge.errorType,
-          desc: '【AI测验】' + topic.name + '：' + (judge.comment || '作答有误'),
-          // 把原题与解析一并带入错题画像（录入即带，无需 AI 反推）
-          stem: quiz.stem || '', answer: quiz.answer || '',
-          solution: quiz.solution || '', trap: quiz.trap || '',
-          refId: topicId, source: 'quiz',
-          dedupKey: 'quiz:' + topicId + ':' + U.shortDate(),
-          date: U.shortDate(), createdAt: new Date().toISOString()
-        });
-      }
-      if (topic.tier === 1 && score < 90) {
-        for (let i = 0; i < 5; i++) {
-          s.mistakeDrills.push({ id: U.uid(), source: 'topic', refId: topicId, title: '【罚练】' + topic.name + ' 同类题 ' + (i + 1) + '/5', subject: topicIdToSubj(topicId), status: 'pending', penaltyOf: topicId, createdAt: new Date().toISOString() });
-        }
-      }
-      s.quizHistory = s.quizHistory || [];
-      s.quizHistory.push({ id: U.uid(), topicId, topicName: topic.name, score, verdict: judge.verdict, date: U.shortDate(), createdAt: new Date().toISOString(), source: judge.source });
-      if (s.quizHistory.length > 100) s.quizHistory = s.quizHistory.slice(-100);
+    Mastery.recordAnswer({
+      topicId, topicName: topic.name, subject: topicIdToSubj(topicId),
+      score, verdict: judge.verdict, source: judge.source, sourceLabel: 'AI测验',
+      errorType: judge.errorType, comment: judge.comment,
+      stem: quiz.stem || '', answer: quiz.answer || '', solution: quiz.solution || '', trap: quiz.trap || '',
+      tier: topic.tier
     });
-    // 闭环：本次测验结果汇入本周数学正确率 → 激活排程数学加权 / 难模块预警 / AI记忆信号
-    Store.recomputeMathAccuracy();
 
     // 记忆事件：测验结果汇入 AI 反思队列（攒够批量沉淀，成本可控）
     if (window.AiMemory) {
@@ -13549,11 +13611,12 @@ function bind(el, next) {
       const items = quizState.items;
       const okN = items.filter(x => x.ok === true).length;
       const score = Math.round(okN / items.length * 100);
-      Store.update(s => {
-        s.heat[n.id] = {
-          level: score >= 80 ? 2 : score >= 50 ? 1 : 0, score,
-          updatedAt: new Date().toISOString()
-        };
+      // 统一回写（Mastery.recordAnswer）：heat + heatHistory + quizHistory + 正确率重算，
+      // 补齐此前"只写 heat、缺闭环"的断链；图谱节点无 tier → 不触发罚练
+      Mastery.recordAnswer({
+        topicId: n.id, topicName: n.name, subject: 'math',
+        score: score, verdict: score >= 80 ? '对' : score >= 50 ? '部分对' : '错',
+        source: 'conceptmap', sourceLabel: '图谱速测', noMistake: true, tier: 0
       });
       quizState = null; paint();
       Toast.success('已回写掌握度 ' + score + '%' + (score < 60 ? '（后继考点将保持锁定）' : ''));
@@ -13636,7 +13699,8 @@ function bind(el, next) {
   function scoreOf(t, heat, dep, trends) {
     var h = heat[t.id] || {};
     var lvl = (h.level != null) ? h.level
-      : (h.score != null ? (h.score >= 80 ? 2 : h.score >= 50 ? 1 : 0) : 0);
+      : (h.score != null ? Mastery.scoreToLevel(h.score) : 0);
+    var eff = Mastery.effScore(h);   // 有效掌握度分（统一口径），无数据为 null
 
     // 维度1：考频（tier + 历年出现）
     var examFreq = t.tier === 1 ? 3 : t.tier === 2 ? 2 : 1;
@@ -13659,9 +13723,9 @@ function bind(el, next) {
       }
     }
 
-    // 维度3：薄弱度
+    // 维度3：薄弱度（基于统一掌握度口径）
     var weakness;
-    if (lvl === 0) weakness = (h.score == null ? 2 : 3);
+    if (lvl === 0) weakness = (eff == null ? 2 : 3);
     else if (lvl === 1) weakness = 2;
     else weakness = 0;
 
