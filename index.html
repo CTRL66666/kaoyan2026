@@ -1280,6 +1280,20 @@ body.cp-lock { overflow: hidden; }
 .attr-pattern-no { flex: 0 0 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; background: var(--text-primary); color: #fff; font-size: 11px; }
 .attr-pattern-line { font-size: 12.5px; line-height: 1.7; color: var(--text-secondary); }
 
+/* ---------- AI 私教答疑（tutor-*） ---------- */
+.tutor-box { max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+.tutor-msg { display: flex; }
+.tutor-msg.tutor-user { justify-content: flex-end; }
+.tutor-msg.tutor-ai { justify-content: flex-start; }
+.tutor-bubble { max-width: 82%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.tutor-user .tutor-bubble { background: var(--text-primary); color: #fff; border-bottom-right-radius: 3px; }
+.tutor-ai .tutor-bubble { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
+.tutor-streaming { opacity: .75; }
+.tutor-input { display: flex; gap: 8px; margin-top: 10px; }
+.tutor-input .input { flex: 1; }
+.tutor-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tutor-empty { padding: 16px 4px; text-align: center; }
+
 </style>
 </head>
 <body>
@@ -9567,6 +9581,7 @@ function bind(el, next) {
             // 操作按钮行
             + '<div class="mis-actions">'
             + '<button class="btn btn-sm btn-primary mis-variant" data-id="' + m.id + '">重练变式题</button>'
+            + (typeof window.TutorModule !== 'undefined' ? '<button class="btn btn-sm btn-ghost mis-tutor" data-id="' + m.id + '" style="color:#2f54eb">🧑🏫 问私教</button>' : '')
             + (!m.aiAnalysis ? '<button class="btn btn-sm btn-ghost mis-ai-explain" data-id="' + m.id + '" style="color:#2f54eb">AI生成解析</button>' : '')
             + (m.reviewPlan ? '' : '<button class="btn btn-sm btn-ghost mis-review" data-id="' + m.id + '">复习计划</button>')
             + '<button class="btn btn-sm btn-ghost mis-del" data-id="' + m.id + '" style="color:var(--danger)">删除</button>'
@@ -9924,6 +9939,7 @@ function bind(el, next) {
             + rvHtml
             + '<div class="mis-actions">'
             + '<button class="btn btn-sm btn-primary mis-variant" data-id="' + m.id + '">重练变式题</button>'
+            + (typeof window.TutorModule !== 'undefined' ? '<button class="btn btn-sm btn-ghost mis-tutor" data-id="' + m.id + '" style="color:#2f54eb">🧑🏫 问私教</button>' : '')
             + (!m.aiAnalysis ? '<button class="btn btn-sm btn-ghost mis-ai-explain" data-id="' + m.id + '" style="color:#2f54eb">AI生成解析</button>' : '')
             + (m.reviewPlan ? '' : '<button class="btn btn-sm btn-ghost mis-review" data-id="' + m.id + '">复习计划</button>')
             + '<button class="btn btn-sm btn-ghost mis-del" data-id="' + m.id + '" style="color:var(--danger)">删除</button>'
@@ -9973,6 +9989,22 @@ function bind(el, next) {
         const id = b.getAttribute('data-id');
         Store.update(s => { const m = s.mistakes.find(x => x.id === id); if (m && !m.reviewPlan) m.reviewPlan = { start: U.dkey(), done: {} }; });
         Toast.success('已加入复习计划'); App.refresh();
+      };
+    });
+    // AI私教答疑：围绕这道错题多轮追问（原题/解析/易错点作为上下文）
+    el.querySelectorAll('.mis-tutor').forEach(b => {
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        const m = Store.get().mistakes.find(x => x.id === b.getAttribute('data-id'));
+        if (!m) return;
+        const ai = m.aiAnalysis || {};
+        window.TutorModule.open('m-' + m.id, {
+          refId: m.id, source: 'mistake', title: (m.desc || '').slice(0, 22),
+          context: {
+            stem: m.stem || '', answer: m.answer || '', solution: m.solution || '', trap: m.trap || '',
+            analysis: [ai.solution, ai.trap].filter(Boolean).join('\n')
+          }
+        });
       };
     });
     // AI生成解析：根据错题描述生成原题+答案+解析
@@ -16995,6 +17027,166 @@ function bind(el, next) {
 })();
 
 
+/* ===== js/modules/tutor.js ===== */
+/* ============================================================
+ * tutor.js — AI 私教连续答疑（围绕一道题的沉浸式多轮追问）
+ * 任何题目（拍题/错题/测验题）都能进入私教对话：
+ *   记住原题 + 解析 + AI 长期记忆 + 最近 N 轮对话，
+ *   像真人老师一样多轮追问（为什么错 / 换个思路 / 再出类似题）。
+ * 数据：Store.tutorThreads[refKey] = {refKey, refId, source, title, context, thread, createdAt, updatedAt}
+ *   线程上限 30，每线程 20 轮（超出丢最早）。
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  var MAX_THREADS = 30;
+  var MAX_ROUNDS = 20;     // 每线程消息对数上限（user+ai 算一轮，存 2× 条）
+  var CTX_ROUNDS = 8;      // 每次请求携带的最近对话轮数
+
+  function threads() { return (Store.get().tutorThreads) || {}; }
+  function threadOf(refKey) { return threads()[refKey] || null; }
+
+  // 组装系统提示：原题 + 解析 + AI 记忆 + 最近对话历史
+  function buildPrompt(th) {
+    var memBlock = (AI && AI.memoryDigest) ? AI.memoryDigest(300) : '';
+    var ctx = th.context || {};
+    var sys = '你是考生的考研 AI 私教，围绕下面这道题做多轮答疑。'
+      + '风格：直接、口语化、像真人老师（而不是客服）；每轮回答 ≤150 字（除非学生明确要求展开）；'
+      + '每轮结尾用「→」给 1 个引导性追问或下一步建议（≤20字）；用简体中文；公式可用 LaTeX 但保持简短。'
+      + (memBlock ? '\n' + memBlock + '\n' : '')
+      + '\n【原题】' + (ctx.stem || th.title || '')
+      + (ctx.answer ? '\n【参考答案】' + ctx.answer : '')
+      + (ctx.solution ? '\n【解析】' + ctx.solution : '')
+      + (ctx.trap ? '\n【易错点】' + ctx.trap : '')
+      + (ctx.analysis ? '\n【已有分析】' + ctx.analysis : '');
+    var hist = (th.thread || []).slice(-CTX_ROUNDS * 2).map(function (m) {
+      return (m.role === 'user' ? '学生：' : '私教：') + m.content;
+    }).join('\n');
+    if (hist) sys += '\n\n【对话历史】\n' + hist;
+    return sys;
+  }
+
+  // 持久化线程（上限淘汰最久未更新的）
+  function saveThread(th) {
+    Store.update(function (s) {
+      s.tutorThreads = s.tutorThreads || {};
+      s.tutorThreads[th.refKey] = th;
+      var keys = Object.keys(s.tutorThreads);
+      if (keys.length > MAX_THREADS) {
+        keys.sort(function (a, b) {
+          return (s.tutorThreads[a].updatedAt || '') < (s.tutorThreads[b].updatedAt || '') ? -1 : 1;
+        });
+        for (var i = 0; i < keys.length - MAX_THREADS; i++) delete s.tutorThreads[keys[i]];
+      }
+    });
+  }
+
+  // 打开对话（已有线程续聊；无则新建）
+  function open(refKey, meta) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var th = threadOf(refKey);
+    if (!th) {
+      th = {
+        refKey: refKey, refId: (meta && meta.refId) || '', source: (meta && meta.source) || '',
+        title: (meta && meta.title) || '', context: (meta && meta.context) || {},
+        thread: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+      };
+      saveThread(th);
+    }
+    renderDialog(th);
+  }
+
+  function renderDialog(th) {
+    var html = '<div class="tutor-box" id="tutor-box">' + threadHtml(th) + '</div>'
+      + '<div class="tutor-input">'
+      + '<input id="tutor-q" class="input" placeholder="追问：这步为什么错？换个思路？再出类似的…" autocomplete="off" autocapitalize="off">'
+      + '<button class="btn btn-primary" id="tutor-send">发送</button></div>'
+      + '<div class="tutor-chips">'
+      + ['为什么这步会错？', '换个更简单的解法', '再出一道类似的题', '这题考什么考点？'].map(function (c) {
+        return '<button class="btn btn-ghost btn-sm tutor-chip" data-q="' + U.esc(c) + '">' + c + '</button>';
+      }).join('')
+      + '</div><div id="tutor-status" class="muted-sm" style="margin-top:6px;min-height:18px"></div>';
+    Modal.open({
+      title: '🧑🏫 AI 私教 · ' + (th.title || '答疑'),
+      wide: true,
+      html: html,
+      actions: [{ label: '关闭' }]
+    });
+    bind(th);
+  }
+
+  function threadHtml(th) {
+    if (!th.thread.length) {
+      return '<div class="tutor-empty muted-sm">和私教聊聊这道题——哪里不懂直接问，他会结合你的记忆给出针对性解答。</div>';
+    }
+    return th.thread.map(function (m) {
+      var role = m.role === 'user' ? 'tutor-user' : 'tutor-ai';
+      return '<div class="tutor-msg ' + role + '"><div class="tutor-bubble">' + U.esc(m.content) + '</div></div>';
+    }).join('');
+  }
+
+  function bind(th) {
+    var box = document.getElementById('tutor-box');
+    var inp = document.getElementById('tutor-q');
+    var send = document.getElementById('tutor-send');
+    function doAsk(q) {
+      if (!q || !q.trim()) return;
+      ask(th, q.trim(), box, inp, send);
+    }
+    if (send) send.onclick = function () { doAsk(inp ? inp.value : ''); };
+    if (inp) {
+      inp.focus();
+      inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); doAsk(inp.value); } };
+    }
+    document.querySelectorAll('.tutor-chip').forEach(function (c) {
+      c.onclick = function () { doAsk(c.getAttribute('data-q')); };
+    });
+  }
+
+  var _asking = false;
+  // 提问：追加 user 消息 → AI 流式回答 → 追加 ai 消息并持久化
+  function ask(th, question, box, inp, send) {
+    if (_asking) return;
+    _asking = true;
+    th.thread.push({ role: 'user', content: question, ts: Date.now() });
+    th.updatedAt = new Date().toISOString();
+    if (th.thread.length > MAX_ROUNDS * 2) th.thread = th.thread.slice(-MAX_ROUNDS * 2);
+    saveThread(th);
+    if (inp) inp.value = '';
+    if (box) {
+      box.innerHTML = threadHtml(th) + '<div class="tutor-msg tutor-ai"><div class="tutor-bubble tutor-streaming">…</div></div>';
+      box.scrollTop = box.scrollHeight;
+    }
+    var st = document.getElementById('tutor-status');
+    if (st) st.textContent = '私教思考中…';
+    if (send) send.disabled = true;
+    AI.chatStream(buildPrompt(th), question, function (full) {
+      if (box) {
+        var b = box.querySelector('.tutor-streaming');
+        if (b) { b.textContent = full || ''; box.scrollTop = box.scrollHeight; }
+      }
+    }, null, { noThink: false }).then(function (full) {
+      th.thread.push({ role: 'ai', content: full || '（没有回答）', ts: Date.now() });
+      th.updatedAt = new Date().toISOString();
+      if (th.thread.length > MAX_ROUNDS * 2) th.thread = th.thread.slice(-MAX_ROUNDS * 2);
+      saveThread(th);
+      _asking = false;
+      if (box) { box.innerHTML = threadHtml(th); box.scrollTop = box.scrollHeight; }
+      if (send) send.disabled = false;
+      if (st) st.textContent = '';
+      if (inp) inp.focus();
+      if (window.AiMemory && full) AiMemory.recordEvent('AI私教答疑', ((th.title || '题目') + '').slice(0, 30));
+    }).catch(function (e) {
+      _asking = false;
+      if (send) send.disabled = false;
+      if (st) st.textContent = '回答失败：' + (e && e.message ? e.message : String(e)) + '（可直接重发）';
+    });
+  }
+
+  window.TutorModule = { open: open, buildPrompt: buildPrompt, saveThread: saveThread, threadOf: threadOf, threads: threads };
+})();
+
+
 /* ===== js/modules/essay.js ===== */
 /* ============================================================
  * essay.js — 英语作文 AI 批改（拍照/文本双通道）
@@ -19227,6 +19419,9 @@ function bind(el, next) {
         if (typeof AI !== 'undefined' && AI.configured()) {
           cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="similar">🔄 举一反三</button>';
         }
+        if (typeof window.TutorModule !== 'undefined' && typeof AI !== 'undefined' && AI.configured()) {
+          cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="tutor">🧑🏫 问私教</button>';
+        }
         cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="redo">🔁 练同类</button>';
         cardsHtml += '<button class="btn btn-ghost pm-ai-btn" data-act="review">📅 ' + (p.reviewPlan ? '复习中' : '复习计划') + '</button>'
           + '<button class="btn btn-ghost pm-ai-btn" data-act="editnote">✏️ 编辑备注</button>'
@@ -19352,6 +19547,21 @@ function bind(el, next) {
       // 举一反三
       var simBtn = card.querySelector('[data-act="similar"]');
       if (simBtn) simBtn.onclick = function () { generateSimilar(id, el); };
+
+      // AI 私教：围绕这道拍题多轮追问
+      var tutorBtn = card.querySelector('[data-act="tutor"]');
+      if (tutorBtn) tutorBtn.onclick = function () {
+        var p = (Store.get().mistakePhotos || []).find(function (x) { return x.id === id; });
+        if (!p) return;
+        var analysis = '';
+        if (p.aiAnalysis) {
+          analysis = [p.aiAnalysis.keySteps, p.aiAnalysis.errorCause].filter(Boolean).join('\n');
+        }
+        window.TutorModule.open('pm-' + id, {
+          refId: id, source: 'photo', title: ((p.painPoint || p.note || p.extractedQuestion || '一道拍题') + '').slice(0, 22),
+          context: { stem: p.extractedQuestion || p.note || '', solution: '', analysis: analysis }
+        });
+      };
 
       // 复习计划（艾宾浩斯 1/3/7/15 天）
       var rvBtn = card.querySelector('[data-act="review"]');
