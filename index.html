@@ -1285,7 +1285,7 @@ body.cp-lock { overflow: hidden; }
 .tutor-msg { display: flex; }
 .tutor-msg.tutor-user { justify-content: flex-end; }
 .tutor-msg.tutor-ai { justify-content: flex-start; }
-.tutor-bubble { max-width: 82%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.tutor-bubble { max-width: 82%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7; word-break: break-word; }
 .tutor-user .tutor-bubble { background: var(--text-primary); color: #fff; border-bottom-right-radius: 3px; }
 .tutor-ai .tutor-bubble { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
 .tutor-streaming { opacity: .75; }
@@ -2040,7 +2040,9 @@ body.cp-lock { overflow: hidden; }
       const m = s.match(/^\$+([\s\S]+?)\$+$/);
       if (m) s = m[1];
       s = normalizeShorthand(s);
-      return decodeHtmlEntities('<span class="tx">' + seg(s) + '</span>'); // 输出再解码（抵消 esc 重编码）
+      // ⚠️ 不再整体 decodeHtmlEntities：seg 已对普通字符做 esc() 转义（XSS 防护），
+      // 整体解码会把 &lt;script&gt; 还原成 <script> 造成注入漏洞。公式内如需 & < > 请用 \lt \& 等命令。
+      return '<span class="tx">' + seg(s) + '</span>';
     },
     // 文本里混着 $..$ 公式：文本转义 + 公式渲染
     renderInline(str) {
@@ -2074,7 +2076,7 @@ body.cp-lock { overflow: hidden; }
       }).join('');
     }
   };
-  // 全局后处理：Tex.renderInline 输出端统一处理 Markdown **加粗**/*斜体* + HTML实体解码
+  // 全局后处理：Tex.renderInline 输出端统一处理 Markdown **加粗**/*斜体*
   // 这样 formatStem() / mistakes.js / dashboard.js 等所有调用方自动受益，无需逐个改
   (function() {
     var _ri = Tex.renderInline;
@@ -2083,7 +2085,9 @@ body.cp-lock { overflow: hidden; }
       if (!h) return h;
       h = h.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
            .replace(/(?<!\*)\*([^*<]+?)\*(?!\*)/g, '<i>$1</i>');
-      return decodeHtmlEntities(h); // 最终输出解码（抵消 esc() 对已解码字符的重编码）
+      // ⚠️ 不再 decodeHtmlEntities：seg/esc 已做 HTML 转义（XSS 防护），
+      // 此处再解码会把 &lt;script&gt; 还原成 <script> 造成注入漏洞（与 Tex.render 同源修复）。
+      return h;
     };
   })();
 
@@ -17121,7 +17125,12 @@ function bind(el, next) {
     }
     return th.thread.map(function (m) {
       var role = m.role === 'user' ? 'tutor-user' : 'tutor-ai';
-      return '<div class="tutor-msg ' + role + '"><div class="tutor-bubble">' + U.esc(m.content) + '</div></div>';
+      // AI 回答走 Tex.renderInline：$..$ 公式/裸 LaTeX 渲染 + 普通文本自动转义 + 换行转 <br>（安全）
+      // 用户消息按纯文本转义（保留换行）
+      var body = m.role === 'user'
+        ? U.esc(m.content).replace(/\n/g, '<br>')
+        : Tex.renderInline(m.content);
+      return '<div class="tutor-msg ' + role + '"><div class="tutor-bubble">' + body + '</div></div>';
     }).join('');
   }
 
@@ -17163,7 +17172,11 @@ function bind(el, next) {
     AI.chatStream(buildPrompt(th), question, function (full) {
       if (box) {
         var b = box.querySelector('.tutor-streaming');
-        if (b) { b.textContent = full || ''; box.scrollTop = box.scrollHeight; }
+        if (b) {
+          // 流式实时渲染（公式中途未闭合时按普通文本显示，闭合后自动渲染）
+          b.innerHTML = Tex.renderInline(full || '');
+          box.scrollTop = box.scrollHeight;
+        }
       }
     }, null, { noThink: false }).then(function (full) {
       th.thread.push({ role: 'ai', content: full || '（没有回答）', ts: Date.now() });
