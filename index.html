@@ -1890,6 +1890,31 @@ html[data-theme="night"] .pb-reco { box-shadow: 0 2px 10px rgba(0, 0, 0, .35); }
 html[data-theme="night"] .gd-step { box-shadow: 0 4px 16px rgba(0, 0, 0, .4); }
 html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2), 0 10px 30px rgba(0, 0, 0, .5); }
 
+/* ---------- 考点特训营（conceptmap cm-train / tr-*） ---------- */
+.cm-train { display: flex; flex-direction: column; gap: 12px; }
+.tr-top { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.tr-prog { color: var(--text-muted); font-size: 12px; }
+.tr-bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+.tr-bar-fill { height: 100%; background: var(--blue); border-radius: 99px; transition: width .3s; }
+.tr-steps { display: flex; gap: 6px; flex-wrap: wrap; }
+.tr-step { display: flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.tr-step.tr-done { border-color: var(--ok); color: var(--ok); background: #f6ffed; }
+.tr-step.tr-cur { border-color: var(--text-primary); color: var(--text-primary); font-weight: 500; background: var(--surface-muted); }
+.tr-no { font-weight: 500; }
+.tr-arrow { font-size: 10px; }
+.tr-body { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 14px 16px; }
+.tr-body-h { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
+.tr-q { border-bottom: 1px dashed var(--line); padding: 10px 0; }
+.tr-q:last-child { border-bottom: none; }
+.tr-q-t { font-size: 14px; line-height: 1.7; }
+.tr-q-trap { font-size: 12px; color: var(--warn); margin: 4px 0; }
+.tr-q-result { font-size: 13px; line-height: 1.7; padding: 8px 10px; border-radius: var(--r-btn); margin-top: 8px; }
+.tr-q-result.tr-ok { background: #f6ffed; color: var(--ok); }
+.tr-q-result.tr-bad { background: #fff1f0; color: var(--danger); }
+.tr-q-result.tr-mid { background: #fffbe6; color: var(--warn); }
+.tr-q-sol { margin-top: 6px; color: var(--text-secondary); font-size: 13px; }
+.tr-in { margin-top: 6px; }
+
 </style>
 </head>
 <body>
@@ -15103,6 +15128,231 @@ function bind(el, next) {
     return h + '</div>';
   }
 
+  // ---------- 考点特训营（五步深度学习：概念筑基→标准演练→陷阱识别→综合实战→能力检定） ----------
+  // 数据：bag.nodes[n.id].train = {step:0-4, done:[bool×5], items:{s:[{stem,answer,solution,trap}]},
+  //        answers:{s:[{user,correct,score,comment}]}, startedAt, updatedAt, finished, bestScore}
+  var TRAIN_STEPS = [
+    { key: 'concept', name: '概念筑基', goal: '读懂本质与考研怎么考' },
+    { key: 'standard', name: '标准演练', goal: '掌握标准解题流程', count: 2 },
+    { key: 'trap', name: '陷阱识别', goal: '避开高频失分陷阱', count: 2 },
+    { key: 'apply', name: '综合实战', goal: '多步综合应用前置+本考点', count: 1 },
+    { key: 'exam', name: '能力检定', goal: '压轴检定，达标解锁后续', count: 1 }
+  ];
+  function trainOf(n) { return nBag(n.id).train || null; }
+  function ensureTrain(n) {
+    var tr = trainOf(n);
+    if (!tr) {
+      tr = { step: 0, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: null };
+      bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: tr }); });
+    }
+    return tr;
+  }
+  function saveTrain(n, patch) {
+    var tr = Object.assign({}, trainOf(n) || {}, patch, { updatedAt: new Date().toISOString() });
+    bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: tr }); });
+    return tr;
+  }
+  // 分步出题提示词（standard=标准题 / trap=陷阱题 / apply=综合题 / exam=压轴检定）
+  function trainGenPrompt(n, s) {
+    var mode = s === 1
+      ? '出 2 道【标准题】：难度中等，覆盖该考点最常见考法与标准解题流程，题干含必要数据，答案完整'
+      : s === 2
+      ? '出 2 道【陷阱题】：题干或选项中包含典型错误（符号错/漏条件/概念张冠李戴/绝对化表述/范围漏界），考学生能否识别并纠正'
+      : s === 3
+      ? '出 1 道【综合题】：多步推导，需综合运用该考点与其前置考点，计算量大'
+      : '出 1 道【压轴检定题】：难度接近考研压轴题（区分度题），需灵活运用该考点，绝不允许送分';
+    return '针对考点「' + n.name + '」' + mode + '。'
+      + '教材定位：' + (n.book || textbook()) + '。'
+      + '只输出JSON：{"items":[{"stem":"题干（数学式用$...$包裹）","answer":"标准答案","solution":"分步详解(≤180字)","trap":"易错点(≤30字)"}]}，不要任何多余文字。';
+  }
+  // 判分提示词
+  function trainJudgePrompt(n, s, item, userAns) {
+    var stepName = TRAIN_STEPS[s].name;
+    return '判分。考点：「' + n.name + '」（' + stepName + '）。\n题目：' + item.stem + '\n标准答案：' + item.answer + '\n考生作答：' + (userAns || '（空白）')
+      + '\n输出JSON：{"correct":"对|错|部分对","score":0-100,"comment":"点评(≤90字，点出错误或关键步骤，公式用$...$包裹)"}，不要任何多余文字。';
+  }
+  // 生成某一步的题目
+  function trainGen(n, s) {
+    var tr = trainOf(n);
+    if (!tr) return;
+    AI.chatJSON(aiSys(), trainGenPrompt(n, s)).then(function (o) {
+      var arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
+      if (!arr || !arr.length) throw new Error('未生成有效题目');
+      var items = arr.slice(0, TRAIN_STEPS[s].count || 1).map(function (it) {
+        return { stem: String(it.stem || ''), answer: String(it.answer || ''), solution: String(it.solution || ''), trap: String(it.trap || '') };
+      });
+      saveTrain(n, { items: Object.assign({}, (tr.items || {}), { [s]: items }) });
+      renderTrainModal(n);
+    }).catch(function (e) {
+      Toast.warn('出题失败：' + e.message);
+    });
+  }
+  // 判分某一步的某题
+  function trainJudge(n, s, qi, userAns) {
+    var tr = trainOf(n);
+    var items = (tr && tr.items && tr.items[s]) || [];
+    var item = items[qi];
+    if (!item || !userAns.trim()) { Toast.warn('请先作答再判分'); return; }
+    var btn = document.querySelector('[data-tj="' + n.id + '-' + s + '-' + qi + '"]');
+    if (btn) { btn.disabled = true; btn.textContent = '判分中…'; }
+    AI.chatJSON(aiSys(), trainJudgePrompt(n, s, item, userAns)).then(function (o) {
+      var tr2 = trainOf(n);
+      var answers = Object.assign({}, (tr2 && tr2.answers) || {});
+      answers[s] = answers[s] || [];
+      answers[s][qi] = { user: userAns, correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '' };
+      saveTrain(n, { answers: answers });
+      renderTrainModal(n);
+    }).catch(function (e) {
+      Toast.warn('判分失败：' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '判分'; }
+    });
+  }
+  // 渲染训练 Modal（已打开则原位刷新）
+  function renderTrainModal(n) {
+    var tr = ensureTrain(n);
+    var html = trainFullHtml(n, tr);
+    var wrap = document.getElementById('cm-train-wrap');
+    if (wrap) { wrap.innerHTML = html; bindTrain(n); }
+    else {
+      Modal.open({
+        title: '⚡ 考点特训营 · ' + U.esc(n.name), wide: true,
+        html: '<div id="cm-train-wrap">' + html + '</div>',
+        actions: [{ label: '关闭' }]
+      });
+      bindTrain(n);
+    }
+  }
+  function trainFullHtml(n, tr) {
+    var st = nodeState(n);
+    var steps = TRAIN_STEPS.map(function (s, i) {
+      var d = tr.done[i];
+      var cur = tr.step === i;
+      return '<div class="tr-step' + (d ? ' tr-done' : '') + (cur ? ' tr-cur' : '') + '" data-ts="' + i + '">'
+        + '<span class="tr-no">' + (d ? '✓' : (i + 1)) + '</span>'
+        + '<span class="tr-name">' + s.name + '</span>'
+        + (cur ? '<span class="tr-arrow">▶</span>' : '') + '</div>';
+    }).join('');
+    var body = trainBodyHtml(n, tr, tr.step);
+    return '<div class="cm-train">'
+      + '<div class="tr-top"><span>掌握度 <b>' + (st.score == null ? '未测' : st.score + '%') + '</b></span>'
+      + '<span class="tr-prog">' + tr.done.filter(Boolean).length + '/5 完成</span></div>'
+      + '<div class="tr-bar"><div class="tr-bar-fill" style="width:' + (tr.done.filter(Boolean).length / 5 * 100) + '%"></div></div>'
+      + '<div class="tr-steps">' + steps + '</div>'
+      + '<div class="tr-body">' + body + '</div></div>';
+  }
+  function trainBodyHtml(n, tr, s) {
+    var step = TRAIN_STEPS[s];
+    var head = '<div class="tr-body-h">' + (s + 1) + '. ' + step.name
+      + ' <span class="muted-sm">' + step.goal + '</span></div>';
+    if (s === 0) {
+      var e = nBag(n.id).explain;
+      if (!e) {
+        return head + '<div class="muted-sm">先让 AI 讲透这个概念，再看「考研怎么考」与「标准流程」。</div>'
+          + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" data-ta="0-explain">🤖 生成考点讲解</button></div>';
+      }
+      return head + '<div class="cm-ai">'
+        + '<div class="cm-ai-h">本质</div><div class="cm-ai-b">' + Tex.renderInline(e.core || '') + '</div>'
+        + (e.exam ? '<div class="cm-ai-h">考研怎么考</div><div class="cm-ai-b">' + Tex.renderInline(e.exam) + '</div>' : '')
+        + (e.steps && e.steps.length ? '<div class="cm-ai-h">标准流程</div><ol class="cm-ai-l">' + e.steps.map(function (x) { return '<li>' + Tex.renderInline(x) + '</li>'; }).join('') + '</ol>' : '')
+        + (e.traps && e.traps.length ? '<div class="cm-ai-h">失分陷阱</div><ul class="cm-ai-l cm-ai-trap">' + e.traps.map(function (x) { return '<li>' + Tex.renderInline(x) + '</li>'; }).join('') + '</ul>' : '')
+        + (e.mnemonic ? '<div class="cm-ai-key">💡 ' + Tex.renderInline(e.mnemonic) + '</div>' : '')
+        + '</div>'
+        + '<div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" data-ta="next">✅ 我读懂了，下一步</button></div>';
+    }
+    var items = (tr.items && tr.items[s]) || [];
+    var answers = (tr.answers && tr.answers[s]) || [];
+    if (!items.length) {
+      return head + '<div class="muted-sm">本步包含 ' + (step.count || 1) + ' 道' + (s === 2 ? '陷阱' : s === 3 ? '综合' : s === 4 ? '压轴检定' : '标准') + '题。点击生成后开始作答。</div>'
+        + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" data-ta="gen">🎯 生成题目</button>'
+        + (s > 0 ? '<button class="btn btn-ghost" data-ta="back">← 上一步</button>' : '') + '</div>';
+    }
+    var qHtml = items.map(function (it, qi) {
+      var ans = answers[qi];
+      return '<div class="tr-q">'
+        + '<div class="tr-q-t">第 ' + (qi + 1) + ' 题：' + Tex.renderInline(it.stem) + '</div>'
+        + (it.trap ? '<div class="tr-q-trap">🕳 易错点提示：' + Tex.renderInline(it.trap) + '</div>' : '')
+        + (ans
+          ? '<div class="tr-q-result ' + (ans.correct === '对' ? 'tr-ok' : ans.correct === '错' ? 'tr-bad' : 'tr-mid') + '">'
+            + '<b>' + ans.correct + '（' + ans.score + ' 分）</b><div>' + Tex.renderInline(ans.comment || '') + '</div>'
+            + (it.solution ? '<div class="tr-q-sol">📖 标准答案：' + Tex.renderInline(it.solution) + '</div>' : '')
+            + '</div>'
+          : '<textarea class="input tr-in" data-tin="' + qi + '" rows="2" placeholder="写下你的作答…"></textarea>'
+            + '<div class="btn-row" style="margin-top:6px"><button class="btn btn-sm btn-primary" data-tj="' + n.id + '-' + s + '-' + qi + '">判分</button></div>')
+        + '</div>';
+    }).join('');
+    var allDone = items.length > 0 && answers.length >= items.length && answers.every(function (a) { return !!a; });
+    return head + qHtml
+      + '<div class="btn-row" style="margin-top:12px">'
+      + (allDone
+        ? '<button class="btn btn-primary" data-ta="next">' + (s === 4 ? '🏆 完成检定' : '下一步 →') + '</button>'
+        : (s > 0 ? '<button class="btn btn-ghost" data-ta="back">← 上一步</button>' : ''))
+      + '</div>';
+  }
+  // 绑定训练 Modal 内事件
+  function bindTrain(n) {
+    var wrap = document.getElementById('cm-train-wrap');
+    if (!wrap) return;
+    var ex = wrap.querySelector('[data-ta="0-explain"]');
+    if (ex) ex.onclick = function () {
+      aiExplain(n, allNodes(), indexOf(allNodes())).then(function () { renderTrainModal(n); });
+    };
+    var gen = wrap.querySelector('[data-ta="gen"]');
+    if (gen) gen.onclick = function () { var tr = trainOf(n); if (tr) trainGen(n, tr.step); };
+    wrap.querySelectorAll('[data-tj]').forEach(function (b) {
+      b.onclick = function () {
+        var parts = b.getAttribute('data-tj').split('-');
+        var qi = parseInt(parts[2], 10);
+        var inEl = wrap.querySelector('[data-tin="' + qi + '"]');
+        var tr = trainOf(n);
+        if (!tr) return;
+        trainJudge(n, tr.step, qi, inEl ? inEl.value : '');
+      };
+    });
+    var nxt = wrap.querySelector('[data-ta="next"]');
+    if (nxt) nxt.onclick = function () { advanceTrain(n, 1); };
+    var back = wrap.querySelector('[data-ta="back"]');
+    if (back) back.onclick = function () { advanceTrain(n, -1); };
+    wrap.querySelectorAll('[data-ts]').forEach(function (sp) {
+      sp.onclick = function () {
+        var i = parseInt(sp.getAttribute('data-ts'), 10);
+        var tr = trainOf(n);
+        if (tr && (tr.done[i] || i <= tr.step)) { saveTrain(n, { step: i }); renderTrainModal(n); }
+      };
+    });
+  }
+  // 推进训练（±1）；第 4 步检定完成 → 回写掌握度 + 完成庆祝
+  function advanceTrain(n, delta) {
+    var tr = trainOf(n);
+    if (!tr) return;
+    var s = tr.step;
+    if (delta > 0) {
+      // 第 0 步直接完成；第 4 步（检定）无条件进入完成逻辑（但须已作答）；其他步要求 done
+      if (s === 0 || s === 4 || tr.done[s]) {
+        if (s === 4) {
+          var chk = (tr.answers && tr.answers[4]) || [];
+          if (!chk.length) { Toast.warn('检定前请先完成题目作答并判分'); return; }
+        }
+        var done = tr.done.slice();
+        done[s] = true;
+        var patch = { done: done };
+        if (s === 4) {
+          var answers = (tr.answers && tr.answers[4]) || [];
+          var score = answers.length ? Math.round(answers.reduce(function (a, x) { return a + (x.score || 0); }, 0) / answers.length) : 60;
+          patch.finished = true; patch.bestScore = Math.max(tr.bestScore || 0, score);
+          if (window.Mastery) Mastery.recordAnswer({ topicId: n.id, topicName: n.name, subject: 'ctrl', score: score, verdict: score >= 60 ? '通过' : '未通过', source: 'concept-train', sourceLabel: '考点特训', noMistake: true, tier: 0 });
+          if (window.confetti) { try { confetti(); } catch (e) {} }
+          Toast.success('🎓 考点特训完成！掌握度 ' + score + '%');
+        }
+        saveTrain(n, patch);
+        if (s < 4) renderTrainModal(n);
+        return;
+      }
+      Toast.warn('本步还有题目未作答/判分');
+      return;
+    }
+    if (s > 0) { saveTrain(n, { step: s - 1 }); renderTrainModal(n); }
+  }
+
   function detailCard(nodes, byId) {
     if (!sel || !byId[sel]) {
       return '<div class="card" id="cm-detail"><div class="card-title">节点详情</div>'
@@ -15131,7 +15381,8 @@ function bind(el, next) {
       + ' ｜ 后继：' + U.esc(kids.join('、') || '无') + '</div>'
 
       + '<div class="btn-row" style="margin-top:10px">'
-      + '<button class="btn btn-primary btn-sm" id="cm-explain">🤖 ' + (nBag(n.id).explain ? '重新讲解' : 'AI 讲透这个考点') + '</button>'
+      + '<button class="btn btn-primary btn-sm" id="cm-train">⚡ 考点特训</button>'
+      + '<button class="btn btn-ghost btn-sm" id="cm-explain">🤖 ' + (nBag(n.id).explain ? '重新讲解' : 'AI 讲透这个考点') + '</button>'
       + '<button class="btn btn-ghost btn-sm" id="cm-quiz">🧠 AI 速测3题</button>'
       + '<button class="btn btn-ghost btn-sm" id="cm-split">➕ AI 拆子考点</button>'
       + '<button class="btn btn-ghost btn-sm" id="cm-gloss">🔤 AI 补术语桥</button>'
@@ -15592,6 +15843,8 @@ function bind(el, next) {
 
     const eB = el.querySelector('#cm-explain');
     if (eB) eB.onclick = () => runAI('explain:' + n.id, () => aiExplain(n, nodes, byId));
+    const tB = el.querySelector('#cm-train');
+    if (tB) tB.onclick = () => { ensureTrain(n); renderTrainModal(n); };
     const qB = el.querySelector('#cm-quiz');
     if (qB) qB.onclick = () => runAI('quiz:' + n.id, () => aiQuiz(n));
     const spB = el.querySelector('#cm-split');
@@ -15680,7 +15933,7 @@ function bind(el, next) {
     };
   }
 
-  window.ConceptMapModule = { render };
+  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain };
 })();
 
 
