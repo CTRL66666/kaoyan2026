@@ -1973,6 +1973,11 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 }
 /* 已特训徽章（详情卡） */
 .tr-badge-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+/* 作答按钮行（判分 / 拍照判分 / 跳过） */
+.tr-q-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
+/* 跳过结果卡 */
+.tr-q-result.tr-skip { background: var(--surface); border: 1px dashed var(--line); color: var(--text-secondary); }
+.tr-q-result.tr-skip .tr-r-badge { color: var(--text-muted); }
 
 </style>
 </head>
@@ -15249,15 +15254,22 @@ function bind(el, next) {
     var items = tr.items[s], ans = tr.answers[s] || [];
     return items.length > 0 && ans.length >= items.length && ans.every(function (a) { return !!a; });
   }
+  // 某一步是否全部有有效分数（跳过不算数；检定步专用）
+  function stepScored(n, s) {
+    var tr = trainOf(n);
+    if (!tr || !tr.items || !tr.items[s]) return false;
+    var items = tr.items[s], ans = tr.answers[s] || [];
+    return items.length > 0 && ans.length >= items.length && ans.every(function (a) { return a && typeof a.score === 'number'; });
+  }
   function stepAvg(n, s) {
     var tr = trainOf(n);
     var ans = (tr && tr.answers && tr.answers[s]) || [];
     var sc = ans.filter(function (a) { return a && typeof a.score === 'number'; });
     return sc.length ? Math.round(sc.reduce(function (a, x) { return a + x.score; }, 0) / sc.length) : 60;
   }
-  // 判分 <60 自动入错题画像（dedup 防重）
+  // 判分 <60 自动入错题画像（dedup 防重；跳过/无分数不触发）
   function trainToMistake(n, s, item, ans) {
-    if (!ans || ans.score >= 60) return;
+    if (!ans || typeof ans.score !== 'number' || ans.score >= 60) return;
     Store.update(function (st) {
       st.mistakes = st.mistakes || [];
       var dedup = 'train:' + n.id + ':' + s + ':' + String(item.stem || '').slice(0, 24);
@@ -15271,11 +15283,12 @@ function bind(el, next) {
       });
     });
   }
-  // 训练报告（每步得分 + 平均分 + 耗时 + 建议；未判分的步不参与）
+  // 训练报告（每步得分 + 平均分 + 耗时 + 建议；未判分的步/跳过的题不参与）
   function buildReport(n, tr) {
     var stepScores = TRAIN_STEPS.map(function (step, i) {
       var ans = (tr.answers && tr.answers[i]) || [];
-      return { name: step.name, score: ans.length ? stepAvg(n, i) : null };
+      var scored = ans.filter(function (a) { return a && typeof a.score === 'number'; }).length;
+      return { name: step.name, score: scored ? stepAvg(n, i) : null };
     });
     var scored = stepScores.filter(function (x) { return x.score != null; });
     var avg = scored.length ? Math.round(scored.reduce(function (a, x) { return a + x.score; }, 0) / scored.length) : 60;
@@ -15461,30 +15474,84 @@ function bind(el, next) {
     var qHtml = items.map(function (it, qi) { return trainQCardHtml(n, s, qi); }).join('');
     return head + '<div class="tr-qlist">' + qHtml + '</div>';
   }
-  // 单题卡片（编号徽章 + 题干 + 易错提示 + 作答区/判分结果）
+  // 单题卡片（编号徽章 + 题干 + 易错提示 + 作答区[手填/拍照/跳过] 或 判分结果）
   function trainQCardHtml(n, s, qi) {
     var tr = trainOf(n);
     var it = ((tr && tr.items && tr.items[s]) || [])[qi];
     if (!it) return '';
     var ans = ((tr && tr.answers && tr.answers[s]) || [])[qi];
-    var cls = ans ? (ans.correct === '对' ? 'tr-ok' : ans.correct === '错' ? 'tr-bad' : 'tr-mid') : '';
+    var cls = ans && !ans.skipped ? (ans.correct === '对' ? 'tr-ok' : ans.correct === '错' ? 'tr-bad' : 'tr-mid') : '';
     return '<div class="tr-qcard" data-tq="' + n.id + '-' + s + '-' + qi + '">'
       + '<div class="tr-q-no">' + (qi + 1) + '</div>'
       + '<div class="tr-q-main">'
       + '<div class="tr-q-stem">' + Tex.renderInline(it.stem) + '</div>'
       + (it.trap ? '<div class="tr-q-trap">🕳 易错点：' + Tex.renderInline(it.trap) + '</div>' : '')
-      + (ans
-        ? '<div class="tr-q-result ' + cls + '">'
-          + '<div class="tr-r-head"><span class="tr-r-badge">' + (ans.correct === '对' ? '✓ 对' : ans.correct === '错' ? '✗ 错' : '△ 部分对') + '</span>'
-          + '<span class="tr-r-score">' + ans.score + ' 分</span></div>'
-          + '<div class="tr-r-comment">' + Tex.renderInline(ans.comment || '') + '</div>'
-          + (it.solution ? '<details class="tr-r-sol"><summary>📖 标准答案与解析</summary><div>' + Tex.renderInline(it.solution) + '</div></details>' : '')
+      + (ans && ans.skipped
+        ? '<div class="tr-q-result tr-skip">'
+          + '<div class="tr-r-head"><span class="tr-r-badge">⏭ 已跳过</span><span class="tr-r-score muted-sm">下次再练</span></div>'
+          + '<div class="muted-sm">跳过不判分、不计入检定平均分；可随时回看标准答案学习。</div>'
+          + (it.solution ? '<details class="tr-r-sol" open><summary>📖 标准答案与解析</summary><div>' + Tex.renderInline(it.solution) + '</div></details>' : '')
+          + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" data-tredo="' + s + '-' + qi + '">↩ 重新作答</button></div>'
           + '</div>'
-        : '<div data-tact="' + s + '-' + qi + '">'
-          + '<textarea class="input tr-in" data-tin="' + s + '-' + qi + '" rows="2" placeholder="写下你的作答…"></textarea>'
-          + '<div class="btn-row" style="margin-top:6px"><button class="btn btn-sm btn-primary" data-tj="' + n.id + '-' + s + '-' + qi + '">🧠 判分</button></div>'
-          + '</div>')
+        : (ans
+          ? '<div class="tr-q-result ' + cls + '">'
+            + '<div class="tr-r-head"><span class="tr-r-badge">' + (ans.correct === '对' ? '✓ 对' : ans.correct === '错' ? '✗ 错' : '△ 部分对') + '</span>'
+            + '<span class="tr-r-score">' + ans.score + ' 分</span></div>'
+            + '<div class="tr-r-comment">' + Tex.renderInline(ans.comment || '') + '</div>'
+            + (ans.photo ? '<div class="muted-sm" style="margin-top:4px">📷 本次为拍照判分</div>' : '')
+            + (it.solution ? '<details class="tr-r-sol"><summary>📖 标准答案与解析</summary><div>' + Tex.renderInline(it.solution) + '</div></details>' : '')
+            + '</div>'
+          : '<div data-tact="' + s + '-' + qi + '">'
+            + '<textarea class="input tr-in" data-tin="' + s + '-' + qi + '" rows="2" placeholder="写下你的作答…（可拍照代替打字）"></textarea>'
+            + '<div class="tr-q-acts">'
+            + '<button class="btn btn-sm btn-primary" data-tj="' + n.id + '-' + s + '-' + qi + '">🧠 判分</button>'
+            + '<button class="btn btn-sm btn-ghost" data-tphoto="' + s + '-' + qi + '">📷 拍照判分</button>'
+            + (s < 4 ? '<button class="btn btn-sm btn-ghost" data-tskip="' + s + '-' + qi + '">⏭ 跳过</button>' : '<span class="muted-sm" style="font-size:12px">检定题不可跳过</span>')
+            + '<input type="file" accept="image/*" capture="environment" style="display:none" data-photo-in="' + s + '-' + qi + '">'
+            + '</div>'
+            + '</div>'))
       + '</div></div>';
+  }
+  // 拍照判分：识别照片中的手写作答 → AI 直接判分（无需打字）
+  function trainJudgePhoto(n, s, qi, file) {
+    if (tbusy) { Toast.warn('AI 正在处理中，请稍候'); return; }
+    var tr = trainOf(n);
+    var items = (tr && tr.items && tr.items[s]) || [];
+    var item = items[qi];
+    if (!item) { Toast.warn('请先生成题目'); return; }
+    if (typeof U === 'undefined' || !U.compressImage) { Toast.warn('当前环境不支持图片处理'); return; }
+    U.compressImage(file, { maxWidth: 1600, quality: 0.8 }).then(function (dataUrl) {
+      var act = document.querySelector('[data-tact="' + s + '-' + qi + '"]');
+      if (act) act.innerHTML = '<div class="tr-judging"><div class="tr-spin"></div><div>🤖 拍照识别 + 判分中…</div><button class="btn btn-ghost btn-sm" id="tr-cancel">取消</button></div>';
+      var ac = new AbortController();
+      tbusy = { key: 'photo:' + s + '-' + qi, ac: ac };
+      bindCancel(ac);
+      var usr = '考生提交了作答照片（手写或印刷）。请识别照片中的作答内容并判分。\n考点：「' + n.name + '」（' + TRAIN_STEPS[s].name + '）。\n题目：' + item.stem + '\n标准答案：' + item.answer
+        + '\n输出JSON：{"correct":"对|错|部分对|无法辨认","score":0-100,"comment":"点评(≤90字，公式用$...$包裹)"}。若照片中看不出作答内容，correct 必须为"无法辨认"。不要任何多余文字。';
+      AI.chatJSON(aiSys(), usr, dataUrl, { cache: false, signal: ac.signal }).then(function (o) {
+        endBusy(ac);
+        if (o.correct === '无法辨认') {
+          renderTrainModal(n);
+          Toast.warn('照片无法辨认，请重拍（光线充足、正对纸面）或改用手填判分');
+          return;
+        }
+        var tr2 = trainOf(n);
+        var answers = Object.assign({}, (tr2 && tr2.answers) || {});
+        answers[s] = answers[s] || [];
+        var ans = { user: '[拍照作答]', correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '', photo: true };
+        answers[s][qi] = ans;
+        saveTrain(n, { answers: answers });
+        trainToMistake(n, s, item, ans);
+        var card = document.querySelector('[data-tq="' + n.id + '-' + s + '-' + qi + '"]');
+        if (card) card.outerHTML = trainQCardHtml(n, s, qi);
+        refreshTrainFoot(n);
+      }).catch(function (e) {
+        endBusy(ac);
+        if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
+        renderTrainModal(n);
+        Toast.warn('拍照判分失败：' + ((e && e.message) || String(e)));
+      });
+    }).catch(function () { Toast.warn('图片处理失败，请重试'); });
   }
   // 绑定训练 Modal 内事件（事件委托：就地插入的 DOM 自动生效）
   function bindTrain(n) {
@@ -15525,12 +15592,61 @@ function bind(el, next) {
         trainJudge(n, s, qi, inEl ? inEl.value : '');
         return;
       }
+      // 拍照判分：触发该题隐藏 file input
+      var tp = t.getAttribute('data-tphoto');
+      if (tp) {
+        var inp = wrap.querySelector('[data-photo-in="' + tp + '"]');
+        if (inp) inp.click();
+        return;
+      }
+      // 跳过该题（检定步禁止）
+      var tsk = t.getAttribute('data-tskip');
+      if (tsk != null) {
+        var pp = tsk.split('-');
+        var s2 = parseInt(pp[0], 10), qi2 = parseInt(pp[1], 10);
+        if (s2 === 4) { Toast.warn('检定题必须作答判分，不能跳过'); return; }
+        var trx = trainOf(n);
+        var answers2 = Object.assign({}, (trx && trx.answers) || {});
+        answers2[s2] = answers2[s2] || [];
+        answers2[s2][qi2] = { skipped: true };
+        saveTrain(n, { answers: answers2 });
+        var card2 = document.querySelector('[data-tq="' + n.id + '-' + s2 + '-' + qi2 + '"]');
+        if (card2) card2.outerHTML = trainQCardHtml(n, s2, qi2);
+        refreshTrainFoot(n);
+        Toast.show('已跳过该题，可查看标准答案', 'info', 2500);
+        return;
+      }
+      // 重新作答（清除该题结果）
+      var trd = t.getAttribute('data-tredo');
+      if (trd != null) {
+        var pp2 = trd.split('-');
+        var s3 = parseInt(pp2[0], 10), qi3 = parseInt(pp2[1], 10);
+        var try0 = trainOf(n);
+        var answers3 = Object.assign({}, (try0 && try0.answers) || {});
+        answers3[s3] = answers3[s3] || [];
+        answers3[s3][qi3] = undefined;
+        saveTrain(n, { answers: answers3 });
+        var card3 = document.querySelector('[data-tq="' + n.id + '-' + s3 + '-' + qi3 + '"]');
+        if (card3) card3.outerHTML = trainQCardHtml(n, s3, qi3);
+        refreshTrainFoot(n);
+        return;
+      }
       var ts = t.getAttribute('data-ts');
       if (ts != null) {
         var i = parseInt(ts, 10);
         var tr2 = trainOf(n);
         if (tr2 && (tr2.done[i] || i <= tr2.step || tr2.finished)) { saveTrain(n, { step: i }); renderTrainModal(n); }
       }
+    };
+    // 文件选择回调（事件委托：就地插入的 input 自动生效）
+    wrap.onchange = function (ev) {
+      var inp = ev.target;
+      if (!inp || inp.getAttribute('data-photo-in') == null) return;
+      var pp = inp.getAttribute('data-photo-in').split('-');
+      var s4 = parseInt(pp[0], 10), qi4 = parseInt(pp[1], 10);
+      var f = inp.files && inp.files[0];
+      if (!f) return;
+      trainJudgePhoto(n, s4, qi4, f);
     };
   }
   // 重置训练（再练一遍）
@@ -15563,7 +15679,7 @@ function bind(el, next) {
     var s = tr.step;
     if (delta > 0) {
       if (s === 4) {
-        if (!stepDone(n, 4)) { Toast.warn('检定前请先完成作答并判分'); return; }
+        if (!stepScored(n, 4)) { Toast.warn('检定题必须全部作答判分（不能跳过）'); return; }
         var score = stepAvg(n, 4);
         var report = buildReport(n, tr);
         var done = tr.done.slice(); done[4] = true;
@@ -16171,7 +16287,7 @@ function bind(el, next) {
     };
   }
 
-  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain };
+  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepScored: stepScored, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain };
 })();
 
 
