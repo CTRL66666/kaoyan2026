@@ -2022,6 +2022,15 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 /* 专业 AI 重建的可视化（SVG 流程图） */
 .cm-path-viz { margin: 10px 0; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); overflow: auto; }
 .cm-path-viz svg { display: block; max-width: 100%; height: auto; }
+/* 右下角 AI 内容浮窗（仿专业AI重建 gm-panel） */
+.cm-ai-float { position: fixed; bottom: 16px; right: 16px; width: 380px; max-width: calc(100vw - 32px); max-height: 60vh; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 4px 20px rgba(0, 0, 0, .12); z-index: 9000; overflow: hidden; display: flex; flex-direction: column; }
+.cm-ai-float-h { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 13px; }
+.cm-ai-float-x { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--text-muted); padding: 0 4px; line-height: 1; }
+.cm-ai-float-b { padding: 12px 14px; overflow-y: auto; flex: 1; }
+.cm-ai-float-status { font-size: 12.5px; }
+.cm-ai-float-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin: 8px 0 4px; opacity: .8; }
+.cm-ai-float-think pre, .cm-ai-float-content pre { max-height: 160px; overflow: auto; font-size: 12px; white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 10px; margin: 0; }
+.cm-ai-float-think pre { opacity: .72; }
 /* 作答按钮行（判分 / 拍照判分 / 跳过） */
 .tr-q-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
 /* 跳过结果卡 */
@@ -15332,6 +15341,40 @@ function bind(el, next) {
   var tbusy = null; // {key, ac} 当前训练 AI 任务
   var trainTimer = null; // 检定倒计时 interval id
   function clearTrainTimer() { if (trainTimer) { clearInterval(trainTimer); trainTimer = null; } }
+  // 右下角 AI 内容浮窗（仿专业AI重建 gm-panel：实时显示思考/生成内容，可关闭）
+  function openAiFloat(title) {
+    var old = document.getElementById('cm-ai-float');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var panel = document.createElement('div');
+    panel.id = 'cm-ai-float';
+    panel.className = 'cm-ai-float';
+    panel.innerHTML = '<div class="cm-ai-float-h"><span>' + title + '</span>'
+      + '<button class="cm-ai-float-x" aria-label="关闭">×</button></div>'
+      + '<div class="cm-ai-float-b">'
+      + '<div class="muted-sm cm-ai-float-status" id="cm-ai-float-status">⏳ 正在连接模型…</div>'
+      + '<div class="cm-ai-float-think" id="cm-ai-float-think" style="display:none"><div class="cm-ai-float-label">💭 思考过程</div><pre class="report" id="cm-ai-float-think-t"></pre></div>'
+      + '<div class="cm-ai-float-content" id="cm-ai-float-content" style="display:none"><div class="cm-ai-float-label">📝 生成内容</div><pre class="report" id="cm-ai-float-content-t"></pre></div>'
+      + '</div>';
+    document.body.appendChild(panel);
+    var x = panel.querySelector('.cm-ai-float-x');
+    if (x) x.onclick = function () { panel.remove(); };
+    return {
+      status: function (txt) { var e = document.getElementById('cm-ai-float-status'); if (e) e.textContent = txt; },
+      content: function (txt) {
+        var w = document.getElementById('cm-ai-float-content');
+        var t = document.getElementById('cm-ai-float-content-t');
+        if (w && t) { w.style.display = ''; t.textContent = txt || ''; t.scrollTop = t.scrollHeight; }
+      },
+      think: function (txt) {
+        var w = document.getElementById('cm-ai-float-think');
+        var t = document.getElementById('cm-ai-float-think-t');
+        if (w && t) { w.style.display = ''; t.textContent = txt || ''; }
+      },
+      done: function () { var e = document.getElementById('cm-ai-float-status'); if (e) e.textContent = '✓ 完成'; },
+      fail: function (msg) { var e = document.getElementById('cm-ai-float-status'); if (e) e.textContent = '⚠ ' + msg; },
+      close: function () { var p = document.getElementById('cm-ai-float'); if (p && p.parentNode) p.parentNode.removeChild(p); }
+    };
+  }
   function isAbort(e) { return !!(e && (e.name === 'AbortError' || e.code === 20)); }
   function endBusy(ac) { if (tbusy && tbusy.ac === ac) tbusy = null; }
   function aiBusyCard(msg) {
@@ -15401,12 +15444,15 @@ function bind(el, next) {
     if (!tr) return;
     var holder = document.querySelector('[data-tgen="' + s + '"]');
     var modeName = s === 1 ? '标准' : s === 2 ? '陷阱' : s === 3 ? '综合' : '检定';
-    if (holder) holder.innerHTML = aiBusyCard('🤖 AI 正在出' + modeName + '题…（约 5-15 秒）');
+    if (holder) holder.innerHTML = aiBusyCard('🤖 AI 正在出' + modeName + '题…');
+    var float = openAiFloat('🎯 生成' + modeName + '题');
+    float.status('⏳ AI 出题中…（' + (tr.thinkMode ? '💭 思考模式' : '⚡ 快速模式') + '）');
     var ac = new AbortController();
     tbusy = { key: 'gen:' + s, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), trainGenPrompt(n, s, stepCountOf(tr.intensity, s)), null, { cache: false, signal: ac.signal, noThink: !tr.thinkMode }).then(function (o) {
+    AI.chatStream(aiSys(), trainGenPrompt(n, s, stepCountOf(tr.intensity, s)), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !tr.thinkMode, timeout: 180000 }).then(function (full) {
       endBusy(ac);
+      var o = AI.extractRobustJSON(full);
       var arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
       if (!arr || !arr.length) throw new Error('未生成有效题目');
       var cnt = stepCountOf(tr.intensity, s);
@@ -15425,9 +15471,11 @@ function bind(el, next) {
         };
       });
       saveTrain(n, { items: Object.assign({}, (tr.items || {}), { [s]: items }) });
+      float.done(); setTimeout(function () { float.close(); }, 900);
       renderTrainModal(n);
     }).catch(function (e) {
       endBusy(ac);
+      float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500);
       renderTrainModal(n);
       if (isAbort(e)) { Toast.show('已取消出题', 'info', 2000); return; }
       Toast.warn('出题失败：' + ((e && e.message) || String(e)));
@@ -15442,10 +15490,14 @@ function bind(el, next) {
     if (!item || !userAns.trim()) { Toast.warn('请先作答再判分'); return; }
     var act = document.querySelector('[data-tact="' + s + '-' + qi + '"]');
     if (act) act.innerHTML = '<div class="tr-judging"><div class="tr-spin"></div><div>🤖 AI 判分中…</div><button class="btn btn-ghost btn-sm" id="tr-cancel">取消</button></div>';
+    var float = openAiFloat('🧠 判分第 ' + (qi + 1) + ' 题');
+    float.status('⏳ AI 判分中…');
     var ac = new AbortController();
     tbusy = { key: 'judge:' + s + '-' + qi, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), trainJudgePrompt(n, s, item, userAns), null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode) }).then(function (o) {
+    AI.chatStream(aiSys(), trainJudgePrompt(n, s, item, userAns), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
+      endBusy(ac);
+      var o = AI.extractRobustJSON(full);
       endBusy(ac);
       var tr2 = trainOf(n);
       var answers = Object.assign({}, (tr2 && tr2.answers) || {});
@@ -15458,9 +15510,11 @@ function bind(el, next) {
       if (card) card.outerHTML = trainQCardHtml(n, s, qi);
       refreshTrainFoot(n);
       refreshStepBar(n, s);
+      float.done(); setTimeout(function () { float.close(); }, 800);
       if (s === 4 && stepDone(n, 4)) Toast.show('已全部判分，点击「完成检定」结算', 'info', 3000);
     }).catch(function (e) {
       endBusy(ac);
+      float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500);
       if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消判分', 'info', 2000); return; }
       renderTrainModal(n);
       Toast.warn('判分失败：' + ((e && e.message) || String(e)));
@@ -15513,12 +15567,15 @@ function bind(el, next) {
     var chain = items.filter(function (x) { return x.variantOf === qi; }).length;
     if (chain >= 5) { Toast.warn('该题已生成 5 道变式，先消化再练吧'); return; }
     var holder = document.querySelector('[data-tvar-holder="' + s + '-' + qi + '"]');
-    if (holder) holder.innerHTML = aiBusyCard('🤖 正在出同类变式题…（约 5-15 秒）');
+    if (holder) holder.innerHTML = aiBusyCard('🤖 正在出同类变式题…');
+    var float = openAiFloat('🔄 生成变式题');
+    float.status('⏳ AI 正在基于原题换数据/换问法…');
     var ac = new AbortController();
     tbusy = { key: 'var:' + s + '-' + qi, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), trainVariantPrompt(n, s, item, qi), null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode) }).then(function (o) {
+    AI.chatStream(aiSys(), trainVariantPrompt(n, s, item, qi), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
       endBusy(ac);
+      var o = AI.extractRobustJSON(full);
       var it = (o && o.item) || (o && o.items && o.items[0]) || null;
       if (!it || !it.stem) throw new Error('变式生成失败');
       var tr2 = trainOf(n);
@@ -15537,10 +15594,12 @@ function bind(el, next) {
         variantOf: qi
       });
       saveTrain(n, { items: Object.assign({}, tr2.items || {}, { [s]: items2 }) });
+      float.done(); setTimeout(function () { float.close(); }, 800);
       renderTrainModal(n);
       Toast.success('已追加 1 道变式题（第 ' + items2.length + ' 题），做对为止');
     }).catch(function (e) {
       endBusy(ac);
+      float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500);
       if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
       renderTrainModal(n);
       Toast.warn('变式生成失败：' + ((e && e.message) || String(e)));
@@ -15574,12 +15633,15 @@ function bind(el, next) {
       faq: '列出学生学「' + n.name + '」时最常犯的 2-3 个高频疑问并自答（真实踩坑问题，不要泛泛而谈）。只输出JSON：{"items":[{"q":"疑问(≤30字)","a":"解答(≤70字，公式用$...$包裹)"}]}，不要任何多余文字。'
     };
     var holder = document.querySelector('[data-ee-holder="' + kind + '"]');
-    if (holder) holder.innerHTML = aiBusyCard('🤖 正在生成' + labels[kind] + '…（约 5-15 秒）');
+    if (holder) holder.innerHTML = aiBusyCard('🤖 正在生成' + labels[kind] + '…');
+    var float = openAiFloat(labels[kind]);
+    float.status('⏳ AI 生成中…');
     var ac = new AbortController();
     tbusy = { key: 'ee:' + kind, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), prompts[kind], null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode) }).then(function (o) {
+    AI.chatStream(aiSys(), prompts[kind], function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
       endBusy(ac);
+      var o = AI.extractRobustJSON(full);
       if (!o || (kind !== 'demo' && !Array.isArray(o.items))) throw new Error('返回内容不完整');
       var extra = {};
       if (kind === 'demo') extra.demo = { stem: String(o.stem || ''), solution: String(o.solution || ''), at: new Date().toISOString() };
@@ -15588,10 +15650,12 @@ function bind(el, next) {
       bagUpdate(function (b) {
         b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { explain: Object.assign({}, b.nodes[n.id].explain || {}, extra) });
       });
+      float.done(); setTimeout(function () { float.close(); }, 800);
       renderTrainModal(n);
       Toast.success('已生成' + labels[kind]);
     }).catch(function (e) {
       endBusy(ac);
+      float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500);
       if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
       renderTrainModal(n);
       Toast.warn('生成失败：' + ((e && e.message) || String(e)));
@@ -15861,6 +15925,8 @@ function bind(el, next) {
     U.compressImage(file, { maxWidth: 1600, quality: 0.8 }).then(function (dataUrl) {
       var act = document.querySelector('[data-tact="' + s + '-' + qi + '"]');
       if (act) act.innerHTML = '<div class="tr-judging"><div class="tr-spin"></div><div>🤖 拍照识别 + 判分中…</div><button class="btn btn-ghost btn-sm" id="tr-cancel">取消</button></div>';
+      var float = openAiFloat('📷 拍照判分');
+      float.status('⏳ AI 正在识别照片并判分…');
       var ac = new AbortController();
       tbusy = { key: 'photo:' + s + '-' + qi, ac: ac };
       bindCancel(ac);
@@ -15870,9 +15936,11 @@ function bind(el, next) {
         + (item.options && item.options.length ? '\n选项：' + item.options.map(function (o, i) { return 'ABCD'[i] + '.' + String(o || ''); }).join('；') : '')
         + '\n标准答案：' + item.answer
         + '\n输出JSON：{"correct":"对|错|部分对|无法辨认","score":0-100,"comment":"点评(≤90字，公式用$...$包裹)"}。若照片中看不出作答内容，correct 必须为"无法辨认"。不要任何多余文字。';
-      AI.chatJSON(aiSys(), usr, dataUrl, { cache: false, signal: ac.signal }).then(function (o) {
+      AI.chatStream(aiSys(), usr, function (txt) { float.content(txt); }, dataUrl, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
         endBusy(ac);
+        var o = AI.extractRobustJSON(full);
         if (o.correct === '无法辨认') {
+          float.fail('照片无法辨认');
           renderTrainModal(n);
           Toast.warn('照片无法辨认，请重拍（光线充足、正对纸面）或改用手填判分');
           return;
@@ -15888,8 +15956,10 @@ function bind(el, next) {
         if (card) card.outerHTML = trainQCardHtml(n, s, qi);
         refreshTrainFoot(n);
         refreshStepBar(n, s);
+        float.done(); setTimeout(function () { float.close(); }, 800);
       }).catch(function (e) {
         endBusy(ac);
+        float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500);
         if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
         renderTrainModal(n);
         Toast.warn('拍照判分失败：' + ((e && e.message) || String(e)));
@@ -16265,13 +16335,23 @@ function bind(el, next) {
       + '"traps":["高频失分陷阱，2-4条，每条不超过26字"],'
       + '"link":"与前置/后继考点的逻辑关系，1-2句，说清为什么必须先掌握前置",'
       + '"mnemonic":"一句话记忆抓手或口诀，不超过20字"}';
-    return AI.chatJSON(aiSys(), user, null, ac ? { cache: false, signal: ac.signal } : undefined).then(o => {
+    var float = openAiFloat('📖 AI 讲透考点');
+    float.status('⏳ 正在生成「' + n.name + '」深度讲解…');
+    var opts = { cache: false, timeout: 120000 };
+    if (ac) opts.signal = ac.signal;
+    if (trainOf(n)) opts.noThink = !trainOf(n).thinkMode;
+    return AI.chatStream(aiSys(), user, function (txt) { float.content(txt); }, null, opts).then(function (full) {
+      var o = AI.extractRobustJSON(full);
       if (!o || !o.core) throw new Error('返回内容不完整');
       o.at = new Date().toISOString();
       bagUpdate(b => {
         b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { explain: o });
       });
+      float.done(); setTimeout(function () { float.close(); }, 800);
       Toast.success('已生成「' + n.name + '」深度讲解');
+    }).catch(function (e) {
+      float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500);
+      throw e;
     });
   }
 
@@ -16353,21 +16433,25 @@ function bind(el, next) {
       return '- ' + n.name + ' 掌握' + (st.score == null ? '未测' : st.score + '%')
         + (pre ? ' 前置:' + pre : ' 前置:无') + (st.locked ? ' [锁定]' : '');
     }).join('\n');
-    const user = '距离考研还有 ' + daysLeft() + ' 天。以下是「' + majorName() + '」概念依赖图谱与考生掌握度：\n' + lines
+    var base = '距离考研还有 ' + daysLeft() + ' 天。以下是「' + majorName() + '」概念依赖图谱与考生掌握度：\n' + lines
       + '\n请规划最优攻克顺序：只挑最该优先攻克的 6-8 个考点（掌握度≥80 的不要列），'
       + '必须满足依赖先后——前置没过关就要先排前置。总投入天数要和剩余天数匹配。'
-      + '\n只输出JSON：{"strategy":"总体策略2-3句","order":[{"name":"考点名（与列表完全一致）","days":数字,"reason":"≤20字"}],'
-      + '"svg":"<svg viewBox=\\"0 0 800 260\\" xmlns=\\"http://www.w3.org/2000/svg\\">...</svg>"}'
-      + '\n【可视化硬约束】svg 字段必须是【独立完整】的 SVG（闭合 <svg> 含 xmlns，viewBox 0 0 800 260，背景 #fafafa，'
-      + '用 <defs><marker> 定义箭头 marker-end="url(#arr)"）。'
-      + '节点：<g><rect width=140 height=50 rx=6 fill=#fff stroke=#1677ff stroke-width=1.5/><text x=70 y=30 text-anchor=middle fill=#1677ff font-size=14>考点名</text></g>。'
-      + '连线：<path d="M(x1) (y1) L(x2) (y2)" stroke=#d9d9d9 stroke-width=1.5 fill=none marker-end="url(#arr)"/>，'
-      + '箭头指向"下一步攻克"的考点（按 order 顺序形成有向流程图）。'
-      + '节点 y 坐标按 order 序号递增分布（错开一层），x 居中且按顺序水平排列。'
-      + '颜色：当前重点（order[0..2]）用 #1677ff，次重点 #722ed1，后备 #52c41a。'
-      + '每个节点右上角加 <text> 显示「天数」标注。'
-      + '总节点数 = order.length；连线数 = order.length - 1。';
-    return AI.chatJSON(aiSys(), user).then(o => {
+      + '\n只输出JSON：{"strategy":"总体策略2-3句","order":[{"name":"考点名（与列表完全一致）","days":数字,"reason":"≤20字"}]}';
+    // SVG 为「可选的增强字段」：能力允许才输出，绝不阻塞路线生成
+    var svgReq = '。另加可选增强字段 "svg"：输出一张独立完整的 SVG 攻克路线流程图'
+      + '（<svg viewBox="0 0 800 260" xmlns="http://www.w3.org/2000/svg">，节点用 <rect>+<text>，连线用 <path> 带箭头 marker-end，'
+      + '颜色 #1677ff/#722ed1/#52c41a 区分优先级，每节点标注天数）。如果觉得复杂，**完全可以省略 svg 字段**——不影响路线生成';
+    var float = openAiFloat('🧭 AI 攻克路线');
+    var withSvg = true;
+    function userPrompt() { return base + (withSvg ? svgReq : ''); }
+    function extractSvg(svgRaw) {
+      if (!svgRaw) return '';
+      var s = String(svgRaw);
+      var i = s.toLowerCase().indexOf('<svg');
+      var j = s.toLowerCase().lastIndexOf('</svg>');
+      return (i >= 0 && j > i) ? s.slice(i, j + 6) : '';
+    }
+    function parse(o) {
       const arr = (o && o.order) || (Array.isArray(o) ? o : null);
       if (!arr || !arr.length) throw new Error('未生成有效路线');
       const byName = {}; nodes.forEach(n => { byName[n.name] = n.id; });
@@ -16377,16 +16461,32 @@ function bind(el, next) {
         days: parseInt(it.days, 10) || 0,
         reason: String(it.reason || '').slice(0, 30)
       })).filter(x => x.name);
-      // svg 字段安全清洗：截取第一个 <svg 到最后一个 </svg>，避免 AI 多余输出
-      var svgRaw = o && o.svg ? String(o.svg) : '';
-      var svgClean = '';
-      var i = svgRaw.toLowerCase().indexOf('<svg');
-      var j = svgRaw.toLowerCase().lastIndexOf('</svg>');
-      if (i >= 0 && j > i) svgClean = svgRaw.slice(i, j + 6);
+      if (!order.length) throw new Error('考点名未匹配');
+      return { strategy: String((o && o.strategy) || ''), order: order, svg: extractSvg(o && o.svg) };
+    }
+    function attempt() {
+      float.status('⏳ 正在规划最优攻克顺序…（约 15-40 秒）');
+      return AI.chatStream(aiSys(), userPrompt(), function (txt) { float.content(txt); }, null, { cache: false, timeout: 150000 })
+        .then(function (full) { return parse(AI.extractRobustJSON(full)); });
+    }
+    return attempt().catch(function (e) {
+      // 带 SVG 生成失败（超长/截断/解析错）→ 自动降级重试简化版，保证路线必出
+      if (withSvg) {
+        withSvg = false;
+        float.status('⚠ 可视化生成失败，自动重试简化版…');
+        return attempt();
+      }
+      throw e;
+    }).then(function (data) {
       bagUpdate(b => {
-        b.path = { major: majorName(), strategy: String((o && o.strategy) || ''), order, svg: svgClean, at: new Date().toISOString() };
+        b.path = { major: majorName(), strategy: data.strategy, order: data.order, svg: data.svg, at: new Date().toISOString() };
       });
-      Toast.success('攻克路线已生成' + (svgClean ? '（含可视化）' : '（可视化降级）'));
+      float.done(); setTimeout(function () { float.close(); }, 1000);
+      Toast.success('攻克路线已生成' + (data.svg ? '（含可视化）' : ''));
+      return data;
+    }).catch(function (e) {
+      float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 2000);
+      throw e;
     });
   }
 
