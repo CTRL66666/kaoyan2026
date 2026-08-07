@@ -2008,6 +2008,16 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 .tr-faq { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 6px 10px; margin-top: 6px; font-size: 13px; }
 .tr-faq summary { cursor: pointer; font-weight: 500; color: var(--text-primary); }
 .tr-faq div { margin-top: 5px; color: var(--text-secondary); line-height: 1.7; }
+/* 面包屑（特训营 Modal 顶部 — 子页面「我从哪来」） */
+.tr-crumb { font-size: 12.5px; color: var(--text-muted); padding: 0 0 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.tr-crumb .tr-crumb-back { display: inline-block; margin-right: 4px; font-weight: 500; color: var(--text-primary); }
+.tr-crumb b { color: var(--text-primary); font-weight: 500; }
+/* 思考模式 checkbox */
+.tr-think { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); margin-left: auto; cursor: pointer; }
+.tr-think input { margin: 0; cursor: pointer; }
+/* 专业 AI 重建的可视化（SVG 流程图） */
+.cm-path-viz { margin: 10px 0; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); overflow: auto; }
+.cm-path-viz svg { display: block; max-width: 100%; height: auto; }
 /* 作答按钮行（判分 / 拍照判分 / 跳过） */
 .tr-q-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
 /* 跳过结果卡 */
@@ -15187,9 +15197,16 @@ function bind(el, next) {
         + (st ? '<span class="muted-sm">' + (st.score == null ? '未测' : st.score + '%') + '</span>' : '')
         + '</div>';
     });
+    // 优先用 AI 生成的专业 SVG 可视化；没有则降级到表格
+    var vizHtml = '';
+    if (p.svg && typeof Diagram !== 'undefined' && Diagram.render) {
+      var svgHtml = Diagram.render(p.svg);
+      if (svgHtml) vizHtml = '<div class="cm-path-viz">' + svgHtml + '</div>';
+    }
     return '<div class="card"><div class="card-title">🧭 AI 攻克路线 <span class="muted-sm">'
       + U.esc((p.at || '').slice(5, 10)) + ' 生成</span></div>'
       + '<div class="alert alert-ok">' + U.esc(p.strategy || '') + '</div>'
+      + vizHtml
       + rows
       + '<div class="btn-row" style="margin-top:10px">'
       + '<button class="btn btn-primary btn-sm" id="cm-path-land">前3项加入任务中心</button>'
@@ -15261,7 +15278,7 @@ function bind(el, next) {
   function ensureTrain(n) {
     var tr = trainOf(n);
     if (!tr) {
-      tr = { step: 0, intensity: 'std', done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: null };
+      tr = { step: 0, intensity: 'std', thinkMode: false, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: null };
       bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: tr }); });
     }
     return tr;
@@ -15384,7 +15401,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'gen:' + s, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), trainGenPrompt(n, s, stepCountOf(tr.intensity, s)), null, { cache: false, signal: ac.signal }).then(function (o) {
+    AI.chatJSON(aiSys(), trainGenPrompt(n, s, stepCountOf(tr.intensity, s)), null, { cache: false, signal: ac.signal, noThink: !tr.thinkMode }).then(function (o) {
       endBusy(ac);
       var arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
       if (!arr || !arr.length) throw new Error('未生成有效题目');
@@ -15424,7 +15441,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'judge:' + s + '-' + qi, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), trainJudgePrompt(n, s, item, userAns), null, { cache: false, signal: ac.signal }).then(function (o) {
+    AI.chatJSON(aiSys(), trainJudgePrompt(n, s, item, userAns), null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode) }).then(function (o) {
       endBusy(ac);
       var tr2 = trainOf(n);
       var answers = Object.assign({}, (tr2 && tr2.answers) || {});
@@ -15496,7 +15513,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'var:' + s + '-' + qi, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), trainVariantPrompt(n, s, item, qi), null, { cache: false, signal: ac.signal }).then(function (o) {
+    AI.chatJSON(aiSys(), trainVariantPrompt(n, s, item, qi), null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode) }).then(function (o) {
       endBusy(ac);
       var it = (o && o.item) || (o && o.items && o.items[0]) || null;
       if (!it || !it.stem) throw new Error('变式生成失败');
@@ -15557,7 +15574,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'ee:' + kind, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), prompts[kind], null, { cache: false, signal: ac.signal }).then(function (o) {
+    AI.chatJSON(aiSys(), prompts[kind], null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode) }).then(function (o) {
       endBusy(ac);
       if (!o || (kind !== 'demo' && !Array.isArray(o.items))) throw new Error('返回内容不完整');
       var extra = {};
@@ -15576,7 +15593,7 @@ function bind(el, next) {
       Toast.warn('生成失败：' + ((e && e.message) || String(e)));
     });
   }
-  // 渲染训练 Modal（已打开则原位刷新）
+  // 渲染训练 Modal（已打开则原位刷新；作为"子页面"——顶部有面包屑可返回概念图谱）
   function renderTrainModal(n) {
     clearTrainTimer();
     var tr = ensureTrain(n);
@@ -15584,10 +15601,12 @@ function bind(el, next) {
     var wrap = document.getElementById('cm-train-wrap');
     if (wrap) { wrap.innerHTML = html; bindTrain(n); }
     else {
+      // 面包屑顶部条（让用户随时看到「我从哪里来」）
+      var crumb = '<div class="tr-crumb"><span class="tr-crumb-back">←</span> 概念图谱 / <b>' + U.esc(n.name) + '</b> · 考点特训营</div>';
       Modal.open({
-        title: '⚡ 考点特训营', wide: true,
-        html: '<div id="cm-train-wrap">' + html + '</div>',
-        actions: [{ label: '关闭' }]
+        title: '⚡ 考点特训营 · ' + U.esc(n.name), wide: true,
+        html: crumb + '<div id="cm-train-wrap">' + html + '</div>',
+        actions: [{ label: '← 返回 概念图谱', kind: 'btn-ghost', onClick: function (close) { close(); } }, { label: '关闭', kind: 'btn-ghost' }]
       });
       bindTrain(n);
     }
@@ -15710,6 +15729,7 @@ function bind(el, next) {
         return '<button class="btn btn-sm ' + ((tr.intensity || 'std') === k ? 'btn-primary' : 'btn-ghost') + '" data-tintensity="' + k + '">' + INTENSITY_LABEL[k] + '</button>';
       }).join('')
       + '<span class="muted-sm">' + (INTENSITY_DESC[tr.intensity] || '') + ' · 共 ' + totalStepCount(tr.intensity) + ' 题</span>'
+      + '<label class="tr-think"><input type="checkbox" data-tthink' + (tr.thinkMode ? ' checked' : '') + '>⏳ 启用思考模式</label>'
       + '</div>'
       + '<div class="tr-steps">' + steps + '</div>'
       + (tr.finished ? reportHtml(n, tr) : '')
@@ -15992,10 +16012,16 @@ function bind(el, next) {
         if (tr2 && (tr2.done[i] || i <= tr2.step || tr2.finished)) { saveTrain(n, { step: i }); renderTrainModal(n); }
       }
     };
-    // 文件选择回调（事件委托：就地插入的 input 自动生效）
+    // 文件选择回调 + 思考模式 checkbox（事件委托：就地插入的 input 自动生效）
     wrap.onchange = function (ev) {
       var inp = ev.target;
-      if (!inp || inp.getAttribute('data-photo-in') == null) return;
+      if (!inp) return;
+      if (inp.getAttribute('data-tthink') != null) {
+        saveTrain(n, { thinkMode: !!inp.checked });
+        Toast.show('思考模式已' + (inp.checked ? '开启 · AI 出题/判分会更慢但更准' : '关闭'), 'info', 2500);
+        return;
+      }
+      if (inp.getAttribute('data-photo-in') == null) return;
       var pp = inp.getAttribute('data-photo-in').split('-');
       var s4 = parseInt(pp[0], 10), qi4 = parseInt(pp[1], 10);
       var f = inp.files && inp.files[0];
@@ -16006,7 +16032,7 @@ function bind(el, next) {
   // 重置训练（再练一遍）：清题目/进度，但保留成绩资产（bestScore/history/复习日）供对比
   function resetTrain(n) {
     var old = trainOf(n) || {};
-    var fresh = { step: 0, intensity: old.intensity || 'std', done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: old.bestScore || null, report: null, history: old.history || [], finishReviewAt: old.finishReviewAt || null };
+    var fresh = { step: 0, intensity: old.intensity || 'std', thinkMode: !!old.thinkMode, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: old.bestScore || null, report: null, history: old.history || [], finishReviewAt: old.finishReviewAt || null };
     bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: fresh }); });
     renderTrainModal(n);
     Toast.show('已重置，开始新一轮特训', 'info', 2500);
@@ -16309,8 +16335,17 @@ function bind(el, next) {
     const user = '距离考研还有 ' + daysLeft() + ' 天。以下是「' + majorName() + '」概念依赖图谱与考生掌握度：\n' + lines
       + '\n请规划最优攻克顺序：只挑最该优先攻克的 6-8 个考点（掌握度≥80 的不要列），'
       + '必须满足依赖先后——前置没过关就要先排前置。总投入天数要和剩余天数匹配。'
-      + '\n只输出JSON：{"strategy":"总体策略2-3句，说清主攻方向与该放弃什么",'
-      + '"order":[{"name":"考点名，必须与上面列表中的名称完全一致","days":建议投入天数(数字),"reason":"为什么排这个位置，不超过20字"}]}';
+      + '\n只输出JSON：{"strategy":"总体策略2-3句","order":[{"name":"考点名（与列表完全一致）","days":数字,"reason":"≤20字"}],'
+      + '"svg":"<svg viewBox=\\"0 0 800 260\\" xmlns=\\"http://www.w3.org/2000/svg\\">...</svg>"}'
+      + '\n【可视化硬约束】svg 字段必须是【独立完整】的 SVG（闭合 <svg> 含 xmlns，viewBox 0 0 800 260，背景 #fafafa，'
+      + '用 <defs><marker> 定义箭头 marker-end="url(#arr)"）。'
+      + '节点：<g><rect width=140 height=50 rx=6 fill=#fff stroke=#1677ff stroke-width=1.5/><text x=70 y=30 text-anchor=middle fill=#1677ff font-size=14>考点名</text></g>。'
+      + '连线：<path d="M(x1) (y1) L(x2) (y2)" stroke=#d9d9d9 stroke-width=1.5 fill=none marker-end="url(#arr)"/>，'
+      + '箭头指向"下一步攻克"的考点（按 order 顺序形成有向流程图）。'
+      + '节点 y 坐标按 order 序号递增分布（错开一层），x 居中且按顺序水平排列。'
+      + '颜色：当前重点（order[0..2]）用 #1677ff，次重点 #722ed1，后备 #52c41a。'
+      + '每个节点右上角加 <text> 显示「天数」标注。'
+      + '总节点数 = order.length；连线数 = order.length - 1。';
     return AI.chatJSON(aiSys(), user).then(o => {
       const arr = (o && o.order) || (Array.isArray(o) ? o : null);
       if (!arr || !arr.length) throw new Error('未生成有效路线');
@@ -16321,10 +16356,16 @@ function bind(el, next) {
         days: parseInt(it.days, 10) || 0,
         reason: String(it.reason || '').slice(0, 30)
       })).filter(x => x.name);
+      // svg 字段安全清洗：截取第一个 <svg 到最后一个 </svg>，避免 AI 多余输出
+      var svgRaw = o && o.svg ? String(o.svg) : '';
+      var svgClean = '';
+      var i = svgRaw.toLowerCase().indexOf('<svg');
+      var j = svgRaw.toLowerCase().lastIndexOf('</svg>');
+      if (i >= 0 && j > i) svgClean = svgRaw.slice(i, j + 6);
       bagUpdate(b => {
-        b.path = { major: majorName(), strategy: String((o && o.strategy) || ''), order, at: new Date().toISOString() };
+        b.path = { major: majorName(), strategy: String((o && o.strategy) || ''), order, svg: svgClean, at: new Date().toISOString() };
       });
-      Toast.success('攻克路线已生成');
+      Toast.success('攻克路线已生成' + (svgClean ? '（含可视化）' : '（可视化降级）'));
     });
   }
 
