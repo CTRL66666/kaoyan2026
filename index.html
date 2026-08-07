@@ -1988,6 +1988,26 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 .tr-wrong-q { font-size: 13px; line-height: 1.7; color: var(--text-primary); }
 .tr-wrong-line { font-size: 12.5px; color: var(--text-secondary); margin-top: 3px; line-height: 1.7; }
 .tr-wrong-ans { color: var(--ok); }
+/* 题量强度选择条 */
+.tr-intensity { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+/* 难度星级 */
+.tr-q-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.tr-diff { font-size: 12px; letter-spacing: 1px; color: var(--warn); }
+.tr-diff .muted-sm { letter-spacing: 0; }
+/* 检定倒计时 */
+.tr-timer { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-btn); margin-bottom: 8px; display: inline-block; }
+.tr-timer-warn { color: var(--danger); border-color: var(--danger); }
+/* 本步即时反馈条 */
+.tr-stepbar { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--text-secondary); padding: 6px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); margin-bottom: 10px; }
+.tr-stepbar b { color: var(--text-primary); }
+/* 公式速查卡 / 误区问答 */
+.tr-cheat { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.tr-cheat-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 8px; border-bottom: 1px dashed var(--line); font-size: 13px; flex-wrap: wrap; }
+.tr-cheat-name { flex: 0 0 72px; font-weight: 500; color: var(--text-primary); }
+.tr-cheat-f { font-family: Consolas, Menlo, monospace; color: var(--text-secondary); }
+.tr-faq { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 6px 10px; margin-top: 6px; font-size: 13px; }
+.tr-faq summary { cursor: pointer; font-weight: 500; color: var(--text-primary); }
+.tr-faq div { margin-top: 5px; color: var(--text-secondary); line-height: 1.7; }
 /* 作答按钮行（判分 / 拍照判分 / 跳过） */
 .tr-q-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
 /* 跳过结果卡 */
@@ -15216,20 +15236,32 @@ function bind(el, next) {
   }
 
   // ---------- 考点特训营（五步深度学习：概念筑基→标准演练→陷阱识别→综合实战→能力检定） ----------
-  // 数据：bag.nodes[n.id].train = {step:0-4, done:[bool×5], items:{s:[{stem,answer,solution,trap}]},
-  //        answers:{s:[{user,correct,score,comment}]}, startedAt, updatedAt, finished, bestScore}
+  // 数据：bag.nodes[n.id].train = {step:0-4, intensity:'lite|std|hard', done:[bool×5], items:{s:[{stem,answer,solution,trap}]},
+  //        answers:{s:[{user,correct,score,comment}]}, startedAt, updatedAt, finished, bestScore, report, history, finishReviewAt}
   var TRAIN_STEPS = [
     { key: 'concept', name: '概念筑基', goal: '读懂本质与考研怎么考' },
-    { key: 'standard', name: '标准演练', goal: '掌握标准解题流程', count: 2 },
-    { key: 'trap', name: '陷阱识别', goal: '避开高频失分陷阱', count: 2 },
-    { key: 'apply', name: '综合实战', goal: '多步综合应用前置+本考点', count: 1 },
-    { key: 'exam', name: '能力检定', goal: '压轴检定，达标解锁后续', count: 1 }
+    { key: 'standard', name: '标准演练', goal: '掌握标准解题流程', count: 3 },
+    { key: 'trap', name: '陷阱识别', goal: '避开高频失分陷阱', count: 3 },
+    { key: 'apply', name: '综合实战', goal: '多步综合应用前置+本考点', count: 2 },
+    { key: 'exam', name: '能力检定', goal: '压轴检定，达标解锁后续', count: 2 }
   ];
+  // 题量三档（每步题数）：lite 2+2+1+1=6 / std 3+3+2+2=10 / hard 4+4+3+3=14
+  var INTENSITY_COUNTS = { lite: [0, 2, 2, 1, 1], std: [0, 3, 3, 2, 2], hard: [0, 4, 4, 3, 3] };
+  var INTENSITY_LABEL = { lite: '精简·6题', std: '标准·10题', hard: '强化·14题' };
+  var INTENSITY_DESC = { lite: '快速过一遍', std: '日常训练', hard: '考前加量冲刺' };
+  function stepCountOf(intensity, s) {
+    var arr = INTENSITY_COUNTS[intensity] || INTENSITY_COUNTS.std;
+    return arr[s] != null ? arr[s] : (TRAIN_STEPS[s] && TRAIN_STEPS[s].count) || 1;
+  }
+  function totalStepCount(intensity) {
+    var arr = INTENSITY_COUNTS[intensity] || INTENSITY_COUNTS.std;
+    return arr[1] + arr[2] + arr[3] + arr[4];
+  }
   function trainOf(n) { return nBag(n.id).train || null; }
   function ensureTrain(n) {
     var tr = trainOf(n);
     if (!tr) {
-      tr = { step: 0, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: null };
+      tr = { step: 0, intensity: 'std', done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: null };
       bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: tr }); });
     }
     return tr;
@@ -15239,24 +15271,26 @@ function bind(el, next) {
     bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: tr }); });
     return tr;
   }
-  // 分步出题提示词（standard=标准题 / trap=陷阱题 / apply=综合题 / exam=压轴检定）
-  function trainGenPrompt(n, s) {
+  // 分步出题提示词（standard=标准题 / trap=陷阱题 / apply=综合题 / exam=压轴检定；count=本步题数）
+  function trainGenPrompt(n, s, count) {
+    var num = count || TRAIN_STEPS[s].count || 1;
     var mode = s === 1
-      ? '出 2 道【标准题】：难度中等，覆盖该考点最常见考法与标准解题流程'
+      ? '出 ' + num + ' 道【标准题】：难度中等，覆盖该考点最常见考法与标准解题流程'
       : s === 2
-      ? '出 2 道【陷阱题】：题干或选项中包含典型错误（符号错/漏条件/概念张冠李戴/绝对化表述/范围漏界），考学生能否识别并纠正'
+      ? '出 ' + num + ' 道【陷阱题】：题干或选项中包含典型错误（符号错/漏条件/概念张冠李戴/绝对化表述/范围漏界），考学生能否识别并纠正'
       : s === 3
-      ? '出 1 道【综合题】：多步推导，需综合运用该考点与其前置考点，计算量大'
-      : '出 1 道【压轴检定题】：难度接近考研压轴题（区分度题），需灵活运用该考点，绝不允许送分';
+      ? '出 ' + num + ' 道【综合题】：多步推导，需综合运用该考点与其前置考点，计算量大'
+      : '出 ' + num + ' 道【压轴检定题】：难度接近考研压轴题（区分度题），需灵活运用该考点，绝不允许送分';
     return '针对考点「' + n.name + '」' + mode + '。教材定位：' + (n.book || textbook()) + '。\n'
       + '【输出格式硬约束】（严格 JSON，不要任何多余文字、不要 markdown 围栏）：\n'
-      + '{"items":[{"type":"choice|solve","stem":"题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"标准答案（choice 填正确选项字母如 A；solve 填完整过程）","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","imageNeeded":true|false,"imageHint":"图描述"}]}\n'
+      + '{"items":[{"type":"choice|solve","stem":"题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"标准答案（choice 填正确选项字母如 A；solve 填完整过程）","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","diff":1-5,"imageNeeded":true|false,"imageHint":"图描述"}]}\n'
       + '【判题要求】：\n'
       + '① type 必填：概念辨析/判断/正误类出 "choice"（4选1），其他出 "solve"。\n'
       + '② choice 必须给 4 个互斥选项（干扰项须有明确错误依据，不能"都对/都错"），answerIdx 给正确选项下标 0-3；solve 不用给 options/answerIdx（给空数组和 -1）。\n'
-      + '③ imageNeeded：题目涉及电路/几何/力学示意图/流程框图等需要配图才能理解时填 true；纯文字题填 false。\n'
-      + '④ imageHint 仅在 imageNeeded=true 时填（≤80字）：用文字精准描述图的关键内容——节点、元件、参数值、连接关系，让读者脑补出图像（例："电路：Ui → R1=1Ω → 节点a → R2=2Ω → 节点b → C=1F → 地；Uo 从节点b 取"）。\n'
-      + '⑤ 质量纪律：题干含必要数据/参数；solve 题不要送分；solution 必须含关键步骤。';
+      + '③ diff 必填 1-5 整数（1 基础/2 中等/3 拔高/4 难/5 压轴）：该步内尽量拉开梯度，不要全 1。\n'
+      + '④ imageNeeded：题目涉及电路/几何/力学示意图/流程框图等需要配图才能理解时填 true；纯文字题填 false。\n'
+      + '⑤ imageHint 仅在 imageNeeded=true 时填（≤80字）：用文字精准描述图的关键内容——节点、元件、参数值、连接关系，让读者脑补出图像（例："电路：Ui → R1=1Ω → 节点a → R2=2Ω → 节点b → C=1F → 地；Uo 从节点b 取"）。\n'
+      + '⑥ 质量纪律：题干含必要数据/参数；solve 题不要送分；solution 必须含关键步骤。';
   }
   // 判分提示词（支持选择题/含图题）
   function trainJudgePrompt(n, s, item, userAns) {
@@ -15275,6 +15309,8 @@ function bind(el, next) {
   }
   // ---------- 非阻塞 AI 辅助（生成/判分可取消、有进度提示、就地更新） ----------
   var tbusy = null; // {key, ac} 当前训练 AI 任务
+  var trainTimer = null; // 检定倒计时 interval id
+  function clearTrainTimer() { if (trainTimer) { clearInterval(trainTimer); trainTimer = null; } }
   function isAbort(e) { return !!(e && (e.name === 'AbortError' || e.code === 20)); }
   function endBusy(ac) { if (tbusy && tbusy.ac === ac) tbusy = null; }
   function aiBusyCard(msg) {
@@ -15348,11 +15384,12 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'gen:' + s, ac: ac };
     bindCancel(ac);
-    AI.chatJSON(aiSys(), trainGenPrompt(n, s), null, { cache: false, signal: ac.signal }).then(function (o) {
+    AI.chatJSON(aiSys(), trainGenPrompt(n, s, stepCountOf(tr.intensity, s)), null, { cache: false, signal: ac.signal }).then(function (o) {
       endBusy(ac);
       var arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
       if (!arr || !arr.length) throw new Error('未生成有效题目');
-      var items = arr.slice(0, TRAIN_STEPS[s].count || 1).map(function (it) {
+      var cnt = stepCountOf(tr.intensity, s);
+      var items = arr.slice(0, cnt).map(function (it) {
         return {
           type: it.type === 'choice' ? 'choice' : 'solve',
           stem: String(it.stem || ''),
@@ -15361,6 +15398,7 @@ function bind(el, next) {
           answer: String(it.answer || ''),
           solution: String(it.solution || ''),
           trap: String(it.trap || ''),
+          diff: U.clamp(parseInt(it.diff, 10) || 3, 1, 5),
           imageNeeded: !!it.imageNeeded,
           imageHint: String(it.imageHint || '')
         };
@@ -15398,6 +15436,7 @@ function bind(el, next) {
       var card = document.querySelector('[data-tq="' + n.id + '-' + s + '-' + qi + '"]');
       if (card) card.outerHTML = trainQCardHtml(n, s, qi);
       refreshTrainFoot(n);
+      refreshStepBar(n, s);
       if (s === 4 && stepDone(n, 4)) Toast.show('已全部判分，点击「完成检定」结算', 'info', 3000);
     }).catch(function (e) {
       endBusy(ac);
@@ -15413,8 +15452,133 @@ function bind(el, next) {
     var foot = document.querySelector('.tr-foot');
     if (foot) foot.outerHTML = trainFootHtml(n, tr);
   }
+  // 本步即时反馈条：x/y 已判 · 平均 z 分
+  function stepBarHtml(n, tr, s) {
+    var items = (tr.items && tr.items[s]) || [];
+    if (!items.length) return '';
+    var ans = (tr.answers && tr.answers[s]) || [];
+    var doneN = ans.filter(function (a) { return !!a; }).length;
+    var scored = ans.filter(function (a) { return a && typeof a.score === 'number'; });
+    var avg = scored.length ? Math.round(scored.reduce(function (a2, x) { return a2 + x.score; }, 0) / scored.length) : null;
+    return '<div class="tr-stepbar" data-stepbar="' + s + '">'
+      + '<span>本步 <b>' + doneN + '/' + items.length + '</b> 已判</span>'
+      + (avg != null ? '<span>平均 <b>' + avg + '</b> 分</span>' : '')
+      + (avg != null && avg < 60 ? '<span class="tag tag-warn">薄弱</span>' : (avg != null && avg >= 80 ? '<span class="tag tag-ok">扎实</span>' : ''))
+      + '</div>';
+  }
+  function refreshStepBar(n, s) {
+    var tr = trainOf(n);
+    if (!tr) return;
+    var bar = document.querySelector('[data-stepbar="' + s + '"]');
+    if (bar) bar.outerHTML = stepBarHtml(n, tr, s);
+  }
+  // 变式题提示词：同考点同题型，换数据/换问法/换情境，难度不低于原题
+  function trainVariantPrompt(n, s, item, qi) {
+    var stepName = TRAIN_STEPS[s].name;
+    return '基于下面的' + stepName + '题，生成 1 道【变式题】：同考点、同题型、难度不低于原题，必须换数据/换数字/换问法/换情境（禁止原样或仅微调）。'
+      + '\n考点：「' + n.name + '」'
+      + '\n原题：' + item.stem
+      + (item.options && item.options.length ? '\n原选项：' + item.options.join('；') : '')
+      + '\n标准答案：' + item.answer
+      + '\n只输出JSON：{"item":{"type":"choice|solve","stem":"变式题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"答案","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","diff":1-5,"imageNeeded":true|false,"imageHint":"图描述"}}，不要任何多余文字。';
+  }
+  // 变式重练：判分<60 → 生成 1 道同类变式追加到本步末尾，做对为止（同链上限 5 道）
+  function trainVariant(n, s, qi) {
+    if (tbusy) { Toast.warn('AI 正在处理中，请稍候'); return; }
+    var tr = trainOf(n);
+    var items = (tr && tr.items && tr.items[s]) || [];
+    var item = items[qi];
+    if (!item) return;
+    var chain = items.filter(function (x) { return x.variantOf === qi; }).length;
+    if (chain >= 5) { Toast.warn('该题已生成 5 道变式，先消化再练吧'); return; }
+    var holder = document.querySelector('[data-tvar-holder="' + s + '-' + qi + '"]');
+    if (holder) holder.innerHTML = aiBusyCard('🤖 正在出同类变式题…（约 5-15 秒）');
+    var ac = new AbortController();
+    tbusy = { key: 'var:' + s + '-' + qi, ac: ac };
+    bindCancel(ac);
+    AI.chatJSON(aiSys(), trainVariantPrompt(n, s, item, qi), null, { cache: false, signal: ac.signal }).then(function (o) {
+      endBusy(ac);
+      var it = (o && o.item) || (o && o.items && o.items[0]) || null;
+      if (!it || !it.stem) throw new Error('变式生成失败');
+      var tr2 = trainOf(n);
+      var items2 = ((tr2.items && tr2.items[s]) || []).slice();
+      items2.push({
+        type: it.type === 'choice' ? 'choice' : 'solve',
+        stem: String(it.stem || ''),
+        options: Array.isArray(it.options) ? it.options.slice(0, 4).map(function (x) { return String(x || ''); }) : [],
+        answerIdx: typeof it.answerIdx === 'number' && it.answerIdx >= 0 && it.answerIdx <= 3 ? it.answerIdx : -1,
+        answer: String(it.answer || ''),
+        solution: String(it.solution || ''),
+        trap: String(it.trap || ''),
+        diff: U.clamp(parseInt(it.diff, 10) || 3, 1, 5),
+        imageNeeded: !!it.imageNeeded,
+        imageHint: String(it.imageHint || ''),
+        variantOf: qi
+      });
+      saveTrain(n, { items: Object.assign({}, tr2.items || {}, { [s]: items2 }) });
+      renderTrainModal(n);
+      Toast.success('已追加 1 道变式题（第 ' + items2.length + ' 题），做对为止');
+    }).catch(function (e) {
+      endBusy(ac);
+      if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
+      renderTrainModal(n);
+      Toast.warn('变式生成失败：' + ((e && e.message) || String(e)));
+    });
+  }
+  // 错题巩固卷：清除本轮所有 <60 分题的答案，跳到第一个错题步重新作答
+  function consolidateWrong(n) {
+    var tr = trainOf(n);
+    if (!tr) return;
+    var wrong = wrongItems(n, tr);
+    if (!wrong.length) { Toast.show('本轮零错题，无需巩固 🎉', 'info', 2500); return; }
+    var answers = Object.assign({}, tr.answers);
+    var firstStep = null;
+    wrong.forEach(function (w) {
+      var arr = (answers[w.step] || []).slice();
+      arr[w.qi] = undefined;
+      answers[w.step] = arr;
+      if (firstStep == null) firstStep = w.step;
+    });
+    saveTrain(n, { answers: answers, step: firstStep, redoCount: (tr.redoCount || 0) + 1 });
+    renderTrainModal(n);
+    Toast.success('巩固卷已生成：' + wrong.length + ' 道错题重新作答');
+  }
+  // 概念筑基三层强化：典型例题演示 / 公式速查卡 / 误区问答（非阻塞可取消，存 explain 字段）
+  function explainExtra(n, kind) {
+    if (tbusy) { Toast.warn('AI 正在处理中，请稍候'); return; }
+    var labels = { demo: '典型例题演示', cheat: '公式速查卡', faq: '误区问答' };
+    var prompts = {
+      demo: '针对考点「' + n.name + '」，出 1 道能体现该考点核心应用的典型例题（中等偏上难度，贴近真题），并给出完整演算步骤。只输出JSON：{"stem":"例题题干（数学式用$...$包裹）","solution":"完整演算(≤220字，分步骤，每步含公式)"}，不要任何多余文字。',
+      cheat: '列出考点「' + n.name + '」考研必须掌握的公式/术语速查卡（5-8 条，宁缺毋滥）。只输出JSON：{"items":[{"name":"名称(≤12字)","formula":"公式(LaTeX用$...$包裹)","note":"一句话说明(≤20字)"}]}，不要任何多余文字。',
+      faq: '列出学生学「' + n.name + '」时最常犯的 2-3 个高频疑问并自答（真实踩坑问题，不要泛泛而谈）。只输出JSON：{"items":[{"q":"疑问(≤30字)","a":"解答(≤70字，公式用$...$包裹)"}]}，不要任何多余文字。'
+    };
+    var holder = document.querySelector('[data-ee-holder="' + kind + '"]');
+    if (holder) holder.innerHTML = aiBusyCard('🤖 正在生成' + labels[kind] + '…（约 5-15 秒）');
+    var ac = new AbortController();
+    tbusy = { key: 'ee:' + kind, ac: ac };
+    bindCancel(ac);
+    AI.chatJSON(aiSys(), prompts[kind], null, { cache: false, signal: ac.signal }).then(function (o) {
+      endBusy(ac);
+      if (!o || (kind !== 'demo' && !Array.isArray(o.items))) throw new Error('返回内容不完整');
+      var extra = {};
+      if (kind === 'demo') extra.demo = { stem: String(o.stem || ''), solution: String(o.solution || ''), at: new Date().toISOString() };
+      else if (kind === 'cheat') extra.cheatsheet = (o.items || []).slice(0, 8).map(function (x) { return { name: String(x.name || '').slice(0, 12), formula: String(x.formula || ''), note: String(x.note || '').slice(0, 20) }; });
+      else extra.faq = (o.items || []).slice(0, 3).map(function (x) { return { q: String(x.q || '').slice(0, 30), a: String(x.a || '').slice(0, 70) }; });
+      bagUpdate(function (b) {
+        b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { explain: Object.assign({}, b.nodes[n.id].explain || {}, extra) });
+      });
+      renderTrainModal(n);
+      Toast.success('已生成' + labels[kind]);
+    }).catch(function (e) {
+      endBusy(ac);
+      if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
+      renderTrainModal(n);
+      Toast.warn('生成失败：' + ((e && e.message) || String(e)));
+    });
+  }
   // 渲染训练 Modal（已打开则原位刷新）
   function renderTrainModal(n) {
+    clearTrainTimer();
     var tr = ensureTrain(n);
     var html = trainFullHtml(n, tr);
     var wrap = document.getElementById('cm-train-wrap');
@@ -15463,7 +15627,7 @@ function bind(el, next) {
       var ans = (tr.answers && tr.answers[s]) || [];
       items.forEach(function (it, qi) {
         var a = ans[qi];
-        if (a && typeof a.score === 'number' && a.score < 60) out.push({ step: s, item: it, ans: a });
+        if (a && typeof a.score === 'number' && a.score < 60) out.push({ step: s, qi: qi, item: it, ans: a });
       });
     });
     return out;
@@ -15516,7 +15680,9 @@ function bind(el, next) {
       + rows
       + '<div class="tr-rep-advice">💬 ' + U.esc(r.advice || '') + '</div>'
       + wrongHtml
-      + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-ghost btn-sm" data-ta="retry">🔄 再练一遍（重置）</button></div>'
+      + '<div class="btn-row" style="margin-top:10px">'
+      + '<button class="btn btn-primary btn-sm" data-ta="consolidate">🎯 生成本轮巩固卷</button>'
+      + '<button class="btn btn-ghost btn-sm" data-ta="retry">🔄 再练一遍（重置）</button></div>'
       + '</div>';
   }
   function trainFullHtml(n, tr) {
@@ -15538,6 +15704,13 @@ function bind(el, next) {
       + '<div class="tr-sub">' + U.esc(n.name) + ' · 从概念到能力飞跃</div>'
       + '<div class="tr-prog">完成 <b>' + doneN + '</b>/5 · ' + (tr.finished ? '已毕业 🎓' : '坚持就是胜利') + '</div>'
       + '</div></div>'
+      + '<div class="tr-intensity">'
+      + '<span class="muted-sm">强度：</span>'
+      + ['lite', 'std', 'hard'].map(function (k) {
+        return '<button class="btn btn-sm ' + ((tr.intensity || 'std') === k ? 'btn-primary' : 'btn-ghost') + '" data-tintensity="' + k + '">' + INTENSITY_LABEL[k] + '</button>';
+      }).join('')
+      + '<span class="muted-sm">' + (INTENSITY_DESC[tr.intensity] || '') + ' · 共 ' + totalStepCount(tr.intensity) + ' 题</span>'
+      + '</div>'
       + '<div class="tr-steps">' + steps + '</div>'
       + (tr.finished ? reportHtml(n, tr) : '')
       + '<div class="tr-body">' + trainBodyHtml(n, tr, tr.step) + '</div>'
@@ -15573,17 +15746,37 @@ function bind(el, next) {
         + (e.traps && e.traps.length ? '<div class="cm-ai-h">🕳 失分陷阱</div><ul class="cm-ai-l cm-ai-trap">' + e.traps.map(function (x) { return '<li>' + Tex.renderInline(x) + '</li>'; }).join('') + '</ul>' : '')
         + (e.mnemonic ? '<div class="tr-key">💡 ' + Tex.renderInline(e.mnemonic) + '</div>' : '')
         + '</div>'
+        + '<div class="tr-explain-extra">'
+        + '<div class="btn-row" style="margin-top:10px">'
+        + '<button class="btn btn-ghost btn-sm" data-ta="demo">📖 典型例题演示</button>'
+        + '<button class="btn btn-ghost btn-sm" data-ta="cheat">🧮 公式速查卡</button>'
+        + '<button class="btn btn-ghost btn-sm" data-ta="faq">❓ 误区问答</button>'
+        + '</div>'
+        + (e.demo ? '<div data-ee="demo"><div class="cm-ai-h">📖 典型例题演示</div><div class="cm-ai-b">' + Tex.renderInline(e.demo.stem || '') + '</div>'
+          + (e.demo.solution ? '<details class="tr-r-sol" open><summary>完整演算</summary><div>' + Tex.renderInline(e.demo.solution) + '</div></details>' : '') + '</div>' : '<div data-ee="demo" data-ee-holder="demo"></div>')
+        + (e.cheatsheet && e.cheatsheet.length
+          ? '<div data-ee="cheat"><div class="cm-ai-h">🧮 公式速查卡</div><div class="tr-cheat">' + e.cheatsheet.map(function (c) {
+            return '<div class="tr-cheat-row"><span class="tr-cheat-name">' + U.esc(c.name || '') + '</span><span class="tr-cheat-f">' + Tex.renderInline(c.formula || '') + '</span>' + (c.note ? '<span class="muted-sm">' + U.esc(c.note) + '</span>' : '') + '</div>';
+          }).join('') + '</div></div>' : '<div data-ee="cheat" data-ee-holder="cheat"></div>')
+        + (e.faq && e.faq.length
+          ? '<div data-ee="faq"><div class="cm-ai-h">❓ 误区问答</div>' + e.faq.map(function (f, i) {
+            return '<details class="tr-faq" ' + (i === 0 ? 'open' : '') + '><summary>' + U.esc(f.q || '') + '</summary><div>' + Tex.renderInline(f.a || '') + '</div></details>';
+          }).join('') + '</div>' : '<div data-ee="faq" data-ee-holder="faq"></div>')
+        + '</div>'
         + '<div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" data-ta="next">✅ 我读懂了，进入下一步</button></div>';
     }
     var items = (tr.items && tr.items[s]) || [];
     if (!items.length) {
-      return head + '<div class="muted-sm">本步包含 ' + (step.count || 1) + ' 道' + (s === 2 ? '陷阱' : s === 3 ? '综合' : s === 4 ? '压轴检定' : '标准') + '题，AI 按真题难度出题。</div>'
+      return head + '<div class="muted-sm">本步包含 ' + stepCountOf(tr.intensity, s) + ' 道' + (s === 2 ? '陷阱' : s === 3 ? '综合' : s === 4 ? '压轴检定' : '标准') + '题，AI 按真题难度出题。</div>'
         + '<div data-tgen="' + s + '">'
         + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" data-ta="gen">🎯 生成题目</button>'
         + (s > 0 ? '<button class="btn btn-ghost" data-ta="back">← 上一步</button>' : '') + '</div></div>';
     }
     var qHtml = items.map(function (it, qi) { return trainQCardHtml(n, s, qi); }).join('');
-    return head + '<div class="tr-qlist">' + qHtml + '</div>';
+    return head
+      + (s === 4 ? '<div class="tr-timer" id="tr-timer">⏱ 检定倒计时 15:00（建议时间内完成，时间到请尽快判分）</div>' : '')
+      + stepBarHtml(n, tr, s)
+      + '<div class="tr-qlist">' + qHtml + '</div>';
   }
   // 单题卡片（编号徽章 + 题干 + 易错提示 + 作答区[手填/拍照/跳过] 或 判分结果）
   function trainQCardHtml(n, s, qi) {
@@ -15595,6 +15788,10 @@ function bind(el, next) {
     return '<div class="tr-qcard" data-tq="' + n.id + '-' + s + '-' + qi + '">'
       + '<div class="tr-q-no">' + (qi + 1) + '</div>'
       + '<div class="tr-q-main">'
+      + '<div class="tr-q-top">'
+      + (it.diff ? '<span class="tr-diff">' + '★★★★★'.slice(0, it.diff) + '<span class="muted-sm">' + '☆☆☆☆☆'.slice(it.diff) + '</span></span>' : '')
+      + (it.variantOf != null ? '<span class="tag tag-mod">变式' + (it.variantOf + 1) + '</span>' : '')
+      + '</div>'
       + '<div class="tr-q-stem">' + Tex.renderInline(it.stem) + '</div>'
       + (it.imageNeeded && it.imageHint
         ? '<div class="tr-q-fig"><div class="tr-q-fig-h">📐 题目含配图</div>'
@@ -15621,6 +15818,8 @@ function bind(el, next) {
             + '<div class="tr-r-comment">' + Tex.renderInline(ans.comment || '') + '</div>'
             + (ans.photo ? '<div class="muted-sm" style="margin-top:4px">📷 本次为拍照判分</div>' : '')
             + (it.solution ? '<details class="tr-r-sol"><summary>📖 标准答案与解析</summary><div>' + Tex.renderInline(it.solution) + '</div></details>' : '')
+            + (typeof ans.score === 'number' && ans.score < 60
+              ? '<div class="tr-q-acts" data-tvar-holder="' + s + '-' + qi + '"><button class="btn btn-sm btn-ghost" data-tvar="' + s + '-' + qi + '">🔄 出变式题（做对为止）</button></div>' : '')
             + '</div>'
           : '<div data-tact="' + s + '-' + qi + '">'
             + '<textarea class="input tr-in" data-tin="' + s + '-' + qi + '" rows="2" placeholder="写下你的作答…（可拍照代替打字）"></textarea>'
@@ -15670,6 +15869,7 @@ function bind(el, next) {
         var card = document.querySelector('[data-tq="' + n.id + '-' + s + '-' + qi + '"]');
         if (card) card.outerHTML = trainQCardHtml(n, s, qi);
         refreshTrainFoot(n);
+        refreshStepBar(n, s);
       }).catch(function (e) {
         endBusy(ac);
         if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
@@ -15682,6 +15882,24 @@ function bind(el, next) {
   function bindTrain(n) {
     var wrap = document.getElementById('cm-train-wrap');
     if (!wrap) return;
+    // 检定步倒计时（仅提示，不强制交卷）
+    var tr0 = trainOf(n);
+    if (tr0 && tr0.step === 4 && !tr0.finished) {
+      var remain = 15 * 60;
+      var tEl = wrap.querySelector('#tr-timer');
+      if (tEl) {
+        clearTrainTimer();
+        trainTimer = setInterval(function () {
+          remain--;
+          var el = document.getElementById('tr-timer');
+          if (!el) { clearTrainTimer(); return; }
+          var mm = Math.floor(remain / 60), ss = remain % 60;
+          el.textContent = '⏱ 检定倒计时 ' + (mm < 10 ? '0' + mm : mm) + ':' + (ss < 10 ? '0' + ss : ss) + (remain > 60 ? '' : ' ⚠️ 请尽快判分');
+          if (remain <= 60) el.classList.add('tr-timer-warn');
+          if (remain <= 0) { clearTrainTimer(); el.textContent = '⏱ 时间到！请尽快提交判分'; }
+        }, 1000);
+      }
+    }
     wrap.onclick = function (ev) {
       var t = ev.target;
       while (t && t !== wrap && !t.getAttribute) t = t.parentNode;
@@ -15709,6 +15927,16 @@ function bind(el, next) {
       if (ta === 'next') { advanceTrain(n, 1); return; }
       if (ta === 'back') { advanceTrain(n, -1); return; }
       if (ta === 'retry') { resetTrain(n); return; }
+      if (ta === 'consolidate') { consolidateWrong(n); return; }
+      if (ta === 'demo' || ta === 'cheat' || ta === 'faq') { explainExtra(n, ta); return; }
+      var tv = t.getAttribute('data-tvar');
+      if (tv) {
+        var vp = tv.split('-');
+        trainVariant(n, parseInt(vp[0], 10), parseInt(vp[1], 10));
+        return;
+      }
+      var ti = t.getAttribute('data-tintensity');
+      if (ti) { changeIntensity(n, ti); return; }
       var tj = t.getAttribute('data-tj');
       if (tj) {
         var parts = tj.split('-');
@@ -15738,6 +15966,7 @@ function bind(el, next) {
         var card2 = document.querySelector('[data-tq="' + n.id + '-' + s2 + '-' + qi2 + '"]');
         if (card2) card2.outerHTML = trainQCardHtml(n, s2, qi2);
         refreshTrainFoot(n);
+        refreshStepBar(n, s2);
         Toast.show('已跳过该题，可查看标准答案', 'info', 2500);
         return;
       }
@@ -15777,10 +16006,23 @@ function bind(el, next) {
   // 重置训练（再练一遍）：清题目/进度，但保留成绩资产（bestScore/history/复习日）供对比
   function resetTrain(n) {
     var old = trainOf(n) || {};
-    var fresh = { step: 0, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: old.bestScore || null, report: null, history: old.history || [], finishReviewAt: old.finishReviewAt || null };
+    var fresh = { step: 0, intensity: old.intensity || 'std', done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: old.bestScore || null, report: null, history: old.history || [], finishReviewAt: old.finishReviewAt || null };
     bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: fresh }); });
     renderTrainModal(n);
     Toast.show('已重置，开始新一轮特训', 'info', 2500);
+  }
+  // 切换题量强度：清题目/进度重新开始，保留成绩资产
+  function changeIntensity(n, k) {
+    var tr = trainOf(n);
+    if (!tr) return;
+    if ((tr.intensity || 'std') === k) return;
+    var fresh = Object.assign({}, tr, {
+      intensity: k, step: 0, done: [false, false, false, false, false], items: {}, answers: {},
+      startedAt: new Date().toISOString(), finished: false, report: null
+    });
+    bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: fresh }); });
+    renderTrainModal(n);
+    Toast.show('已切换为「' + INTENSITY_LABEL[k] + '」，题目已重置', 'info', 2500);
   }
   // 纯 CSS 撒花庆祝（零依赖）
   function fireConfetti() {
@@ -16418,7 +16660,7 @@ function bind(el, next) {
     };
   }
 
-  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepScored: stepScored, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain, reviewDueDate: reviewDueDate, reviewText: reviewText, wrongItems: wrongItems, historyTrendSvg: historyTrendSvg };
+  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepScored: stepScored, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain, changeIntensity: changeIntensity, reviewDueDate: reviewDueDate, reviewText: reviewText, wrongItems: wrongItems, historyTrendSvg: historyTrendSvg, stepCountOf: stepCountOf, totalStepCount: totalStepCount, consolidateWrong: consolidateWrong, trainVariantPrompt: trainVariantPrompt };
 })();
 
 
