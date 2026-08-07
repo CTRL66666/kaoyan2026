@@ -1973,6 +1973,21 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 }
 /* 已特训徽章（详情卡） */
 .tr-badge-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+/* 图谱页 5 项统计（考点/已测评/已掌握/已特训/锁定中） */
+.cm-stats { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 560px) { .cm-stats { grid-template-columns: repeat(2, 1fr); } }
+/* 成绩趋势折线 + 错题回顾 */
+.tr-trend { display: block; margin-top: 4px; }
+.tr-rep-trend { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.tr-wrong { margin-top: 12px; border: 1px solid #ffa39e; background: #fff1f0; border-radius: var(--r-btn); padding: 10px 12px; }
+.tr-wrong-ok { border-color: #b7eb8f; background: #f6ffed; }
+.tr-wrong-h { font-size: 13px; font-weight: 600; color: var(--danger); margin-bottom: 8px; }
+.tr-wrong-ok .tr-wrong-h { color: var(--ok); }
+.tr-wrong-item { border-bottom: 1px dashed #ffd6d6; padding: 8px 0; }
+.tr-wrong-item:last-child { border-bottom: none; }
+.tr-wrong-q { font-size: 13px; line-height: 1.7; color: var(--text-primary); }
+.tr-wrong-line { font-size: 12.5px; color: var(--text-secondary); margin-top: 3px; line-height: 1.7; }
+.tr-wrong-ans { color: var(--ok); }
 /* 作答按钮行（判分 / 拍照判分 / 跳过） */
 .tr-q-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
 /* 跳过结果卡 */
@@ -15427,6 +15442,50 @@ function bind(el, next) {
       + '<div class="tr-dash-val">' + (score == null ? '—' : score) + '<small>%</small></div>'
       + '<div class="tr-dash-label">掌握度</div></div>';
   }
+  function pad2(x) { var s = String(x); return s.length < 2 ? '0' + s : s; }
+  function dateKey(ts) { var d = new Date(ts); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+  function todayKey() { return dateKey(Date.now()); }
+  // 下次复习日：按检定分定间隔（≥85→7天 / ≥70→5天 / 其余3天）
+  function reviewDueDate(score) {
+    var days = score >= 85 ? 7 : score >= 70 ? 5 : 3;
+    return dateKey(Date.now() + days * 86400000);
+  }
+  function reviewText(n) {
+    var tr = trainOf(n);
+    if (!tr || !tr.finishReviewAt) return '';
+    return tr.finishReviewAt <= todayKey() ? '⏰ 已到期 · 快再练一遍' : '建议 ' + tr.finishReviewAt.slice(5) + ' 再练';
+  }
+  // 本轮错题聚合（score<60 的题：题干/你的作答/标准答案/点评）
+  function wrongItems(n, tr) {
+    var out = [];
+    [1, 2, 3, 4].forEach(function (s) {
+      var items = (tr.items && tr.items[s]) || [];
+      var ans = (tr.answers && tr.answers[s]) || [];
+      items.forEach(function (it, qi) {
+        var a = ans[qi];
+        if (a && typeof a.score === 'number' && a.score < 60) out.push({ step: s, item: it, ans: a });
+      });
+    });
+    return out;
+  }
+  // 成绩趋势迷你折线（最近 N 次训练）
+  function historyTrendSvg(history) {
+    if (!history || history.length < 2) return '';
+    var w = 120, h = 34, pad = 4;
+    var stepX = history.length > 1 ? (w - pad * 2) / (history.length - 1) : 0;
+    var pts = history.map(function (h2, i) {
+      var x = pad + i * stepX;
+      var y = h - pad - (h - pad * 2) * ((h2.avgScore || 0) / 100);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    var dots = history.map(function (h2, i) {
+      var x = pad + i * stepX;
+      var y = h - pad - (h - pad * 2) * ((h2.avgScore || 0) / 100);
+      return '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="2.2" fill="var(--blue)"/>';
+    }).join('');
+    return '<svg class="tr-trend" viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '">'
+      + '<polyline points="' + pts + '" fill="none" stroke="var(--blue)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>' + dots + '</svg>';
+  }
   function reportHtml(n, tr) {
     var r = tr.report || {};
     var rows = (r.stepScores || []).map(function (x) {
@@ -15434,10 +15493,29 @@ function bind(el, next) {
         + '<span class="tr-rep-bar"><span class="tr-rep-fill" style="width:' + (x.score != null ? x.score : 0) + '%"></span></span>'
         + '<span class="tr-rep-score">' + (x.score == null ? '—' : x.score + '分') + '</span></div>';
     }).join('');
+    var hist = tr.history || [];
+    var trendRow = hist.length >= 2
+      ? '<div class="tr-rep-trend"><span class="muted-sm">成绩趋势（' + hist.length + ' 次）：</span>' + historyTrendSvg(hist) + '</div>'
+      : '';
+    // 本轮错题回顾
+    var wrong = wrongItems(n, tr);
+    var wrongHtml = wrong.length
+      ? '<div class="tr-wrong"><div class="tr-wrong-h">❌ 本轮错题回顾（' + wrong.length + ' 题）</div>'
+        + wrong.map(function (w) {
+          return '<div class="tr-wrong-item">'
+            + '<div class="tr-wrong-q">' + Tex.renderInline(w.item.stem) + '</div>'
+            + '<div class="tr-wrong-line"><b>你的作答：</b>' + Tex.renderInline((w.ans.user && w.ans.user !== '[拍照作答]') ? w.ans.user : '（拍照作答）') + '</div>'
+            + '<div class="tr-wrong-line tr-wrong-ans"><b>标准答案：</b>' + Tex.renderInline(w.item.answer || '') + '</div>'
+            + (w.ans.comment ? '<div class="tr-wrong-line"><b>点评：</b>' + Tex.renderInline(w.ans.comment) + '</div>' : '')
+            + '</div>';
+        }).join('') + '</div>'
+      : '<div class="tr-wrong tr-wrong-ok"><div class="tr-wrong-h">✅ 本轮零错题，漂亮！</div></div>';
     return '<div class="tr-report">'
       + '<div class="tr-rep-head">🎓 训练报告 · 平均 ' + (r.avgScore || 0) + ' 分 · 耗时 ' + (r.durationMin || 0) + ' 分钟</div>'
+      + trendRow
       + rows
       + '<div class="tr-rep-advice">💬 ' + U.esc(r.advice || '') + '</div>'
+      + wrongHtml
       + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-ghost btn-sm" data-ta="retry">🔄 再练一遍（重置）</button></div>'
       + '</div>';
   }
@@ -15696,9 +15774,10 @@ function bind(el, next) {
       trainJudgePhoto(n, s4, qi4, f);
     };
   }
-  // 重置训练（再练一遍）
+  // 重置训练（再练一遍）：清题目/进度，但保留成绩资产（bestScore/history/复习日）供对比
   function resetTrain(n) {
-    var fresh = { step: 0, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: null, report: null };
+    var old = trainOf(n) || {};
+    var fresh = { step: 0, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: old.bestScore || null, report: null, history: old.history || [], finishReviewAt: old.finishReviewAt || null };
     bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: fresh }); });
     renderTrainModal(n);
     Toast.show('已重置，开始新一轮特训', 'info', 2500);
@@ -15730,7 +15809,8 @@ function bind(el, next) {
         var score = stepAvg(n, 4);
         var report = buildReport(n, tr);
         var done = tr.done.slice(); done[4] = true;
-        saveTrain(n, { done: done, finished: true, bestScore: Math.max(tr.bestScore || 0, score), report: report });
+        var history = (tr.history || []).concat([{ at: new Date().toISOString(), avgScore: score, durationMin: report.durationMin }]).slice(-8);
+        saveTrain(n, { done: done, finished: true, bestScore: Math.max(tr.bestScore || 0, score), report: report, history: history, finishReviewAt: reviewDueDate(score) });
         if (window.Mastery) Mastery.recordAnswer({ topicId: n.id, topicName: n.name, subject: 'ctrl', score: score, verdict: score >= 60 ? '通过' : '未通过', source: 'concept-train', sourceLabel: '考点特训', noMistake: true, tier: 0 });
         renderTrainModal(n);
         fireConfetti();
@@ -15776,9 +15856,11 @@ function bind(el, next) {
       + '<div class="muted-sm" style="margin-top:8px">前置：' + U.esc((n.deps || []).map(d => byId[d] && byId[d].name).filter(Boolean).join('、') || '无')
       + ' ｜ 后继：' + U.esc(kids.join('、') || '无') + '</div>'
       + (trainOf(n) && trainOf(n).finished
-        ? '<div class="tr-badge-row"><span class="tag tag-ok">🎓 已特训 · 最佳 ' + (trainOf(n).bestScore || 0) + ' 分</span>'
-          + '<span class="muted-sm">' + ((trainOf(n).report && trainOf(n).report.durationMin) || '') + ' 分钟完成 · '
-          + U.esc((trainOf(n).report && trainOf(n).report.advice) || '') + '</span></div>'
+        ? '<div class="tr-badge-row">'
+          + '<span class="tag tag-ok">🎓 已特训 · 最佳 ' + (trainOf(n).bestScore || 0) + ' 分</span>'
+          + (((trainOf(n).history || []).length > 1) ? '<span class="tag tag-mod">' + (trainOf(n).history.length) + ' 次训练</span>' : '')
+          + (reviewText(n) ? '<span class="tag ' + ((trainOf(n).finishReviewAt <= todayKey()) ? 'tag-warn' : '') + '">' + reviewText(n) + '</span>' : '')
+          + '<span class="muted-sm">' + U.esc((trainOf(n).report && trainOf(n).report.advice) || '') + '</span></div>'
         : '')
 
       + '<div class="btn-row" style="margin-top:10px">'
@@ -15809,12 +15891,13 @@ function bind(el, next) {
     const nodes = allNodes();
     const byId = indexOf(nodes);
 
-    let tested = 0, good = 0, locked = 0;
+    let tested = 0, good = 0, locked = 0, trained = 0;
     nodes.forEach(n => {
       const st = nodeState(n);
       if (st.tested) tested++;
       if (st.mastered >= 80) good++;
       if (st.locked) locked++;
+      if (trainOf(n) && trainOf(n).finished) trained++;
     });
     const pct = nodes.length ? Math.round(good / nodes.length * 100) : 0;
     const aiCnt = (bag().extra || []).filter(n => !n.major || n.major === majorName()).length;
@@ -15826,10 +15909,11 @@ function bind(el, next) {
       + '<div class="muted-sm">前置掌握度 &lt; 60% → 后继锁定。点击节点看依赖链（蓝=前置链，紫虚线=后继）与 AI 深度讲解。'
       + '<br>图谱可缩放：手机双指捏合缩放、单指拖动平移；电脑滚轮缩放、按住拖动。'
       + (mods.length ? '按章节分列：' + U.esc(mods.join('、')) + '。' : '') + '</div>'
-      + '<div class="stat-row">'
+      + '<div class="stat-row cm-stats">'
       + '<div class="stat"><div class="stat-num">' + nodes.length + '</div><div class="stat-label">考点</div></div>'
       + '<div class="stat"><div class="stat-num">' + tested + '</div><div class="stat-label">已测评</div></div>'
       + '<div class="stat"><div class="stat-num">' + good + '</div><div class="stat-label">已掌握</div></div>'
+      + '<div class="stat"><div class="stat-num">' + trained + '</div><div class="stat-label">已特训</div></div>'
       + '<div class="stat"><div class="stat-num">' + locked + '</div><div class="stat-label">锁定中</div></div>'
       + '</div>'
       + '<div class="cm-bar"><div class="cm-bar-in" style="width:' + pct + '%"></div></div>'
@@ -16334,7 +16418,7 @@ function bind(el, next) {
     };
   }
 
-  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepScored: stepScored, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain };
+  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepScored: stepScored, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain, reviewDueDate: reviewDueDate, reviewText: reviewText, wrongItems: wrongItems, historyTrendSvg: historyTrendSvg };
 })();
 
 
