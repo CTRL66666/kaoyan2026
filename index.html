@@ -936,15 +936,18 @@ body.cp-lock { overflow: hidden; }
 
 /* ---------- 作文红笔批改（精细标注） ---------- */
 .es-anno-wrap { line-height: 1.9; }
-.es-anno-doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 14px 16px; margin-top: 8px; }
-.es-para { margin: 8px 0; line-height: 2; font-size: 14px; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
-.es-anno-list { margin: 4px 0 12px; padding-left: 6px; }
-.es-anno-tip { border-left: 3px solid var(--line); background: var(--surface); padding: 8px 12px; margin: 6px 0; border-radius: 0 var(--r-btn) var(--r-btn) 0; font-size: 13px; line-height: 1.7; }
-.es-anno-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.es-anno-tag { font-size: 11px; color: #fff; padding: 1px 8px; border-radius: 6px; font-weight: 500; }
-.es-anno-q { color: var(--text-secondary); font-style: italic; margin: 4px 0; }
-.es-anno-c { color: var(--text-secondary); margin: 2px 0; }
-.es-anno-s { color: var(--ok); margin-top: 4px; font-weight: 500; }
+.es-anno-doc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 18px 20px; margin-top: 8px; }
+/* 原文保持大行间距（双倍）：按段渲染，段内每句独立行 */
+.es-para { margin: 0 0 16px; line-height: 2.2; font-size: 14px; color: var(--text-primary); }
+.es-para:last-child { margin-bottom: 0; }
+.es-sent { padding: 6px 0; line-height: 2.2; }
+.es-parabreak { height: 12px; }
+/* 内联批注：紧贴被标句子下方，小字号+左条色，类型标签 + 线型 + 点评 + 建议 */
+.es-inline-anno { font-size: 12.5px; line-height: 1.7; padding: 4px 10px 4px 12px; margin: 0 0 4px 18px; border-left: 3px solid var(--line); border-radius: 0 var(--r-btn) var(--r-btn) 0; background: var(--surface-muted); color: var(--text-secondary); }
+.es-inline-anno + .es-sent { margin-top: 4px; }
+.es-anno-tag { display: inline-block; font-size: 11px; color: #fff; padding: 1px 8px; border-radius: 6px; font-weight: 500; vertical-align: middle; }
+.es-inline-comment { margin-left: 2px; }
+.es-inline-suggest { color: var(--ok); font-weight: 500; margin-left: 2px; }
 .es-mark { background: rgba(255, 235, 235, 0.5); padding: 0 2px; border-radius: 2px; cursor: help; }
 .es-mark-underline { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 2px; }
 .es-mark-wavy { text-decoration: underline wavy; text-decoration-thickness: 1.5px; text-underline-offset: 2px; }
@@ -19448,54 +19451,60 @@ function bind(el, next) {
       + '}\n'
       + '硬约束：① find 必须能在原文 substring 精确找到；② type 限五选一；③ mark 三选一；④ 数组完整闭合（绝不能截断）；⑤ 不要给整段都标，只标真正需改的；⑥ 只输出 JSON。';
   }
-  // 渲染精细批改结果：分数+总评 → 按段原文中标注 find → 段下集中展示批注列表 → 结尾建议
+  // 渲染精细批改结果：分数+总评 → 原文按句子分行（双倍行距）+ 每个句子下紧贴小字号内联批注
   function annotateResultHtml(r, originalText, tk) {
     var t = ESSAY_TYPES[tk];
     var annos = (r && r.annotations) || [];
     annos.forEach(function (a, i) { a._i = i; });
     var pct = (typeof r.score === 'number' && r.score >= 0) ? r.score / t.max : 0;
     var color = pct >= 0.7 ? 'var(--ok)' : pct >= 0.5 ? 'var(--warn)' : 'var(--danger)';
-    // 按段落切（保留双换行分段）
+    // 按段切（保留双换行分段；段内按句子再切：按 . ! ? + 空白/行尾）
     var paras = originalText.split(/\n{2,}/);
-    var parasHtml = paras.map(function (para) {
-      if (!para.trim()) return '';
-      // 该段涉及的批注（find 出现在该段）
-      var inPara = annos.filter(function (a) { return para.indexOf(a.find || '') >= 0; });
-      // 用 <mark> 高亮（按 find 长度倒序避免重叠问题）
-      var marked = para;
-      inPara.slice().sort(function (a, b) { return (b.find || '').length - (a.find || '').length; }).forEach(function (a) {
-        var f = a.find || '';
-        if (!f) return;
-        var safe = f.replace(/[.*+?^${}()|[\]\\]/g, '\\<!--@js-->').replace(/[<>]/g, '');
-        try {
-          var re = new RegExp(safe);
-          marked = marked.replace(re, '<mark class="es-mark es-mark-' + (a.type || '其他') + '" data-i="' + a._i + '">' + f + '</mark>');
-        } catch (e) {}
-      });
-      var annoListHtml = '';
-      if (inPara.length) {
-        annoListHtml = '<div class="es-anno-list">' + inPara.map(function (a) {
+    var sentSplitRe = /[^.!?\n]+[.!?]+(?=\s|$)|[^.!?\n]+$/g;
+    var docHtml = paras.map(function (para) {
+      if (!para.trim()) return '<div class="es-parabreak"></div>';
+      var sents = (para.match(sentSplitRe) || [para]).map(function (s) { return s.replace(/\s+$/, ''); }).filter(function (s) { return s.trim(); });
+      var sHtml = '';
+      sents.forEach(function (sent) {
+        var hits = annos.filter(function (a) {
+          var f = (a.find || '').trim();
+          if (!f) return false;
+          return sent.indexOf(f) >= 0;
+        });
+        // 标注 find（按长度倒序避免重叠）
+        var marked = sent;
+        hits.slice().sort(function (a, b) { return (b.find || '').length - (a.find || '').length; }).forEach(function (a) {
+          var f = a.find || '';
+          if (!f) return;
+          try {
+            var safe = f.replace(/[.*+?^${}()|[\]\\]/g, '\\<!--@js-->').replace(/[<>]/g, '');
+            var re = new RegExp(safe);
+            marked = marked.replace(re, '<mark class="es-mark es-mark-' + (a.type || '其他') + '" data-i="' + a._i + '">' + f + '</mark>');
+          } catch (e) {}
+        });
+        sHtml += '<div class="es-sent">' + marked + '</div>';
+        // 该句下方：每个 hit 一个内联小批注（彩色标签 + 点评 + 建议，紧贴对应句）
+        hits.forEach(function (a) {
           var m = issueMeta({ type: a.type });
           var markKey = a.mark === 'wavy' ? 'es-mark-wavy' : (a.mark === 'strikethrough' ? 'es-mark-strike' : 'es-mark-underline');
           var sevTxt = a.severity === 'major' ? '⚠️ 重要' : '· 小修';
-          return '<div class="es-anno-tip" style="border-left-color:' + m.c + '">'
-            + '<div class="es-anno-head"><span class="es-anno-tag" style="background:' + m.c + '">' + U.esc(m.key) + '</span>'
-            + '<span class="' + markKey + '">' + sevTxt + '</span></div>'
-            + '<div class="es-anno-q">"' + U.esc(a.find || '') + '"</div>'
-            + (a.comment ? '<div class="es-anno-c">' + U.esc(a.comment) + '</div>' : '')
-            + (a.suggestion ? '<div class="es-anno-s">→ ' + U.esc(a.suggestion) + '</div>' : '')
+          sHtml += '<div class="es-inline-anno" style="border-left-color:' + m.c + '">'
+            + '<span class="es-anno-tag" style="background:' + m.c + '">' + U.esc(m.key) + '</span> '
+            + '<span class="' + markKey + '">' + sevTxt + '</span> '
+            + '<span class="es-inline-comment">' + U.esc(a.comment || '') + '</span>'
+            + (a.suggestion ? ' <span class="es-inline-suggest">→ ' + U.esc(a.suggestion) + '</span>' : '')
             + '</div>';
-        }).join('') + '</div>';
-      }
-      return '<div class="es-para">' + marked.replace(/\n/g, '<br>') + '</div>' + annoListHtml;
-    }).join('');
+        });
+      });
+      return '<div class="es-para">' + sHtml + '</div>';
+    }).join('<div class="es-parabreak"></div>');
     return '<div class="es-anno-wrap">'
       + '<div class="essay-score-row"><div class="essay-score" style="color:' + color + '">' + (r.score >= 0 ? r.score : '?') + '<span class="essay-max">/' + t.max + '</span></div>'
       + '<div class="essay-band" style="color:' + color + '">' + U.esc(r.band || '') + '</div></div>'
       + '<div class="pm-ai-section"><b>📋 总评：</b><div class="pm-ai-body">' + U.esc(r.summary || '') + '</div></div>'
       + '<div class="pm-ai-section"><b>📝 红笔批改（保留原文）：</b>'
-      + '<div class="muted-sm" style="margin-bottom:8px">下划线/波浪线/删除线对应需修改处，下方批注含点评与建议。</div>'
-      + '<div class="es-anno-doc">' + parasHtml + '</div></div>'
+      + '<div class="muted-sm" style="margin-bottom:8px">原文保持原貌（双倍行距），标注的句子下方紧跟小字号批注（点评 + 建议）。</div>'
+      + '<div class="es-anno-doc">' + docHtml + '</div></div>'
       + (r.modelSentence ? '<div class="pm-ai-section"><b>💎 高分句型：</b><div class="pm-ai-body">' + U.esc(r.modelSentence) + '</div></div>' : '')
       + (r.advice ? '<div class="pm-ai-section"><b>🎯 备考建议：</b><div class="pm-ai-body">' + U.esc(r.advice) + '</div></div>' : '')
       + '<div class="pm-ai-section" style="text-align:center;margin-top:14px"><button class="btn btn-ghost" id="es-anno-back">← 返回普通批改结果</button></div>'
