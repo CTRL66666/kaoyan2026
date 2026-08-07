@@ -13714,14 +13714,26 @@ function bind(el, next) {
   }
 
   // ---------- 数据访问 ----------
+  // 每次访问都对齐 seeds()：已种内置卡保留 uses，新增自动补种（解决用户初始化后新增的卡永远看不到的问题）
   function list() {
     var s = Store.get();
     if (!s.playbooks) s.playbooks = [];
+    var currentSeeds = seeds();
+    // 首次播种：playbooks 为空时全量种一次（兼容老数据）
     if (!s.inspector.seeded && !s.playbooks.length) {
-      Store.update(function (x) { x.playbooks = seeds(); x.inspector.seeded = true; });
+      Store.update(function (x) { x.playbooks = currentSeeds.slice(); x.inspector.seeded = true; });
       return Store.get().playbooks;
     }
     if (!s.inspector.seeded) Store.update(function (x) { x.inspector.seeded = true; });
+    // 增量播种：seeds() 升级后，凡 Store 缺失的内置 id 补种（已存在的不覆盖，保留用户 uses）
+    var existing = {};
+    s.playbooks.forEach(function (p) { if (p.source === 'builtin') existing[p.id] = 1; });
+    var additions = currentSeeds.filter(function (seed) { return !existing[seed.id]; });
+    if (additions.length) {
+      var add = additions.slice();
+      Store.update(function (x) { add.forEach(function (p) { x.playbooks.unshift(p); }); });
+      return Store.get().playbooks;
+    }
     return s.playbooks;
   }
   function byId(id) { return (Store.get().playbooks || []).filter(function (p) { return p.id === id; })[0] || null; }
@@ -14489,7 +14501,8 @@ function bind(el, next) {
     parseExampleRobust: parseExampleRobust,
     analyze: analyze,
     riskScore: riskScore,
-    seedCount: function () { return seeds().length; }
+    seedCount: function () { return seeds().length; },
+    list: list
   };
 })();
 
