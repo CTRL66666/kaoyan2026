@@ -1978,6 +1978,14 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 /* 跳过结果卡 */
 .tr-q-result.tr-skip { background: var(--surface); border: 1px dashed var(--line); color: var(--text-secondary); }
 .tr-q-result.tr-skip .tr-r-badge { color: var(--text-muted); }
+/* 题目含图提示 */
+.tr-q-fig { background: #fffbe6; border: 1px solid #ffe58f; border-radius: var(--r-btn); padding: 10px 12px; margin: 8px 0; }
+.tr-q-fig-h { font-weight: 600; color: var(--warn); margin-bottom: 4px; font-size: 13px; }
+.tr-q-fig-body { font-size: 13px; line-height: 1.7; color: var(--text-secondary); margin-bottom: 4px; }
+/* 选择题选项展示（纯展示非交互） */
+.tr-q-opts { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+.tr-q-opt { display: flex; gap: 8px; font-size: 13px; line-height: 1.6; padding: 4px 8px; border-radius: var(--r-btn); }
+.tr-q-opt-letter { flex: 0 0 18px; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; border: 1px solid var(--line); font-size: 11px; color: var(--text-muted); font-weight: 600; }
 
 </style>
 </head>
@@ -15219,21 +15227,36 @@ function bind(el, next) {
   // 分步出题提示词（standard=标准题 / trap=陷阱题 / apply=综合题 / exam=压轴检定）
   function trainGenPrompt(n, s) {
     var mode = s === 1
-      ? '出 2 道【标准题】：难度中等，覆盖该考点最常见考法与标准解题流程，题干含必要数据，答案完整'
+      ? '出 2 道【标准题】：难度中等，覆盖该考点最常见考法与标准解题流程'
       : s === 2
       ? '出 2 道【陷阱题】：题干或选项中包含典型错误（符号错/漏条件/概念张冠李戴/绝对化表述/范围漏界），考学生能否识别并纠正'
       : s === 3
       ? '出 1 道【综合题】：多步推导，需综合运用该考点与其前置考点，计算量大'
       : '出 1 道【压轴检定题】：难度接近考研压轴题（区分度题），需灵活运用该考点，绝不允许送分';
-    return '针对考点「' + n.name + '」' + mode + '。'
-      + '教材定位：' + (n.book || textbook()) + '。'
-      + '只输出JSON：{"items":[{"stem":"题干（数学式用$...$包裹）","answer":"标准答案","solution":"分步详解(≤180字)","trap":"易错点(≤30字)"}]}，不要任何多余文字。';
+    return '针对考点「' + n.name + '」' + mode + '。教材定位：' + (n.book || textbook()) + '。\n'
+      + '【输出格式硬约束】（严格 JSON，不要任何多余文字、不要 markdown 围栏）：\n'
+      + '{"items":[{"type":"choice|solve","stem":"题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"标准答案（choice 填正确选项字母如 A；solve 填完整过程）","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","imageNeeded":true|false,"imageHint":"图描述"}]}\n'
+      + '【判题要求】：\n'
+      + '① type 必填：概念辨析/判断/正误类出 "choice"（4选1），其他出 "solve"。\n'
+      + '② choice 必须给 4 个互斥选项（干扰项须有明确错误依据，不能"都对/都错"），answerIdx 给正确选项下标 0-3；solve 不用给 options/answerIdx（给空数组和 -1）。\n'
+      + '③ imageNeeded：题目涉及电路/几何/力学示意图/流程框图等需要配图才能理解时填 true；纯文字题填 false。\n'
+      + '④ imageHint 仅在 imageNeeded=true 时填（≤80字）：用文字精准描述图的关键内容——节点、元件、参数值、连接关系，让读者脑补出图像（例："电路：Ui → R1=1Ω → 节点a → R2=2Ω → 节点b → C=1F → 地；Uo 从节点b 取"）。\n'
+      + '⑤ 质量纪律：题干含必要数据/参数；solve 题不要送分；solution 必须含关键步骤。';
   }
-  // 判分提示词
+  // 判分提示词（支持选择题/含图题）
   function trainJudgePrompt(n, s, item, userAns) {
     var stepName = TRAIN_STEPS[s].name;
-    return '判分。考点：「' + n.name + '」（' + stepName + '）。\n题目：' + item.stem + '\n标准答案：' + item.answer + '\n考生作答：' + (userAns || '（空白）')
-      + '\n输出JSON：{"correct":"对|错|部分对","score":0-100,"comment":"点评(≤90字，点出错误或关键步骤，公式用$...$包裹)"}，不要任何多余文字。';
+    var qCtx = '';
+    if (item && item.imageHint) qCtx += '题目含图（仅文字描述）：' + item.imageHint + '\n';
+    if (item && item.options && item.options.length) {
+      qCtx += '选项：' + item.options.map(function (o, i) { return 'ABCD'[i] + '.' + String(o || ''); }).join('；') + '\n';
+    }
+    return '判分。考点：「' + n.name + '」（' + stepName + '）。\n'
+      + qCtx
+      + '题目：' + (item && item.stem || '') + '\n'
+      + '标准答案：' + (item && item.answer || '') + '\n'
+      + '考生作答：' + (userAns || '（空白）') + '\n'
+      + '输出JSON：{"correct":"对|错|部分对","score":0-100,"comment":"点评(≤90字，公式用$...$包裹)"}，不要任何多余文字。';
   }
   // ---------- 非阻塞 AI 辅助（生成/判分可取消、有进度提示、就地更新） ----------
   var tbusy = null; // {key, ac} 当前训练 AI 任务
@@ -15315,7 +15338,17 @@ function bind(el, next) {
       var arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
       if (!arr || !arr.length) throw new Error('未生成有效题目');
       var items = arr.slice(0, TRAIN_STEPS[s].count || 1).map(function (it) {
-        return { stem: String(it.stem || ''), answer: String(it.answer || ''), solution: String(it.solution || ''), trap: String(it.trap || '') };
+        return {
+          type: it.type === 'choice' ? 'choice' : 'solve',
+          stem: String(it.stem || ''),
+          options: Array.isArray(it.options) ? it.options.slice(0, 4).map(function (o) { return String(o || ''); }) : [],
+          answerIdx: typeof it.answerIdx === 'number' && it.answerIdx >= 0 && it.answerIdx <= 3 ? it.answerIdx : -1,
+          answer: String(it.answer || ''),
+          solution: String(it.solution || ''),
+          trap: String(it.trap || ''),
+          imageNeeded: !!it.imageNeeded,
+          imageHint: String(it.imageHint || '')
+        };
       });
       saveTrain(n, { items: Object.assign({}, (tr.items || {}), { [s]: items }) });
       renderTrainModal(n);
@@ -15485,6 +15518,16 @@ function bind(el, next) {
       + '<div class="tr-q-no">' + (qi + 1) + '</div>'
       + '<div class="tr-q-main">'
       + '<div class="tr-q-stem">' + Tex.renderInline(it.stem) + '</div>'
+      + (it.imageNeeded && it.imageHint
+        ? '<div class="tr-q-fig"><div class="tr-q-fig-h">📐 题目含配图</div>'
+          + '<div class="tr-q-fig-body">' + Tex.renderInline(it.imageHint) + '</div>'
+          + '<div class="muted-sm">⚠️ 前端无法直接渲染电路/几何图；纯前端方案展示文字版图描述，请对照教材对应章节图作答（或拍照上传教材图后让 AI 判分）。</div></div>'
+        : '')
+      + (it.type === 'choice' && it.options && it.options.length
+        ? '<div class="tr-q-opts">' + it.options.map(function (o, i) {
+          return '<div class="tr-q-opt"><span class="tr-q-opt-letter">' + 'ABCD'[i] + '</span><span>' + Tex.renderInline(String(o || '')) + '</span></div>';
+        }).join('') + '</div>'
+        : '')
       + (it.trap ? '<div class="tr-q-trap">🕳 易错点：' + Tex.renderInline(it.trap) + '</div>' : '')
       + (ans && ans.skipped
         ? '<div class="tr-q-result tr-skip">'
@@ -15526,7 +15569,11 @@ function bind(el, next) {
       var ac = new AbortController();
       tbusy = { key: 'photo:' + s + '-' + qi, ac: ac };
       bindCancel(ac);
-      var usr = '考生提交了作答照片（手写或印刷）。请识别照片中的作答内容并判分。\n考点：「' + n.name + '」（' + TRAIN_STEPS[s].name + '）。\n题目：' + item.stem + '\n标准答案：' + item.answer
+      var usr = '考生提交了作答照片（手写或印刷）。请识别照片中的作答内容并判分。\n考点：「' + n.name + '」（' + TRAIN_STEPS[s].name + '）。'
+        + (item.imageHint ? '\n题目含图（仅文字描述）：' + item.imageHint : '')
+        + '\n题目：' + item.stem
+        + (item.options && item.options.length ? '\n选项：' + item.options.map(function (o, i) { return 'ABCD'[i] + '.' + String(o || ''); }).join('；') : '')
+        + '\n标准答案：' + item.answer
         + '\n输出JSON：{"correct":"对|错|部分对|无法辨认","score":0-100,"comment":"点评(≤90字，公式用$...$包裹)"}。若照片中看不出作答内容，correct 必须为"无法辨认"。不要任何多余文字。';
       AI.chatJSON(aiSys(), usr, dataUrl, { cache: false, signal: ac.signal }).then(function (o) {
         endBusy(ac);
