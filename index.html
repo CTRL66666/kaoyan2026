@@ -1890,30 +1890,89 @@ html[data-theme="night"] .pb-reco { box-shadow: 0 2px 10px rgba(0, 0, 0, .35); }
 html[data-theme="night"] .gd-step { box-shadow: 0 4px 16px rgba(0, 0, 0, .4); }
 html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2), 0 10px 30px rgba(0, 0, 0, .5); }
 
-/* ---------- 考点特训营（conceptmap cm-train / tr-*） ---------- */
-.cm-train { display: flex; flex-direction: column; gap: 12px; }
-.tr-top { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
-.tr-prog { color: var(--text-muted); font-size: 12px; }
-.tr-bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
-.tr-bar-fill { height: 100%; background: var(--blue); border-radius: 99px; transition: width .3s; }
+/* ---------- 考点特训营 2.0（conceptmap cm-train / tr-*） ---------- */
+.cm-train { display: flex; flex-direction: column; gap: 14px; position: relative; }
+/* 顶栏：环形仪表 + 标题 */
+.tr-head { display: flex; align-items: center; gap: 16px; padding: 4px 2px; }
+.tr-dash { position: relative; width: 84px; height: 84px; flex: 0 0 84px; }
+.tr-dash-bg { fill: none; stroke: var(--line); stroke-width: 7; }
+.tr-dash-fg { fill: none; stroke-width: 7; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dashoffset .8s ease; }
+.tr-dash-val { position: absolute; top: 22px; left: 0; right: 0; text-align: center; font-size: 20px; font-weight: 600; line-height: 1; color: var(--text-primary); }
+.tr-dash-val small { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.tr-dash-label { position: absolute; top: 52px; left: 0; right: 0; text-align: center; font-size: 11px; color: var(--text-muted); }
+.tr-head-main { flex: 1; min-width: 0; }
+.tr-title { font-size: 18px; font-weight: 600; color: var(--text-primary); }
+.tr-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.tr-prog { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.tr-prog b { color: var(--text-primary); }
+/* 步骤胶囊条 */
 .tr-steps { display: flex; gap: 6px; flex-wrap: wrap; }
-.tr-step { display: flex; align-items: center; gap: 5px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.tr-step { display: flex; align-items: center; gap: 5px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 99px; font-size: 12px; color: var(--text-muted); background: var(--surface); cursor: pointer; transition: border-color .15s, background .15s; }
+.tr-step:hover:not(:disabled) { border-color: var(--text-muted); }
+.tr-step:disabled { opacity: .45; cursor: not-allowed; }
 .tr-step.tr-done { border-color: var(--ok); color: var(--ok); background: #f6ffed; }
-.tr-step.tr-cur { border-color: var(--text-primary); color: var(--text-primary); font-weight: 500; background: var(--surface-muted); }
-.tr-no { font-weight: 500; }
-.tr-arrow { font-size: 10px; }
-.tr-body { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 14px 16px; }
-.tr-body-h { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
-.tr-q { border-bottom: 1px dashed var(--line); padding: 10px 0; }
-.tr-q:last-child { border-bottom: none; }
-.tr-q-t { font-size: 14px; line-height: 1.7; }
-.tr-q-trap { font-size: 12px; color: var(--warn); margin: 4px 0; }
-.tr-q-result { font-size: 13px; line-height: 1.7; padding: 8px 10px; border-radius: var(--r-btn); margin-top: 8px; }
-.tr-q-result.tr-ok { background: #f6ffed; color: var(--ok); }
-.tr-q-result.tr-bad { background: #fff1f0; color: var(--danger); }
-.tr-q-result.tr-mid { background: #fffbe6; color: var(--warn); }
-.tr-q-sol { margin-top: 6px; color: var(--text-secondary); font-size: 13px; }
-.tr-in { margin-top: 6px; }
+.tr-step.tr-cur { border-color: var(--text-primary); color: var(--text-primary); font-weight: 500; background: var(--surface-muted); box-shadow: inset 0 0 0 1px var(--text-primary); }
+.tr-no { font-weight: 600; }
+/* 主体 */
+.tr-body { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 16px 18px; }
+.tr-body-h { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary); }
+.tr-body-h .muted-sm { font-weight: 400; margin-left: 6px; }
+/* 讲解卡 */
+.tr-explain { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 14px 16px; background: var(--bg); }
+.tr-key { margin-top: 10px; padding: 8px 12px; background: #fffbe6; border-left: 3px solid var(--warn); border-radius: 0 var(--r-btn) var(--r-btn) 0; font-size: 13px; color: var(--text-secondary); }
+/* 题目卡片 */
+.tr-qlist { display: flex; flex-direction: column; gap: 12px; }
+.tr-qcard { display: flex; gap: 12px; border: 1px solid var(--line); border-radius: var(--r-btn); padding: 14px; background: var(--bg); transition: border-color .15s; }
+.tr-qcard:hover { border-color: var(--text-muted); }
+.tr-q-no { flex: 0 0 26px; height: 26px; line-height: 26px; text-align: center; border-radius: 50%; background: var(--text-primary); color: #fff; font-size: 13px; font-weight: 600; }
+.tr-q-main { flex: 1; min-width: 0; }
+.tr-q-stem { font-size: 14px; line-height: 1.8; color: var(--text-primary); }
+.tr-q-trap { font-size: 12.5px; color: var(--warn); margin: 6px 0; background: #fffbe6; padding: 4px 10px; border-radius: var(--r-btn); display: inline-block; }
+.tr-in { margin-top: 8px; }
+/* 判分结果卡 */
+.tr-q-result { font-size: 13px; line-height: 1.7; padding: 10px 12px; border-radius: var(--r-btn); margin-top: 10px; }
+.tr-q-result.tr-ok { background: #f6ffed; border: 1px solid #b7eb8f; }
+.tr-q-result.tr-bad { background: #fff1f0; border: 1px solid #ffa39e; }
+.tr-q-result.tr-mid { background: #fffbe6; border: 1px solid #ffe58f; }
+.tr-r-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tr-r-badge { font-weight: 600; }
+.tr-ok .tr-r-badge { color: var(--ok); }
+.tr-bad .tr-r-badge { color: var(--danger); }
+.tr-mid .tr-r-badge { color: var(--warn); }
+.tr-r-score { font-size: 16px; font-weight: 700; margin-left: auto; }
+.tr-ok .tr-r-score { color: var(--ok); }
+.tr-bad .tr-r-score { color: var(--danger); }
+.tr-mid .tr-r-score { color: var(--warn); }
+.tr-r-comment { color: var(--text-secondary); }
+.tr-r-sol { margin-top: 8px; color: var(--text-secondary); }
+.tr-r-sol summary { cursor: pointer; font-weight: 500; }
+.tr-r-sol div { margin-top: 6px; padding: 8px 10px; background: var(--surface); border-left: 3px solid var(--blue); border-radius: 0 var(--r-btn) var(--r-btn) 0; }
+/* 生成中 / 判分中 */
+.tr-loading, .tr-judging { display: flex; align-items: center; gap: 10px; padding: 16px; border: 1px dashed var(--line); border-radius: var(--r-btn); margin-top: 10px; font-size: 13px; color: var(--text-secondary); }
+.tr-judging { padding: 10px 12px; margin-top: 8px; }
+.tr-spin { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--text-primary); border-radius: 50%; animation: tr-rot .8s linear infinite; flex: 0 0 16px; }
+@keyframes tr-rot { to { transform: rotate(360deg); } }
+/* 底部操作条 */
+.tr-foot { display: flex; justify-content: space-between; align-items: center; padding: 2px 2px 0; }
+.tr-foot .btn:disabled { opacity: .45; cursor: not-allowed; }
+/* 训练报告 */
+.tr-report { border: 1px solid var(--ok); border-radius: var(--r-btn); padding: 14px 16px; background: #f6ffed; }
+.tr-rep-head { font-size: 14px; font-weight: 600; color: var(--ok); margin-bottom: 10px; }
+.tr-rep-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 12.5px; }
+.tr-rep-name { flex: 0 0 88px; color: var(--text-secondary); }
+.tr-rep-bar { flex: 1; height: 8px; background: #d9f7be; border-radius: 99px; overflow: hidden; }
+.tr-rep-fill { display: block; height: 100%; background: var(--ok); border-radius: 99px; transition: width .6s ease; }
+.tr-rep-score { flex: 0 0 44px; text-align: right; color: var(--text-secondary); }
+.tr-rep-advice { margin-top: 10px; font-size: 13px; color: var(--text-secondary); line-height: 1.7; }
+/* 撒花庆祝 */
+.tr-confetti { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; overflow: hidden; z-index: 5; }
+.tr-confetti i { position: absolute; top: -12px; border-radius: 2px; animation-name: tr-fall; animation-timing-function: linear; animation-fill-mode: forwards; }
+@keyframes tr-fall {
+  0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(560px) rotate(720deg); opacity: 0; }
+}
+/* 已特训徽章（详情卡） */
+.tr-badge-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 
 </style>
 </head>
@@ -15171,11 +15230,75 @@ function bind(el, next) {
     return '判分。考点：「' + n.name + '」（' + stepName + '）。\n题目：' + item.stem + '\n标准答案：' + item.answer + '\n考生作答：' + (userAns || '（空白）')
       + '\n输出JSON：{"correct":"对|错|部分对","score":0-100,"comment":"点评(≤90字，点出错误或关键步骤，公式用$...$包裹)"}，不要任何多余文字。';
   }
-  // 生成某一步的题目
+  // ---------- 非阻塞 AI 辅助（生成/判分可取消、有进度提示、就地更新） ----------
+  var tbusy = null; // {key, ac} 当前训练 AI 任务
+  function isAbort(e) { return !!(e && (e.name === 'AbortError' || e.code === 20)); }
+  function endBusy(ac) { if (tbusy && tbusy.ac === ac) tbusy = null; }
+  function aiBusyCard(msg) {
+    return '<div class="tr-loading"><div class="tr-spin"></div><div class="tr-load-txt">' + msg + '</div>'
+      + '<button class="btn btn-ghost btn-sm" id="tr-cancel">取消</button></div>';
+  }
+  function bindCancel(ac) {
+    var cb = document.getElementById('tr-cancel');
+    if (cb) cb.onclick = function () { ac.abort(); };
+  }
+  // 某一步是否已全部判分
+  function stepDone(n, s) {
+    var tr = trainOf(n);
+    if (!tr || !tr.items || !tr.items[s]) return false;
+    var items = tr.items[s], ans = tr.answers[s] || [];
+    return items.length > 0 && ans.length >= items.length && ans.every(function (a) { return !!a; });
+  }
+  function stepAvg(n, s) {
+    var tr = trainOf(n);
+    var ans = (tr && tr.answers && tr.answers[s]) || [];
+    var sc = ans.filter(function (a) { return a && typeof a.score === 'number'; });
+    return sc.length ? Math.round(sc.reduce(function (a, x) { return a + x.score; }, 0) / sc.length) : 60;
+  }
+  // 判分 <60 自动入错题画像（dedup 防重）
+  function trainToMistake(n, s, item, ans) {
+    if (!ans || ans.score >= 60) return;
+    Store.update(function (st) {
+      st.mistakes = st.mistakes || [];
+      var dedup = 'train:' + n.id + ':' + s + ':' + String(item.stem || '').slice(0, 24);
+      if (st.mistakes.some(function (m) { return m.dedupKey === dedup; })) return;
+      st.mistakes.unshift({
+        id: U.uid(), subject: 'ctrl', type: 'concept',
+        desc: '【考点特训】' + n.name + '·' + TRAIN_STEPS[s].name + '：' + String(ans.comment || '作答有误').slice(0, 70),
+        stem: item.stem || '', answer: item.answer || '', solution: item.solution || '', trap: item.trap || '',
+        refId: n.id, source: 'concept-train', dedupKey: dedup,
+        date: U.shortDate(), createdAt: new Date().toISOString()
+      });
+    });
+  }
+  // 训练报告（每步得分 + 平均分 + 耗时 + 建议；未判分的步不参与）
+  function buildReport(n, tr) {
+    var stepScores = TRAIN_STEPS.map(function (step, i) {
+      var ans = (tr.answers && tr.answers[i]) || [];
+      return { name: step.name, score: ans.length ? stepAvg(n, i) : null };
+    });
+    var scored = stepScores.filter(function (x) { return x.score != null; });
+    var avg = scored.length ? Math.round(scored.reduce(function (a, x) { return a + x.score; }, 0) / scored.length) : 60;
+    var durationMin = Math.max(1, Math.round((Date.now() - new Date(tr.startedAt).getTime()) / 60000));
+    var weakest = scored.slice().sort(function (a, b) { return (a.score || 0) - (b.score || 0); })[0];
+    var advice = weakest && weakest.score < 60
+      ? '「' + weakest.name + '」正确率偏低（' + weakest.score + ' 分），建议回到该步重练，或先看讲解再战。'
+      : (avg >= 80 ? '各步骤表现均衡，本考点已基本掌握，可以自信往后推进！' : '各步骤表现均衡，隔天再练一遍效果更好。');
+    return { avgScore: avg, stepScores: stepScores, durationMin: durationMin, finishedAt: new Date().toISOString(), advice: advice };
+  }
+  // 生成某一步的题目（就地 loading → 完成后刷新）
   function trainGen(n, s) {
+    if (tbusy) { Toast.warn('AI 正在处理中，请稍候'); return; }
     var tr = trainOf(n);
     if (!tr) return;
-    AI.chatJSON(aiSys(), trainGenPrompt(n, s)).then(function (o) {
+    var holder = document.querySelector('[data-tgen="' + s + '"]');
+    var modeName = s === 1 ? '标准' : s === 2 ? '陷阱' : s === 3 ? '综合' : '检定';
+    if (holder) holder.innerHTML = aiBusyCard('🤖 AI 正在出' + modeName + '题…（约 5-15 秒）');
+    var ac = new AbortController();
+    tbusy = { key: 'gen:' + s, ac: ac };
+    bindCancel(ac);
+    AI.chatJSON(aiSys(), trainGenPrompt(n, s), null, { cache: false, signal: ac.signal }).then(function (o) {
+      endBusy(ac);
       var arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
       if (!arr || !arr.length) throw new Error('未生成有效题目');
       var items = arr.slice(0, TRAIN_STEPS[s].count || 1).map(function (it) {
@@ -15184,28 +15307,50 @@ function bind(el, next) {
       saveTrain(n, { items: Object.assign({}, (tr.items || {}), { [s]: items }) });
       renderTrainModal(n);
     }).catch(function (e) {
-      Toast.warn('出题失败：' + e.message);
+      endBusy(ac);
+      renderTrainModal(n);
+      if (isAbort(e)) { Toast.show('已取消出题', 'info', 2000); return; }
+      Toast.warn('出题失败：' + ((e && e.message) || String(e)));
     });
   }
-  // 判分某一步的某题
+  // 判分某一步的某题（就地更新该题卡片，不整页重建、不丢滚动）
   function trainJudge(n, s, qi, userAns) {
+    if (tbusy) { Toast.warn('AI 正在处理中，请稍候'); return; }
     var tr = trainOf(n);
     var items = (tr && tr.items && tr.items[s]) || [];
     var item = items[qi];
     if (!item || !userAns.trim()) { Toast.warn('请先作答再判分'); return; }
-    var btn = document.querySelector('[data-tj="' + n.id + '-' + s + '-' + qi + '"]');
-    if (btn) { btn.disabled = true; btn.textContent = '判分中…'; }
-    AI.chatJSON(aiSys(), trainJudgePrompt(n, s, item, userAns)).then(function (o) {
+    var act = document.querySelector('[data-tact="' + s + '-' + qi + '"]');
+    if (act) act.innerHTML = '<div class="tr-judging"><div class="tr-spin"></div><div>🤖 AI 判分中…</div><button class="btn btn-ghost btn-sm" id="tr-cancel">取消</button></div>';
+    var ac = new AbortController();
+    tbusy = { key: 'judge:' + s + '-' + qi, ac: ac };
+    bindCancel(ac);
+    AI.chatJSON(aiSys(), trainJudgePrompt(n, s, item, userAns), null, { cache: false, signal: ac.signal }).then(function (o) {
+      endBusy(ac);
       var tr2 = trainOf(n);
       var answers = Object.assign({}, (tr2 && tr2.answers) || {});
       answers[s] = answers[s] || [];
-      answers[s][qi] = { user: userAns, correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '' };
+      var ans = { user: userAns, correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '' };
+      answers[s][qi] = ans;
       saveTrain(n, { answers: answers });
-      renderTrainModal(n);
+      trainToMistake(n, s, item, ans);
+      var card = document.querySelector('[data-tq="' + n.id + '-' + s + '-' + qi + '"]');
+      if (card) card.outerHTML = trainQCardHtml(n, s, qi);
+      refreshTrainFoot(n);
+      if (s === 4 && stepDone(n, 4)) Toast.show('已全部判分，点击「完成检定」结算', 'info', 3000);
     }).catch(function (e) {
-      Toast.warn('判分失败：' + e.message);
-      if (btn) { btn.disabled = false; btn.textContent = '判分'; }
+      endBusy(ac);
+      if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消判分', 'info', 2000); return; }
+      renderTrainModal(n);
+      Toast.warn('判分失败：' + ((e && e.message) || String(e)));
     });
+  }
+  // 就地刷新底部操作条
+  function refreshTrainFoot(n) {
+    var tr = trainOf(n);
+    if (!tr) return;
+    var foot = document.querySelector('.tr-foot');
+    if (foot) foot.outerHTML = trainFootHtml(n, tr);
   }
   // 渲染训练 Modal（已打开则原位刷新）
   function renderTrainModal(n) {
@@ -15215,30 +15360,75 @@ function bind(el, next) {
     if (wrap) { wrap.innerHTML = html; bindTrain(n); }
     else {
       Modal.open({
-        title: '⚡ 考点特训营 · ' + U.esc(n.name), wide: true,
+        title: '⚡ 考点特训营', wide: true,
         html: '<div id="cm-train-wrap">' + html + '</div>',
         actions: [{ label: '关闭' }]
       });
       bindTrain(n);
     }
   }
+  // 环形掌握度仪表（SVG）
+  function dashHtml(score) {
+    var r = 34, c = 2 * Math.PI * r;
+    var val = score != null ? Math.max(0, Math.min(100, score)) : 0;
+    var off = c * (1 - val / 100);
+    var color = val >= 80 ? 'var(--ok)' : val >= 50 ? 'var(--warn)' : 'var(--danger)';
+    return '<div class="tr-dash">'
+      + '<svg viewBox="0 0 84 84" width="84" height="84">'
+      + '<circle cx="42" cy="42" r="' + r + '" class="tr-dash-bg"/>'
+      + '<circle cx="42" cy="42" r="' + r + '" class="tr-dash-fg" stroke="' + color + '" stroke-dasharray="' + c + '" stroke-dashoffset="' + off + '"/>'
+      + '</svg>'
+      + '<div class="tr-dash-val">' + (score == null ? '—' : score) + '<small>%</small></div>'
+      + '<div class="tr-dash-label">掌握度</div></div>';
+  }
+  function reportHtml(n, tr) {
+    var r = tr.report || {};
+    var rows = (r.stepScores || []).map(function (x) {
+      return '<div class="tr-rep-row"><span class="tr-rep-name">' + U.esc(x.name) + '</span>'
+        + '<span class="tr-rep-bar"><span class="tr-rep-fill" style="width:' + (x.score != null ? x.score : 0) + '%"></span></span>'
+        + '<span class="tr-rep-score">' + (x.score == null ? '—' : x.score + '分') + '</span></div>';
+    }).join('');
+    return '<div class="tr-report">'
+      + '<div class="tr-rep-head">🎓 训练报告 · 平均 ' + (r.avgScore || 0) + ' 分 · 耗时 ' + (r.durationMin || 0) + ' 分钟</div>'
+      + rows
+      + '<div class="tr-rep-advice">💬 ' + U.esc(r.advice || '') + '</div>'
+      + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-ghost btn-sm" data-ta="retry">🔄 再练一遍（重置）</button></div>'
+      + '</div>';
+  }
   function trainFullHtml(n, tr) {
     var st = nodeState(n);
+    var score = st.score != null ? st.score : (tr.bestScore != null ? tr.bestScore : null);
+    var doneN = tr.done.filter(Boolean).length;
     var steps = TRAIN_STEPS.map(function (s, i) {
-      var d = tr.done[i];
-      var cur = tr.step === i;
-      return '<div class="tr-step' + (d ? ' tr-done' : '') + (cur ? ' tr-cur' : '') + '" data-ts="' + i + '">'
+      var d = tr.done[i], cur = tr.step === i;
+      return '<button class="tr-step' + (d ? ' tr-done' : '') + (cur ? ' tr-cur' : '') + '" data-ts="' + i + '"'
+        + ((d || i <= tr.step || tr.finished) ? '' : ' disabled') + '>'
         + '<span class="tr-no">' + (d ? '✓' : (i + 1)) + '</span>'
-        + '<span class="tr-name">' + s.name + '</span>'
-        + (cur ? '<span class="tr-arrow">▶</span>' : '') + '</div>';
+        + '<span class="tr-name">' + s.name + '</span></button>';
     }).join('');
-    var body = trainBodyHtml(n, tr, tr.step);
     return '<div class="cm-train">'
-      + '<div class="tr-top"><span>掌握度 <b>' + (st.score == null ? '未测' : st.score + '%') + '</b></span>'
-      + '<span class="tr-prog">' + tr.done.filter(Boolean).length + '/5 完成</span></div>'
-      + '<div class="tr-bar"><div class="tr-bar-fill" style="width:' + (tr.done.filter(Boolean).length / 5 * 100) + '%"></div></div>'
+      + '<div class="tr-head">'
+      + dashHtml(score)
+      + '<div class="tr-head-main">'
+      + '<div class="tr-title">⚡ 考点特训营</div>'
+      + '<div class="tr-sub">' + U.esc(n.name) + ' · 从概念到能力飞跃</div>'
+      + '<div class="tr-prog">完成 <b>' + doneN + '</b>/5 · ' + (tr.finished ? '已毕业 🎓' : '坚持就是胜利') + '</div>'
+      + '</div></div>'
       + '<div class="tr-steps">' + steps + '</div>'
-      + '<div class="tr-body">' + body + '</div></div>';
+      + (tr.finished ? reportHtml(n, tr) : '')
+      + '<div class="tr-body">' + trainBodyHtml(n, tr, tr.step) + '</div>'
+      + trainFootHtml(n, tr)
+      + '</div>';
+  }
+  // 底部操作条（上一步 / 下一步，状态联动）
+  function trainFootHtml(n, tr) {
+    var s = tr.step;
+    var canNext = s === 0 || stepDone(n, s);
+    var nextTxt = s === 4 ? '🏆 完成检定' : '下一步 →';
+    return '<div class="tr-foot">'
+      + (s > 0 ? '<button class="btn btn-ghost" data-ta="back">← 上一步</button>' : '<span></span>')
+      + '<button class="btn btn-primary" data-ta="next"' + (canNext ? '' : ' disabled') + '>' + nextTxt + '</button>'
+      + '</div>';
   }
   function trainBodyHtml(n, tr, s) {
     var step = TRAIN_STEPS[s];
@@ -15248,106 +15438,149 @@ function bind(el, next) {
       var e = nBag(n.id).explain;
       if (!e) {
         return head + '<div class="muted-sm">先让 AI 讲透这个概念，再看「考研怎么考」与「标准流程」。</div>'
-          + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" data-ta="0-explain">🤖 生成考点讲解</button></div>';
+          + '<div data-tgen="0">'
+          + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" data-ta="0-explain">🤖 生成考点讲解</button></div>'
+          + '</div>';
       }
-      return head + '<div class="cm-ai">'
-        + '<div class="cm-ai-h">本质</div><div class="cm-ai-b">' + Tex.renderInline(e.core || '') + '</div>'
-        + (e.exam ? '<div class="cm-ai-h">考研怎么考</div><div class="cm-ai-b">' + Tex.renderInline(e.exam) + '</div>' : '')
-        + (e.steps && e.steps.length ? '<div class="cm-ai-h">标准流程</div><ol class="cm-ai-l">' + e.steps.map(function (x) { return '<li>' + Tex.renderInline(x) + '</li>'; }).join('') + '</ol>' : '')
-        + (e.traps && e.traps.length ? '<div class="cm-ai-h">失分陷阱</div><ul class="cm-ai-l cm-ai-trap">' + e.traps.map(function (x) { return '<li>' + Tex.renderInline(x) + '</li>'; }).join('') + '</ul>' : '')
-        + (e.mnemonic ? '<div class="cm-ai-key">💡 ' + Tex.renderInline(e.mnemonic) + '</div>' : '')
+      return head + '<div class="cm-ai tr-explain">'
+        + '<div class="cm-ai-h">🎯 本质</div><div class="cm-ai-b">' + Tex.renderInline(e.core || '') + '</div>'
+        + (e.exam ? '<div class="cm-ai-h">📌 考研怎么考</div><div class="cm-ai-b">' + Tex.renderInline(e.exam) + '</div>' : '')
+        + (e.steps && e.steps.length ? '<div class="cm-ai-h">🛠 标准流程</div><ol class="cm-ai-l">' + e.steps.map(function (x) { return '<li>' + Tex.renderInline(x) + '</li>'; }).join('') + '</ol>' : '')
+        + (e.traps && e.traps.length ? '<div class="cm-ai-h">🕳 失分陷阱</div><ul class="cm-ai-l cm-ai-trap">' + e.traps.map(function (x) { return '<li>' + Tex.renderInline(x) + '</li>'; }).join('') + '</ul>' : '')
+        + (e.mnemonic ? '<div class="tr-key">💡 ' + Tex.renderInline(e.mnemonic) + '</div>' : '')
         + '</div>'
-        + '<div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" data-ta="next">✅ 我读懂了，下一步</button></div>';
+        + '<div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" data-ta="next">✅ 我读懂了，进入下一步</button></div>';
     }
     var items = (tr.items && tr.items[s]) || [];
-    var answers = (tr.answers && tr.answers[s]) || [];
     if (!items.length) {
-      return head + '<div class="muted-sm">本步包含 ' + (step.count || 1) + ' 道' + (s === 2 ? '陷阱' : s === 3 ? '综合' : s === 4 ? '压轴检定' : '标准') + '题。点击生成后开始作答。</div>'
+      return head + '<div class="muted-sm">本步包含 ' + (step.count || 1) + ' 道' + (s === 2 ? '陷阱' : s === 3 ? '综合' : s === 4 ? '压轴检定' : '标准') + '题，AI 按真题难度出题。</div>'
+        + '<div data-tgen="' + s + '">'
         + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" data-ta="gen">🎯 生成题目</button>'
-        + (s > 0 ? '<button class="btn btn-ghost" data-ta="back">← 上一步</button>' : '') + '</div>';
+        + (s > 0 ? '<button class="btn btn-ghost" data-ta="back">← 上一步</button>' : '') + '</div></div>';
     }
-    var qHtml = items.map(function (it, qi) {
-      var ans = answers[qi];
-      return '<div class="tr-q">'
-        + '<div class="tr-q-t">第 ' + (qi + 1) + ' 题：' + Tex.renderInline(it.stem) + '</div>'
-        + (it.trap ? '<div class="tr-q-trap">🕳 易错点提示：' + Tex.renderInline(it.trap) + '</div>' : '')
-        + (ans
-          ? '<div class="tr-q-result ' + (ans.correct === '对' ? 'tr-ok' : ans.correct === '错' ? 'tr-bad' : 'tr-mid') + '">'
-            + '<b>' + ans.correct + '（' + ans.score + ' 分）</b><div>' + Tex.renderInline(ans.comment || '') + '</div>'
-            + (it.solution ? '<div class="tr-q-sol">📖 标准答案：' + Tex.renderInline(it.solution) + '</div>' : '')
-            + '</div>'
-          : '<textarea class="input tr-in" data-tin="' + qi + '" rows="2" placeholder="写下你的作答…"></textarea>'
-            + '<div class="btn-row" style="margin-top:6px"><button class="btn btn-sm btn-primary" data-tj="' + n.id + '-' + s + '-' + qi + '">判分</button></div>')
-        + '</div>';
-    }).join('');
-    var allDone = items.length > 0 && answers.length >= items.length && answers.every(function (a) { return !!a; });
-    return head + qHtml
-      + '<div class="btn-row" style="margin-top:12px">'
-      + (allDone
-        ? '<button class="btn btn-primary" data-ta="next">' + (s === 4 ? '🏆 完成检定' : '下一步 →') + '</button>'
-        : (s > 0 ? '<button class="btn btn-ghost" data-ta="back">← 上一步</button>' : ''))
-      + '</div>';
+    var qHtml = items.map(function (it, qi) { return trainQCardHtml(n, s, qi); }).join('');
+    return head + '<div class="tr-qlist">' + qHtml + '</div>';
   }
-  // 绑定训练 Modal 内事件
+  // 单题卡片（编号徽章 + 题干 + 易错提示 + 作答区/判分结果）
+  function trainQCardHtml(n, s, qi) {
+    var tr = trainOf(n);
+    var it = ((tr && tr.items && tr.items[s]) || [])[qi];
+    if (!it) return '';
+    var ans = ((tr && tr.answers && tr.answers[s]) || [])[qi];
+    var cls = ans ? (ans.correct === '对' ? 'tr-ok' : ans.correct === '错' ? 'tr-bad' : 'tr-mid') : '';
+    return '<div class="tr-qcard" data-tq="' + n.id + '-' + s + '-' + qi + '">'
+      + '<div class="tr-q-no">' + (qi + 1) + '</div>'
+      + '<div class="tr-q-main">'
+      + '<div class="tr-q-stem">' + Tex.renderInline(it.stem) + '</div>'
+      + (it.trap ? '<div class="tr-q-trap">🕳 易错点：' + Tex.renderInline(it.trap) + '</div>' : '')
+      + (ans
+        ? '<div class="tr-q-result ' + cls + '">'
+          + '<div class="tr-r-head"><span class="tr-r-badge">' + (ans.correct === '对' ? '✓ 对' : ans.correct === '错' ? '✗ 错' : '△ 部分对') + '</span>'
+          + '<span class="tr-r-score">' + ans.score + ' 分</span></div>'
+          + '<div class="tr-r-comment">' + Tex.renderInline(ans.comment || '') + '</div>'
+          + (it.solution ? '<details class="tr-r-sol"><summary>📖 标准答案与解析</summary><div>' + Tex.renderInline(it.solution) + '</div></details>' : '')
+          + '</div>'
+        : '<div data-tact="' + s + '-' + qi + '">'
+          + '<textarea class="input tr-in" data-tin="' + s + '-' + qi + '" rows="2" placeholder="写下你的作答…"></textarea>'
+          + '<div class="btn-row" style="margin-top:6px"><button class="btn btn-sm btn-primary" data-tj="' + n.id + '-' + s + '-' + qi + '">🧠 判分</button></div>'
+          + '</div>')
+      + '</div></div>';
+  }
+  // 绑定训练 Modal 内事件（事件委托：就地插入的 DOM 自动生效）
   function bindTrain(n) {
     var wrap = document.getElementById('cm-train-wrap');
     if (!wrap) return;
-    var ex = wrap.querySelector('[data-ta="0-explain"]');
-    if (ex) ex.onclick = function () {
-      aiExplain(n, allNodes(), indexOf(allNodes())).then(function () { renderTrainModal(n); });
+    wrap.onclick = function (ev) {
+      var t = ev.target;
+      while (t && t !== wrap && !t.getAttribute) t = t.parentNode;
+      if (!t || t === wrap) return;
+      var ta = t.getAttribute('data-ta');
+      // 生成讲解（非阻塞 + 可取消）
+      if (ta === '0-explain') {
+        if (tbusy) { Toast.warn('AI 正在处理中，请稍候'); return; }
+        var h = document.querySelector('[data-tgen="0"]');
+        if (h) h.innerHTML = aiBusyCard('🤖 AI 正在讲透考点…（约 5-15 秒）');
+        var ac = new AbortController();
+        tbusy = { key: 'explain', ac: ac };
+        bindCancel(ac);
+        aiExplain(n, allNodes(), indexOf(allNodes()), ac).then(function () {
+          endBusy(ac); renderTrainModal(n);
+        }).catch(function (e) {
+          endBusy(ac);
+          if (isAbort(e)) { renderTrainModal(n); Toast.show('已取消', 'info', 2000); return; }
+          renderTrainModal(n);
+          Toast.warn('讲解失败：' + ((e && e.message) || String(e)));
+        });
+        return;
+      }
+      if (ta === 'gen') { var tr = trainOf(n); if (tr) trainGen(n, tr.step); return; }
+      if (ta === 'next') { advanceTrain(n, 1); return; }
+      if (ta === 'back') { advanceTrain(n, -1); return; }
+      if (ta === 'retry') { resetTrain(n); return; }
+      var tj = t.getAttribute('data-tj');
+      if (tj) {
+        var parts = tj.split('-');
+        var s = parseInt(parts[parts.length - 2], 10), qi = parseInt(parts[parts.length - 1], 10);
+        var inEl = wrap.querySelector('[data-tin="' + s + '-' + qi + '"]');
+        trainJudge(n, s, qi, inEl ? inEl.value : '');
+        return;
+      }
+      var ts = t.getAttribute('data-ts');
+      if (ts != null) {
+        var i = parseInt(ts, 10);
+        var tr2 = trainOf(n);
+        if (tr2 && (tr2.done[i] || i <= tr2.step || tr2.finished)) { saveTrain(n, { step: i }); renderTrainModal(n); }
+      }
     };
-    var gen = wrap.querySelector('[data-ta="gen"]');
-    if (gen) gen.onclick = function () { var tr = trainOf(n); if (tr) trainGen(n, tr.step); };
-    wrap.querySelectorAll('[data-tj]').forEach(function (b) {
-      b.onclick = function () {
-        var parts = b.getAttribute('data-tj').split('-');
-        var qi = parseInt(parts[2], 10);
-        var inEl = wrap.querySelector('[data-tin="' + qi + '"]');
-        var tr = trainOf(n);
-        if (!tr) return;
-        trainJudge(n, tr.step, qi, inEl ? inEl.value : '');
-      };
-    });
-    var nxt = wrap.querySelector('[data-ta="next"]');
-    if (nxt) nxt.onclick = function () { advanceTrain(n, 1); };
-    var back = wrap.querySelector('[data-ta="back"]');
-    if (back) back.onclick = function () { advanceTrain(n, -1); };
-    wrap.querySelectorAll('[data-ts]').forEach(function (sp) {
-      sp.onclick = function () {
-        var i = parseInt(sp.getAttribute('data-ts'), 10);
-        var tr = trainOf(n);
-        if (tr && (tr.done[i] || i <= tr.step)) { saveTrain(n, { step: i }); renderTrainModal(n); }
-      };
-    });
   }
-  // 推进训练（±1）；第 4 步检定完成 → 回写掌握度 + 完成庆祝
+  // 重置训练（再练一遍）
+  function resetTrain(n) {
+    var fresh = { step: 0, done: [false, false, false, false, false], items: {}, answers: {}, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finished: false, bestScore: null, report: null };
+    bagUpdate(function (b) { b.nodes[n.id] = Object.assign({}, b.nodes[n.id], { train: fresh }); });
+    renderTrainModal(n);
+    Toast.show('已重置，开始新一轮特训', 'info', 2500);
+  }
+  // 纯 CSS 撒花庆祝（零依赖）
+  function fireConfetti() {
+    var wrap = document.getElementById('cm-train-wrap');
+    if (!wrap) return;
+    var c = document.createElement('div');
+    c.className = 'tr-confetti';
+    var colors = ['#ff4d4f', '#faad14', '#52c41a', '#1677ff', '#722ed1', '#13c2c2'];
+    var parts = '';
+    for (var i = 0; i < 40; i++) {
+      var x = Math.random() * 100, d = 2 + Math.random() * 2.5, s2 = 6 + Math.random() * 8;
+      parts += '<i style="left:' + x + '%;background:' + colors[i % colors.length] + ';width:' + s2 + 'px;height:' + (s2 * 0.5) + 'px;animation-duration:' + d + 's;animation-delay:' + (Math.random() * 0.6).toFixed(2) + 's"></i>';
+    }
+    c.innerHTML = parts;
+    wrap.appendChild(c);
+    setTimeout(function () { if (c.parentNode) c.parentNode.removeChild(c); }, 6000);
+  }
+  // 推进训练（±1）；第 4 步检定完成 → 训练报告 + 回写掌握度 + 庆祝
   function advanceTrain(n, delta) {
     var tr = trainOf(n);
     if (!tr) return;
     var s = tr.step;
     if (delta > 0) {
-      // 第 0 步直接完成；第 4 步（检定）无条件进入完成逻辑（但须已作答）；其他步要求 done
-      if (s === 0 || s === 4 || tr.done[s]) {
-        if (s === 4) {
-          var chk = (tr.answers && tr.answers[4]) || [];
-          if (!chk.length) { Toast.warn('检定前请先完成题目作答并判分'); return; }
-        }
-        var done = tr.done.slice();
-        done[s] = true;
-        var patch = { done: done };
-        if (s === 4) {
-          var answers = (tr.answers && tr.answers[4]) || [];
-          var score = answers.length ? Math.round(answers.reduce(function (a, x) { return a + (x.score || 0); }, 0) / answers.length) : 60;
-          patch.finished = true; patch.bestScore = Math.max(tr.bestScore || 0, score);
-          if (window.Mastery) Mastery.recordAnswer({ topicId: n.id, topicName: n.name, subject: 'ctrl', score: score, verdict: score >= 60 ? '通过' : '未通过', source: 'concept-train', sourceLabel: '考点特训', noMistake: true, tier: 0 });
-          if (window.confetti) { try { confetti(); } catch (e) {} }
-          Toast.success('🎓 考点特训完成！掌握度 ' + score + '%');
-        }
-        saveTrain(n, patch);
-        if (s < 4) renderTrainModal(n);
+      if (s === 4) {
+        if (!stepDone(n, 4)) { Toast.warn('检定前请先完成作答并判分'); return; }
+        var score = stepAvg(n, 4);
+        var report = buildReport(n, tr);
+        var done = tr.done.slice(); done[4] = true;
+        saveTrain(n, { done: done, finished: true, bestScore: Math.max(tr.bestScore || 0, score), report: report });
+        if (window.Mastery) Mastery.recordAnswer({ topicId: n.id, topicName: n.name, subject: 'ctrl', score: score, verdict: score >= 60 ? '通过' : '未通过', source: 'concept-train', sourceLabel: '考点特训', noMistake: true, tier: 0 });
+        renderTrainModal(n);
+        fireConfetti();
+        Toast.success('🎓 特训完成！检定 ' + score + ' 分，掌握度已回写');
         return;
       }
-      Toast.warn('本步还有题目未作答/判分');
+      if (s === 0 || stepDone(n, s)) {
+        var done = tr.done.slice(); done[s] = true;
+        saveTrain(n, { done: done, step: Math.min(4, s + 1) });
+        renderTrainModal(n);
+        return;
+      }
+      Toast.warn('请先完成本步所有题目的作答与判分');
       return;
     }
     if (s > 0) { saveTrain(n, { step: s - 1 }); renderTrainModal(n); }
@@ -15379,6 +15612,11 @@ function bind(el, next) {
           + ' 推荐任务：' + U.esc(n.book || ('查阅' + textbook() + '对应章节')) + '</div>')
       + '<div class="muted-sm" style="margin-top:8px">前置：' + U.esc((n.deps || []).map(d => byId[d] && byId[d].name).filter(Boolean).join('、') || '无')
       + ' ｜ 后继：' + U.esc(kids.join('、') || '无') + '</div>'
+      + (trainOf(n) && trainOf(n).finished
+        ? '<div class="tr-badge-row"><span class="tag tag-ok">🎓 已特训 · 最佳 ' + (trainOf(n).bestScore || 0) + ' 分</span>'
+          + '<span class="muted-sm">' + ((trainOf(n).report && trainOf(n).report.durationMin) || '') + ' 分钟完成 · '
+          + U.esc((trainOf(n).report && trainOf(n).report.advice) || '') + '</span></div>'
+        : '')
 
       + '<div class="btn-row" style="margin-top:10px">'
       + '<button class="btn btn-primary btn-sm" id="cm-train">⚡ 考点特训</button>'
@@ -15476,8 +15714,8 @@ function bind(el, next) {
     return '你是「' + majorName() + '」考研专业课辅导老师，只讲考研真正用得上的东西，不说空话。只输出JSON，不要任何多余文字。';
   }
 
-  // ① 讲透节点
-  function aiExplain(n, nodes, byId) {
+  // ① 讲透节点（ac 可选：AbortController 支持取消）
+  function aiExplain(n, nodes, byId, ac) {
     const pre = (n.deps || []).map(d => byId[d] && byId[d].name).filter(Boolean).join('、') || '无';
     const next = nodes.filter(x => (x.deps || []).indexOf(n.id) >= 0).map(x => x.name).join('、') || '无';
     const st = nodeState(n);
@@ -15491,7 +15729,7 @@ function bind(el, next) {
       + '"traps":["高频失分陷阱，2-4条，每条不超过26字"],'
       + '"link":"与前置/后继考点的逻辑关系，1-2句，说清为什么必须先掌握前置",'
       + '"mnemonic":"一句话记忆抓手或口诀，不超过20字"}';
-    return AI.chatJSON(aiSys(), user).then(o => {
+    return AI.chatJSON(aiSys(), user, null, ac ? { cache: false, signal: ac.signal } : undefined).then(o => {
       if (!o || !o.core) throw new Error('返回内容不完整');
       o.at = new Date().toISOString();
       bagUpdate(b => {
@@ -15933,7 +16171,7 @@ function bind(el, next) {
     };
   }
 
-  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain };
+  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain };
 })();
 
 
