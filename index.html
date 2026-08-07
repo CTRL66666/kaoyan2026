@@ -2008,6 +2008,10 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 .tr-faq { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 6px 10px; margin-top: 6px; font-size: 13px; }
 .tr-faq summary { cursor: pointer; font-weight: 500; color: var(--text-primary); }
 .tr-faq div { margin-top: 5px; color: var(--text-secondary); line-height: 1.7; }
+/* 全屏子页面（考点特训营 = 独立页面，非弹窗） */
+.cm-trainpage { min-height: calc(100vh - 140px); padding-bottom: 40px; }
+.cm-trainpage-nav { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line); margin-bottom: 16px; position: sticky; top: 0; background: var(--bg); z-index: 5; flex-wrap: wrap; }
+.cm-trainpage-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 /* 面包屑（特训营 Modal 顶部 — 子页面「我从哪来」） */
 .tr-crumb { font-size: 12.5px; color: var(--text-muted); padding: 0 0 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
 .tr-crumb .tr-crumb-back { display: inline-block; margin-right: 4px; font-weight: 500; color: var(--text-primary); }
@@ -15593,23 +15597,17 @@ function bind(el, next) {
       Toast.warn('生成失败：' + ((e && e.message) || String(e)));
     });
   }
-  // 渲染训练 Modal（已打开则原位刷新；作为"子页面"——顶部有面包屑可返回概念图谱）
+  // 渲染训练视图：首次进入 = 切换到全屏子页面（可返回）；已进入 = 就地刷新
   function renderTrainModal(n) {
     clearTrainTimer();
     var tr = ensureTrain(n);
-    var html = trainFullHtml(n, tr);
-    var wrap = document.getElementById('cm-train-wrap');
-    if (wrap) { wrap.innerHTML = html; bindTrain(n); }
-    else {
-      // 面包屑顶部条（让用户随时看到「我从哪里来」）
-      var crumb = '<div class="tr-crumb"><span class="tr-crumb-back">←</span> 概念图谱 / <b>' + U.esc(n.name) + '</b> · 考点特训营</div>';
-      Modal.open({
-        title: '⚡ 考点特训营 · ' + U.esc(n.name), wide: true,
-        html: crumb + '<div id="cm-train-wrap">' + html + '</div>',
-        actions: [{ label: '← 返回 概念图谱', kind: 'btn-ghost', onClick: function (close) { close(); } }, { label: '关闭', kind: 'btn-ghost' }]
-      });
-      bindTrain(n);
+    if (!trainSession || trainSession.id !== n.id) {
+      trainSession = { id: n.id, at: new Date().toISOString() };
+      if (lastEl) render(lastEl); else if (typeof App !== 'undefined' && App.refresh) App.refresh();
+      return;
     }
+    var wrap = document.getElementById('cm-train-wrap');
+    if (wrap) { wrap.innerHTML = trainFullHtml(n, tr); bindTrain(n); }
   }
   // 环形掌握度仪表（SVG）
   function dashHtml(score) {
@@ -16154,8 +16152,31 @@ function bind(el, next) {
       + '</div></div>';
   }
 
+  // 全屏子页面会话：进入考点特训营后整个模块页面切换为训练视图（可返回）
+  var trainSession = null; // {id: 节点id}
+  function renderTrainPage(el) {
+    var n = (allNodes() || []).find(function (x) { return x.id === trainSession.id; });
+    if (!n) { trainSession = null; return; }
+    var tr = ensureTrain(n);
+    el.innerHTML = '<div class="cm-trainpage">'
+      + '<div class="cm-trainpage-nav">'
+      + '<button class="btn btn-ghost btn-sm" id="cm-train-back">← 返回 概念图谱</button>'
+      + '<span class="cm-trainpage-title">⚡ 考点特训营 · ' + U.esc(n.name) + '</span>'
+      + '<span class="muted-sm">从概念到能力飞跃 · 随时可返回继续</span>'
+      + '</div>'
+      + '<div id="cm-train-wrap">' + trainFullHtml(n, tr) + '</div>'
+      + '</div>';
+    bindTrainPage(el, n);
+  }
+  function bindTrainPage(el, n) {
+    var back = el.querySelector('#cm-train-back');
+    if (back) back.onclick = function () { trainSession = null; App.refresh(); };
+    bindTrain(n);
+  }
+
   function render(el) {
     lastEl = el;
+    if (trainSession) { renderTrainPage(el); return; }
     const nodes = allNodes();
     const byId = indexOf(nodes);
 
