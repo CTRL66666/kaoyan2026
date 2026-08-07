@@ -19358,7 +19358,7 @@ function bind(el, next) {
     return '';
   }
 
-  function resultHtml(r, tk) {
+  function resultHtml(r, tk, origText) {
     var t = ESSAY_TYPES[tk];
     if (r.score === -1) {
       return '<div class="alert alert-warn">⚠️ ' + U.esc(r.summary || '图片字迹无法辨认，请重新拍摄（光线充足、正对纸面）或改用文本输入。') + '</div>';
@@ -19417,10 +19417,12 @@ function bind(el, next) {
     }
     if (r.modelSentence) html += '<div class="pm-ai-section"><b>💎 背诵句型：</b><div class="pm-ai-body">' + U.esc(r.modelSentence) + '</div></div>';
     if (r.advice) html += '<div class="pm-ai-section"><b>🎯 备考建议：</b><div class="pm-ai-body">' + U.esc(r.advice) + '</div></div>';
-    // 「红笔批改」模式入口：保留原文 + 不同颜色/线型标注 + 旁注建议（原文由 lastGradeText 提供）
-    html += '<div class="pm-ai-section" style="text-align:center;margin-top:14px">'
-      + '<button class="btn btn-primary" id="es-anno-btn">🎨 切换红笔批改模式（精细标注）</button>'
-      + '<div class="muted-sm" style="margin-top:6px">保留原文，划线标注需修改处并附点评建议</div></div>';
+    // 「红笔批改」入口：仅当传 origText 时渲染（历史记录无完整原文，跳过）
+    if (origText) {
+      html += '<div class="pm-ai-section" style="text-align:center;margin-top:14px">'
+        + '<button class="btn btn-primary" id="es-anno-btn">🎨 切换红笔批改模式（精细标注）</button>'
+        + '<div class="muted-sm" style="margin-top:6px">保留原文，划线标注需修改处并附点评建议</div></div>';
+    }
     return html;
   }
 
@@ -19620,7 +19622,7 @@ function bind(el, next) {
       // App.refresh 会重建 DOM，延迟到下一帧再把结果渲染进结果区并绑定红笔批改入口
       if (text) setTimeout(function () {
         var slot2 = document.getElementById('es-result-slot');
-        if (slot2) slot2.innerHTML = resultHtml(r, tk);
+        if (slot2) slot2.innerHTML = resultHtml(r, tk, text);
         var btn = document.getElementById('es-anno-btn');
         if (btn) btn.onclick = function () { annotateGrade(el, lastGradeText, tk); };
       }, 0);
