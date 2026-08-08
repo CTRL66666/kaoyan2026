@@ -19972,6 +19972,7 @@ function bind(el, next) {
   var flipped = false;
   var direction = 'e2c';         // e2c 英→中 | c2e 中→英
   var spellMode = false;
+  var speedMode = !!(Store.get().settings && Store.get().settings.vocabSpeedMode); // ⚡ 速测模式：纯翻面
   var spellChecked = null;       // {input, ok, html}
   var answered = null;           // 新题型作答反馈 {ok, given, correct, html}（choice/listen/cloze 答完后置位，点"继续"才 grade+下一张）
   var filter = 'all', searchQ = '';
@@ -20032,9 +20033,34 @@ function bind(el, next) {
 
   // 取当前卡题型：仅 review 阶段用 session.qtypes，其余固定 flip
   function qtypeOf(card) {
+    // ⚡ 速测模式：全部强制纯翻面（不看词/看词遮义），禁用填空/选词/听力
+    if (speedMode) return 'flip';
     if (!session || !session.qtypes) return 'flip';
     if (card.phase !== 'review') return 'flip';
     return session.qtypes[card.id] || 'flip';
+  }
+
+  // 【斩】复习中直接删除该词（确认后从词库移除，并从当前会话队列剔除）
+  function slayWord(id) {
+    var c = getOne(id);
+    if (!c || !session) return;
+    Modal.open({
+      title: '✂️ 斩掉这个词？',
+      html: '<p>将从词库<strong>永久删除</strong>：<b>' + U.esc(c.word) + '</b>（' + U.esc(c.meaning || '') + '）</p>'
+        + '<p class="muted-sm">SM-2 学习进度一并清除。若误删，有 JSON/CSV 备份可通过「词库管理 → 导入」恢复。</p>',
+      actions: [
+        { label: '取消' },
+        { label: '✂️ 确认斩掉', kind: 'btn-danger', onClick: function (close) {
+          close();
+          Store.removeFromColl('vocab', id);
+          session.queue = session.queue.filter(function (x) { return x !== id; });
+          session.done++;
+          flipped = false; spellChecked = null; answered = null;
+          Toast.success('已斩掉「' + c.word + '」（队列剩 ' + session.queue.length + ' 张）');
+          if (lastEl) render(lastEl);
+        } }
+      ]
+    });
   }
 
   // ---------- AI 提取（文字/拍照共用） ----------
@@ -20221,6 +20247,7 @@ function bind(el, next) {
           + '<option value="1"' + (spellMode ? ' selected' : '') + '>开启（拼错自动降档）</option>'
           + '</select></label>'
           + '<label class="fld"><span>每日新词上限（个）</span><input id="vb-newcap" class="input" type="number" min="1" max="100" value="' + dailyNew() + '"></label>'
+          + '<label class="fld" style="display:flex;align-items:center;gap:6px;padding-top:14px"><input type="checkbox" id="vb-speed"' + (speedMode ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:12px">⚡ 速测模式（纯翻面·遮义测验，无填空/选词/听力）</span></label>'
           + '</div>'
           + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="vb-start">开始复习（' + learnN + ' 张）</button>'
           // 【轮2】顽固词专区：一键只复习困难词
@@ -20309,7 +20336,10 @@ function bind(el, next) {
       + gradeBtn('easy', '简单', 5, 'btn-ghost')
       + '</div>'
       + '<div class="btn-row" style="justify-content:center;margin-top:6px">'
-      + '<button class="link-btn" id="vb-ai-detail">🔍 AI 记忆法/搭配解析</button></div>'
+      + '<button class="link-btn" id="vb-ai-detail">🔍 AI 记忆法/搭配解析</button>'
+      // 【斩】直接删词
+      + '<button class="link-btn" id="vb-slay" style="color:var(--danger)">✂️ 斩掉这个词</button>'
+      + '</div>'
       : '';
     return '<div class="flashcard" id="vb-card">' + (flipped ? back : front) + '</div>' + spellHtml + stateRow + gradeRow;
   }
@@ -20673,7 +20703,12 @@ function bind(el, next) {
       + '<div class="card"><div class="card-title">记忆稳定度分布</div><div id="vb-dist"></div>'
       + '<div class="muted-sm">间隔越长 = 记忆越牢。困难词（EF&lt;2.0 或遗忘≥3次）建议结合 AI 记忆法重点突破。</div></div>'
 
-      + '<div class="card"><div class="card-title-row"><span class="card-title">词库（' + filtered.length + '/' + all.length + '）</span></div>'
+      + '<div class="card"><div class="card-title-row"><span class="card-title">词库（' + filtered.length + '/' + all.length + '）</span>'
+      // 【批量删除】操作条
+      + '<span style="display:flex;gap:6px">'
+      + '<button class="btn btn-ghost btn-sm" id="vb-pick-all">☑ 全选</button>'
+      + '<button class="btn btn-danger btn-sm" id="vb-del-selected" disabled>🗑 删除选中（0）</button>'
+      + '</span></div>'
       + '<div class="add-row"><input id="vb-search" class="input" placeholder="搜索单词/释义…" value="' + U.esc(searchQ) + '"></div>'
       + '<div class="seg-row" style="margin:8px 0;flex-wrap:wrap">'
       + FILTERS.map(function (f) { return '<button class="seg vb-filter' + (filter === f[0] ? ' seg-on' : '') + '" data-f="' + f[0] + '">' + f[1] + '</button>'; }).join('')
@@ -20689,7 +20724,8 @@ function bind(el, next) {
       ? (c.interval >= MASTER_IVL ? '<span class="tag tag-ok">牢固·' + c.interval + '天</span>' : '<span class="tag">间隔' + c.interval + '天</span>')
       : (c.lastReview ? '<span class="tag tag-warn">学习中</span>' : '<span class="tag tag-new">新词</span>');
     var dueTag = c.due <= t ? '<span class="tag tag-warn">今日到期</span>' : '<span class="muted-sm">下次 ' + U.esc(c.due) + '</span>';
-    return '<div class="his-row" style="align-items:flex-start"><div style="flex:1">'
+    return '<div class="his-row" style="align-items:flex-start"><input type="checkbox" class="vb-pick-row" data-id="' + c.id + '" style="margin-top:6px;flex:0 0 auto">'
+      + '<div style="flex:1">'
       + '<b>' + U.esc(c.word) + '</b> '
       + (c.phonetic ? '<span class="muted-sm">' + U.esc(c.phonetic) + '</span> ' : '')
       + (c.pos ? '<span class="tag">' + U.esc(c.pos) + '</span> ' : '') + status
@@ -20785,6 +20821,11 @@ function bind(el, next) {
         var cap = U.clamp(+capEl.value || 15, 1, 100);
         Store.update(function (s) { s.settings.vocabNewPerDay = cap; });
       }
+      var spEl = el.querySelector('#vb-speed');
+      if (spEl) {
+        speedMode = spEl.checked;
+        Store.update(function (s) { s.settings.vocabSpeedMode = speedMode; });
+      }
       session = buildSession();
       flipped = false; spellChecked = null; answered = null;
       render(el);
@@ -20799,6 +20840,9 @@ function bind(el, next) {
     // 【轮3】发音按钮
     var sayBtn = el.querySelector('#vb-say');
     if (sayBtn) sayBtn.onclick = function (e) { e.stopPropagation(); var c = currentCard(); if (c) speak(c.word); };
+    // 【斩】复习卡删词
+    var slayBtn = el.querySelector('#vb-slay');
+    if (slayBtn) slayBtn.onclick = function (e) { e.stopPropagation(); var c = currentCard(); if (c) slayWord(c.id); };
     var againBtn = el.querySelector('#vb-again');
     if (againBtn) againBtn.onclick = function () { session = null; answered = null; render(el); };
     var quitBtn = el.querySelector('#vb-quit');
@@ -21065,6 +21109,35 @@ function bind(el, next) {
         }, true);
       };
     });
+    // 【批量删除】全选 / 计数 / 删除选中
+    var pickAll = el.querySelector('#vb-pick-all');
+    if (pickAll) pickAll.onclick = function () {
+      var boxes = el.querySelectorAll('.vb-pick-row');
+      var some = Array.prototype.some.call(boxes, function (b) { return !b.checked; });
+      boxes.forEach(function (b) { b.checked = some; });
+      updatePickCount(el);
+    };
+    function updatePickCount(el2) {
+      var n = el2.querySelectorAll('.vb-pick-row:checked').length;
+      var delBtn = el2.querySelector('#vb-del-selected');
+      if (delBtn) {
+        delBtn.disabled = n === 0;
+        delBtn.innerHTML = '🗑 删除选中（' + n + '）';
+      }
+    }
+    el.querySelectorAll('.vb-pick-row').forEach(function (b) {
+      b.onchange = function () { updatePickCount(el); };
+    });
+    var delSel = el.querySelector('#vb-del-selected');
+    if (delSel) delSel.onclick = function () {
+      var ids = Array.prototype.map.call(el.querySelectorAll('.vb-pick-row:checked'), function (b) { return b.getAttribute('data-id'); });
+      if (!ids.length) return;
+      Modal.confirm('批量删除 ' + ids.length + ' 个单词', '将从单词本<strong>永久删除 ' + ids.length + '</strong>个词及其 SM-2 进度（云同步后各设备同步删除）。确定？', '全部删除', function () {
+        ids.forEach(function (id) { removeWord(id); });
+        Toast.success('已删除 ' + ids.length + ' 个单词');
+        render(el);
+      }, true);
+    };
   }
 
   window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount };
