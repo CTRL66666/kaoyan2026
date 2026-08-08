@@ -2076,6 +2076,9 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .breath-wrap { text-align: center; padding: 26px 10px 14px; }
 .breath-ring { width: 130px; height: 130px; margin: 0 auto 18px; border-radius: 50%; background: radial-gradient(circle, rgba(64, 169, 255, .18), rgba(64, 169, 255, .06)); border: 3px solid #40a9ff; transition: transform 4s cubic-bezier(.4, 0, .2, 1); transform: scale(.8); }
 .breath-txt { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+/* 本周报告摘要条 */
+.psy-report-snippet { font-size: 12.5px; line-height: 1.7; padding: 8px 12px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: var(--r-btn); margin-bottom: 4px; color: var(--text-secondary); }
+.btn-link { background: none; border: none; color: var(--blue); cursor: pointer; font-size: 12px; padding: 0; text-decoration: underline; }
 
 </style>
 </head>
@@ -18359,9 +18362,10 @@ function bind(el, next) {
     var moodLog = [];
     try { moodLog = (Store.get().psy && Store.get().psy.moodLog) || []; } catch (e) {}
     var moodCnt = U.countBy(moodLog.map(function (m) { return m.label; }), function (x) { return x; });
-    var moodRows = Object.keys(moodCnt).length
-      ? Object.keys(moodCnt).map(function (k) { return '<span class="tag tag-warn">' + k + '×' + moodCnt[k] + '</span>'; }).join(' ')
-      : '<span class="muted-sm">聊天中会自动识别情绪，记录在这里</span>';
+    var moodRows = '<span class="muted-sm">聊天中会自动识别情绪，记录在这里</span>';
+    if (Object.keys(moodCnt).length && typeof Charts !== 'undefined' && Charts.bar) {
+      moodRows = Charts.bar(Object.keys(moodCnt).map(function (k) { return { label: k, value: moodCnt[k] }; }), { height: 120 });
+    }
     Modal.open({
       title: '📊 我的心理画像（近30天）',
       html: '<div class="stat-row">'
@@ -18379,6 +18383,82 @@ function bind(el, next) {
       actions: [{ label: '知道了' }]
     });
   }
+  // 对话导出（U.download 文本）
+  function exportPsyChat() {
+    var t = psyThread() || { thread: [] };
+    if (!t.thread.length) { Toast.show('还没有对话记录可导出', 'info', 2000); return; }
+    var lines = ['🧑⚕️ AI 心理医生 · 对话记录', '导出时间：' + new Date().toLocaleString('zh-CN'), '---------------'];
+    t.thread.forEach(function (m) {
+      lines.push((m.role === 'user' ? '【我】' : '【医生】') + m.content);
+    });
+    try { U.download('心理医生对话_' + U.shortDate() + '.txt', lines.join('\n\n')); Toast.success('已导出对话记录'); }
+    catch (e) { Toast.warn('导出失败：' + ((e && e.message) || String(e))); }
+  }
+  // 阶段心理报告（AI 周报：数据 + 情绪日志 → 流式 → 缓存 Store.psy.weeklyReport）
+  function psyWeeklyReport() {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+    var wk = U.weekKey ? U.weekKey() : '';
+    var p = psyProfile();
+    var moodLog = [];
+    try { moodLog = (Store.get().psy && Store.get().psy.moodLog) || []; } catch (e) {}
+    var weekMood = moodLog.filter(function (m) { return m.at && m.at.slice(0, 10) >= wk.slice(0, 10); });
+    var moodSummary = U.countBy(weekMood.map(function (m) { return m.label; }), function (x) { return x; });
+    var moodTxt = Object.keys(moodSummary).length
+      ? Object.keys(moodSummary).map(function (k) { return k + '×' + moodSummary[k]; }).join('、')
+      : '本周暂无对话情绪记录';
+    var sys = '你是温和专业的心理学顾问。基于考生本周心理数据，输出一份「本周心理状态报告」。';
+    var usr = '【本周心理数据】\n' + psyProfileText(p)
+      + '\n【本周对话情绪分布】' + moodTxt
+      + '\n\n请输出（≤180字，简体中文，温暖不空洞）：'
+      + '\n1) 本周心情画像（一句话，引用数据）'
+      + '\n2) 主要压力源（结合卡壳热点与情绪，1-2条）'
+      + '\n3) 情绪变化规律（1-2句）'
+      + '\n4) 下周自我关怀计划（2-3条今天就能做的具体动作）';
+    var cached = null;
+    try { cached = (Store.get().psy && Store.get().psy.weeklyReport) || null; } catch (e) {}
+    if (cached && cached.week === wk) {
+      openPsyReportView(cached.content, cached.at);
+      return;
+    }
+    // 流式生成（Modal 内）
+    var buf = '';
+    var done = false;
+    Modal.open({
+      title: '📋 本周心理报告（AI 生成中…）',
+      html: '<div class="muted-sm" id="psy-rpt-status">⏳ 正在结合你的心理数据生成…（约 10-20 秒）</div>'
+        + '<pre class="report" id="psy-rpt-out" style="margin-top:10px;white-space:pre-wrap;min-height:120px"></pre>',
+      actions: [{ label: '关闭' }]
+    });
+    AI.chatStream(sys, usr, function (full) {
+      buf = full || '';
+      var out = document.getElementById('psy-rpt-out');
+      if (out) { out.textContent = buf; }
+    }, null, { cache: false, noThink: false, timeout: 120000 }).then(function (full) {
+      done = true;
+      try {
+        Store.update(function (s) { s.psy = s.psy || {}; s.psy.weeklyReport = { week: wk, content: full || buf, at: new Date().toISOString() }; });
+      } catch (e) {}
+      var st = document.getElementById('psy-rpt-status');
+      if (st) st.textContent = '✅ 报告已生成并保存';
+      openPsyReportView(full || buf, new Date().toISOString());
+    }).catch(function (e) {
+      done = true;
+      var st = document.getElementById('psy-rpt-status');
+      if (st) st.textContent = '⚠ 生成失败：' + ((e && e.message) || String(e));
+    });
+  }
+  // 展示周报（Modal，可重新生成）
+  function openPsyReportView(content, at) {
+    Modal.open({
+      title: '📋 本周心理报告',
+      html: '<pre class="report" style="white-space:pre-wrap;line-height:1.8">' + U.esc(content || '') + '</pre>'
+        + (at ? '<div class="muted-sm" style="margin-top:6px">生成于 ' + U.esc(String(at).slice(0, 16).replace('T', ' ')) + '</div>' : ''),
+      actions: [
+        { label: '关闭' },
+        { label: '🔄 重新生成', kind: 'btn-primary', onClick: function (close) { close(); psyWeeklyReport(); } }
+      ]
+    });
+  }
   // 渲染医生卡片
   function psyCardHtml() {
     const s = Store.get();
@@ -18389,7 +18469,19 @@ function bind(el, next) {
       return '<div class="psy-msg ' + cls + '"><div class="psy-bubble">' + (m.role === 'user' ? U.esc(m.content) : Tex.renderInline(m.content)) + '</div></div>';
     }).join('');
     return '<div class="card"><div class="card-title-row"><span class="card-title">🧑‍⚕️ AI 心理医生</span>'
-      + '<button class="btn btn-ghost btn-sm" id="psy-profile">📊 我的心理画像</button></div>'
+      + '<button class="btn btn-ghost btn-sm" id="psy-profile">📊 我的心理画像</button>'
+      + '<button class="btn btn-ghost btn-sm" id="psy-report">📋 本周报告</button>'
+      + '<button class="btn btn-ghost btn-sm" id="psy-export">⤵ 导出对话</button></div>'
+      + (function () {
+        try {
+          var wr = Store.get().psy && Store.get().psy.weeklyReport;
+          if (wr && wr.content) {
+            var short = String(wr.content).slice(0, 80);
+            return '<div class="psy-report-snippet"><b>📋 本周报告</b>（' + U.esc(String(wr.week || '').slice(5).replace('-', '月').replace('-', '日') || '') + '）：' + U.esc(short) + (wr.content.length > 80 ? '…' : '') + ' <button class="btn btn-link" id="psy-report-view">查看完整</button></div>';
+          }
+        } catch (e) {}
+        return '';
+      })()
       + '<div class="psy-persona">'
       + ['warm', 'objective'].map(function (k) {
         return '<button class="btn btn-sm ' + (persona === k ? 'btn-primary' : 'btn-ghost') + '" data-psy-persona="' + k + '">' + PSY_PERSONA[k].emoji + ' ' + PSY_PERSONA[k].name + '口吻</button>';
@@ -18521,6 +18613,14 @@ function bind(el, next) {
     });
     var pb = el.querySelector('#psy-profile');
     if (pb) pb.onclick = openPsyProfile;
+    var rp = el.querySelector('#psy-report');
+    if (rp) rp.onclick = function () { psyWeeklyReport(); };
+    var rv = el.querySelector('#psy-report-view');
+    if (rv) rv.onclick = function () {
+      try { var wr = Store.get().psy && Store.get().psy.weeklyReport; if (wr) openPsyReportView(wr.content, wr.at); } catch (e) {}
+    };
+    var ex = el.querySelector('#psy-export');
+    if (ex) ex.onclick = exportPsyChat;
     // 心理医生前置检查：AI 未配置 → 弹引导 Modal（不只是一闪而过的 Toast）
     function ensureAiReady() {
       if (typeof AI !== 'undefined' && AI.configured()) return true;
