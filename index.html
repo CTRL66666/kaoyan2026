@@ -20235,8 +20235,8 @@ function bind(el, next) {
           + '<button class="btn btn-ghost btn-sm" data-gotab="add">✍️ 收录单词</button>'
           + '<button class="btn btn-ghost btn-sm" data-gotab="books">📚 学习词书</button>'
           + '<button class="btn btn-ghost btn-sm" data-gotab="stats">📊 查看数据</button></div>'
-          // 【修复】队列已清空但词库仍有困难词（EF<2.0/遗忘≥3）时，困难词特训入口常驻可见
-          + (hardN > 0 ? '<div class="btn-row" style="justify-content:center;margin-top:6px"><button class="btn btn-ghost btn-sm" id="vb-hard-only">🔁 只复习困难词（' + hardN + '）</button></div>' : '')
+          // 【修复】始终常驻——hardN=0 时按钮降级为「手动挑词特训」（切 manage + filter=hard）
+          + '<div class="btn-row" style="justify-content:center;margin-top:6px"><button class="btn btn-ghost btn-sm" id="vb-hard-only" data-hardn="' + hardN + '">' + (hardN > 0 ? '🔁 只复习困难词（' + hardN + '）' : '🔁 挑词特训（手动选）') + '</button></div>'
           + '<div class="muted-sm" style="text-align:center">明天再来，间隔复习会在这等你。</div>';
       } else {
         html += '<div class="form-grid" style="margin-top:12px">'
@@ -20252,8 +20252,10 @@ function bind(el, next) {
           + '<label class="fld" style="display:flex;align-items:center;gap:6px;padding-top:14px"><input type="checkbox" id="vb-speed"' + (speedMode ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:12px">⚡ 速测模式（纯翻面·遮义测验，无填空/选词/听力）</span></label>'
           + '</div>'
           + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="vb-start">开始复习（' + learnN + ' 张）</button>'
-          // 【轮2】顽固词专区：一键只复习困难词
-          + (hardN > 0 ? '<button class="btn btn-ghost" id="vb-hard-only">🔁 只复习困难词（' + hardN + '）</button>' : '')
+          // 【轮2】顽固词专区：始终常驻入口
+          //   hardN > 0 → 进入算法特训（startHardSession）
+          //   hardN = 0 → 切到词库管理 + 过滤困难词，让用户手动挑主观感觉难的词
+          + '<button class="btn btn-ghost" id="vb-hard-only" data-hardn="' + hardN + '">' + (hardN > 0 ? '🔁 只复习困难词（' + hardN + '）' : '🔁 挑词特训（手动选）') + '</button>'
           + '</div>';
       }
       return html + '</div>';
@@ -20690,7 +20692,15 @@ function bind(el, next) {
       });
     }
     var FILTERS = [['all', '全部'], ['due', '今日到期'], ['new', '新词'], ['learning', '学习中'], ['hard', '困难词'], ['mastered', '已牢固']];
-    return '<div class="card"><div class="card-title">导入 / 导出</div>'
+    // 当前过滤提示（hard 时引导用户：算法判定 EF<2.0/lapses≥3，主观感觉难的词可手动勾选加入特训）
+    var filterBanner = filter !== 'all'
+      ? '<div class="card"><div class="muted-sm" style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+        + '<span>🔍 当前过滤：<b>' + (FILTERS.filter(function (x) { return x[0] === filter; })[0] || [])[1] + '</b>'
+        + (filter === 'hard' ? '（算法 EF&lt;2.0 或遗忘≥3；主观感觉难的词可手动勾选加入特训）' : '')
+        + '</span>'
+        + '<button class="btn btn-ghost btn-sm" id="vb-filter-clear">清除过滤（看全部）</button></div>'
+      : '';
+    return filterBanner + '<div class="card"><div class="card-title">导入 / 导出</div>'
       + '<div class="muted-sm">导出备份全量词库与复习日志；导入会合并进当前词库（同词不重复，不丢 SM-2 进度）。</div>'
       + '<div class="btn-row" style="margin-top:8px">'
       + '<button class="btn btn-ghost btn-sm" id="vb-exp-json">导出 JSON</button>'
@@ -20834,7 +20844,16 @@ function bind(el, next) {
     };
     // 【轮2】顽固词专区
     var hardBtn = el.querySelector('#vb-hard-only');
-    if (hardBtn) hardBtn.onclick = function () { startHardSession(); };
+    if (hardBtn) hardBtn.onclick = function () {
+      var n = +hardBtn.getAttribute('data-hardn');
+      if (n > 0) { startHardSession(); return; }
+      // hardN=0：降级为手动挑选——切到词库管理并过滤困难词
+      filter = 'hard'; tab = 'manage';
+      if (lastEl) render(lastEl);
+      Toast.show('当前词库无算法判定的困难词（EF<2.0/遗忘≥3）——已切到词库管理「困难词」过滤，可手动勾选感觉难的词复习', 'info', 4500);
+    };
+    var filterClear = el.querySelector('#vb-filter-clear');
+    if (filterClear) filterClear.onclick = function () { filter = 'all'; searchQ = ''; if (lastEl) render(lastEl); };
     // 【轮9】空状态三入口
     el.querySelectorAll('[data-gotab]').forEach(function (b) {
       b.onclick = function () { tab = b.getAttribute('data-gotab'); session = null; flipped = false; render(el); };
