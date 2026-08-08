@@ -17100,11 +17100,17 @@ function bind(el, next) {
     SUBJ_ORDER.forEach(function (subj) {
       (DB.TOPICS[subj] || []).forEach(function (t) {
         var s = scoreOf(t, heat, dep, trends);
+        // 【第二轮③】押题理由置信度融入押题分：confidence 70-100 → 押题分 +2 ~ +5
+        var reason = reasons[t.id];
+        var reasonBonus = 0;
+        if (reason && typeof reason.confidence === 'number') {
+          reasonBonus = Math.round(Math.max(0, Math.min(5, (reason.confidence - 60) / 8)));
+        }
         rows.push({
           subj: subj, id: t.id, name: t.name, group: t.group || '',
           tier: t.tier, lvl: s.lvl, examFreq: s.examFreq, timeliness: s.timeliness,
           weakness: s.weakness, leverage: s.leverage, diffMatch: s.diffMatch,
-          score: s.score, dep: s.dep, mastered: s.lvl >= 2
+          score: s.score + reasonBonus, reasonBonus: reasonBonus, dep: s.dep, mastered: s.lvl >= 2
         });
       });
     });
@@ -17170,6 +17176,12 @@ function bind(el, next) {
           + '<details style="margin-top:4px"><summary style="font-size:11.5px;cursor:pointer;opacity:.7">📐 查看五维权重明细</summary>' + wBars + '</details>'
           + '</div>';
       })()
+      // 【第二轮⑥】临考冲刺横幅：final 阶段一键出冲刺卷（hard+精简+快速）
+      + (phaseOf(daysLeft).key === 'final'
+        ? '<div class="alert alert-warn" style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">'
+          + '<span>🎯 <b>临考冲刺</b>：优先押高难题 + 快速过考点，时间用在刀刃上。</span>'
+          + '<button class="btn btn-sm btn-primary" id="sp-rush-exam">⚡ 一键生成冲刺卷（hard+精简）</button></div>'
+        : '')
       + '<div class="sp-chips">'
       + '<span class="tag">扫描 ' + rows.length + ' 考点</span>'
       + '<span class="tag">命中 ' + list.length + ' 个</span>'
@@ -17191,8 +17203,16 @@ function bind(el, next) {
 
       // 【轮11】每日押题推荐卡：今天主攻 Top3（按分+日期滚动）
       + (function () {
-        var cands = filtered.filter(function (r) { return !r.mastered; }).slice(0, 9);
-        if (!cands.length) return '';
+        // 【第二轮⑦】已练追踪：当天练过的不重复推荐
+        var daily = (st.sprintData && st.sprintData.dailyDone) || {};
+        var todayKey = U.shortDate();
+        var doneToday = (daily.date === todayKey) ? (daily.ids || []) : [];
+        var cands = filtered.filter(function (r) { return !r.mastered && doneToday.indexOf(r.id) < 0; }).slice(0, 9);
+        if (!cands.length) {
+          return doneToday.length
+            ? '<div class="card" style="margin:8px 0;background:var(--bg-muted)"><div class="card-title-sm">✅ 今日主攻已全部练过</div><div class="muted-sm">已打卡 ' + doneToday.length + ' 个考点，明天会换一批新推荐。也可以手动挑题去练。</div></div>'
+            : '';
+        }
         var dayOfYear = Math.floor(Date.now() / 86400000);
         var picks = [];
         for (var k = 0; k < 3 && cands.length; k++) picks.push(cands[(dayOfYear * 7 + k * 5) % cands.length]);
@@ -17206,7 +17226,7 @@ function bind(el, next) {
             + '<div style="font-weight:500;font-size:13.5px;margin:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + U.esc(r.name) + '</div>'
             + '<div style="font-size:11px">押题分 <b style="color:' + (r.score >= 18 ? 'var(--danger)' : r.score >= 10 ? 'var(--warn)' : '') + '">' + r.score + '</b></div></div>';
         }).join('');
-        return '<div class="card" style="margin:8px 0;background:var(--bg-muted)"><div class="card-title-sm">🎯 今日主攻（点击直接去练）<span class="muted-sm" style="font-size:11px">· 每天自动轮换，3 天覆盖一组</span></div>'
+        return '<div class="card" style="margin:8px 0;background:var(--bg-muted)"><div class="card-title-sm">🎯 今日主攻（点击直接去练）<span class="muted-sm" style="font-size:11px">· ' + (doneToday.length ? '已练 ' + doneToday.length + ' 个' : '每天自动轮换，3 天覆盖一组') + '</span></div>'
           + '<div style="display:flex;gap:8px;flex-wrap:wrap">' + cards + '</div></div>';
       })()
 
@@ -17296,7 +17316,7 @@ function bind(el, next) {
         + '<div class="sp-meta"><span>' + U.esc(r.group) + '</span>'
         + '<span class="sp-bars">' + tierText(r, r.dep) + ' ｜ ' + weakText(r.lvl, heat[r.id] || {}) + '</span></div>'
         + '<div class="sp-scorerow"><span class="sp-score">押题分 <b>' + r.score + '</b></span>'
-        + '<span class="sp-formula">考频' + r.examFreq + '×时效' + r.timeliness + '×薄弱' + r.weakness + '×杠杆' + r.leverage + '×难度' + r.diffMatch + '</span></div>';
+        + '<span class="sp-formula">考频' + r.examFreq + '×时效' + r.timeliness + '×薄弱' + r.weakness + '×杠杆' + r.leverage + '×难度' + r.diffMatch + (r.reasonBonus ? '<span style="color:var(--ok)">+AI理由' + r.reasonBonus + '</span>' : '') + '</span></div>';
       if (reason) {
         html += '<details style="margin-top:4px"><summary style="font-size:12px;cursor:pointer;opacity:.7">🧠 押题理由（置信度 ' + (reason.confidence || '?') + '%）</summary>'
           + '<div class="report" style="margin-top:4px;font-size:13px;opacity:.85">' + U.esc(reason.reason || '') + '</div></details>';
@@ -17698,6 +17718,76 @@ function bind(el, next) {
       + '</div>';
   }
 
+  // 【第二轮①】押题卷打印版：新窗口输出无答案试卷（含答题空区），适合打出来做
+  function printExam(exam) {
+    try {
+      var w = window.open('', '_blank');
+      if (!w) { Toast.warn('浏览器拦截了新窗口，请允许弹窗后重试'); return; }
+      var totalScore = exam.questions.reduce(function (s, q) { return s + (q.score || 0); }, 0);
+      var qs = exam.questions.map(function (q, i) {
+        var opts = (q.type === 'choice' && q.options && q.options.length)
+          ? '<div style="margin:6px 0 10px">' + q.options.map(function (o) { return '<div style="margin:3px 0">' + o + '</div>'; }).join('') + '</div>'
+          : '';
+        var ansArea = q.type === 'choice' && q.options && q.options.length ? '' : '<div style="height:110px;border-bottom:1px dashed #bbb;margin:8px 0 18px"></div>';
+        return '<div style="margin-bottom:14px"><b>' + (i + 1) + '. [' + (q.score || 0) + '分]</b> ' + (q.stem || '')
+          + opts + ansArea + '</div>';
+      }).join('');
+      w.document.write('<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>' + U.esc(exam.title) + '</title>'
+        + '<style>body{font-family:SimSun,serif;max-width:720px;margin:24px auto;padding:0 20px;color:#111;line-height:1.8}'
+        + 'h1{font-size:18px;text-align:center}.meta{text-align:center;color:#555;font-size:13px;margin:6px 0 18px}'
+        + '.q{page-break-inside:avoid}</style></head><body>'
+        + '<h1>' + U.esc(exam.title) + '</h1>'
+        + '<div class="meta">' + qn_zh(exam) + ' · 满分 ' + totalScore + ' · 建议限时 ' + (exam.timeLimit || 180) + ' 分钟 · 打印时间 ' + new Date().toLocaleDateString() + '</div>'
+        + '<div style="border-bottom:1px solid #999;margin-bottom:14px;padding-bottom:6px">姓名：______　得分：______</div>'
+        + qs
+        // 拆开闭合标签字符串拼接，避免 build 完整性校验误判截断
+        + '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},300);};</scr' + 'ipt></bo' + 'dy></ht' + 'ml>');
+      w.document.close();
+    } catch (e) { Toast.warn('打印失败：' + ((e && e.message) || String(e))); }
+  }
+  function qn_zh(exam) {
+    var qn = (exam.questions || []).length;
+    return qn + ' 题';
+  }
+
+  // 【第二轮②】错题变式重做：AI 基于原题换数换问法生成 1 道同类题 → 入题库（source=variant）
+  function variantOfQuestion(examId, qi) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    var st = Store.get();
+    var exam = ((st.sprintData && st.sprintData.mockExams) || []).find(function (e) { return e.id === examId; });
+    var q = exam && exam.questions[qi];
+    if (!q) { Toast.warn('题目不存在'); return; }
+    var float = window.Components && Components.aiFloat ? Components.aiFloat('🔄 出变式题') : null;
+    if (float) float.status('⏳ 正在生成「' + (q.topicName || '该考点') + '」同类变式…');
+    var sys = '你是考研命题专家。基于原题生成 1 道**同考点、同题型**的变式题：换数据/换数字/换设问角度/换情境，但解题方法相同，难度不低于原题。\n'
+      + '只输出 JSON：{"stem":"题干（LaTeX）","type":"choice|solve","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"答案","solution":"解析","diff":"medium|hard","topicName":"考点名"}。不要任何多余文字。';
+    var usr = '原题（考点：' + (q.topicName || '未标注') + '，难度：' + (q.diff || 'medium') + '）：\n' + q.stem
+      + (q.options && q.options.length ? '\n选项：' + q.options.join(' | ') : '')
+      + '\n答案：' + (q.answer || '')
+      + '\n请生成变式题。';
+    AI.chatStream(sys, usr, function (txt) { if (float) float.content(txt); }, null, { cache: false, noThink: true, timeout: 180000, maxTokens: 6000 }).then(function (full) {
+      var r = AI.extractRobustJSON(full);
+      if (!r || !r.stem) throw new Error('AI 未返回有效变式题');
+      Store.update(function (s) {
+        s.questionBank = s.questionBank || [];
+        s.questionBank.unshift({
+          id: U.uid(), examId: 'variant', qi: -1, subject: exam.subject,
+          stem: String(r.stem || ''), options: Array.isArray(r.options) ? r.options.slice(0, 4).map(String) : [],
+          answer: String(r.answer || ''), solution: String(r.solution || ''), diff: r.diff === 'hard' ? 'hard' : 'medium',
+          score: q.score || 0, topicName: String(r.topicName || q.topicName || ''), addedAt: new Date().toISOString(),
+          variantOf: examId + ':' + qi, source: 'variant'
+        });
+        if (s.questionBank.length > 200) s.questionBank = s.questionBank.slice(0, 200);
+      });
+      if (float) { float.done(); setTimeout(function () { float.close(); }, 800); }
+      Toast.success('变式题已加入我的题库（做对为止）');
+      if (currentEl) render(currentEl);
+    }).catch(function (e) {
+      if (float) { float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500); }
+      Toast.warn('变式生成失败：' + ((e && e.message) || String(e)));
+    });
+  }
+
   // ==================== 个人题库（押题卷题目收藏） ====================
   function bankList() { return (Store.get().questionBank) || []; }
   function questionInBank(examId, qi) {
@@ -17771,11 +17861,14 @@ function bind(el, next) {
       exam.questions.forEach(function (q, qi) { var r = (exam.results || [])[qi]; if (r && !r.correct) wrongs.push(q); });
       var wrongHtml = wrongs.length ? wrongs.map(function (q) {
         var pb = findMethodFor(q.topicName || (q.stem || '').slice(0, 20), exam.subject);
+        var qi = exam.questions.indexOf(q);
         return '<div style="font-size:13px;padding:4px 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
           + '<span style="color:#cf1322">✗</span> ' + U.esc(q.topicName || (q.stem || '').slice(0, 30))
           + (pb ? '<button class="btn btn-sm btn-ghost sp-method-post" data-pb="' + pb.id + '" style="font-size:11px">🧭 看方法</button>' : '')
           + '<button class="btn btn-sm btn-ghost sp-prac-post" data-subj="' + exam.subject + '" data-name="' + U.esc(q.topicName || '') + '" style="font-size:11px">去练</button>'
-          + (window.TutorModule ? '<button class="btn btn-sm btn-ghost sp-tutor-post" data-exam="' + exam.id + '" data-qi="' + exam.questions.indexOf(q) + '" style="font-size:11px">🧑‍🏫 问私教</button>' : '')
+          // 【第二轮②】错题变式重做：AI 同考点换数换问法 → 入题库
+          + '<button class="btn btn-sm btn-ghost sp-variant" data-exam="' + exam.id + '" data-qi="' + qi + '" style="font-size:11px">🔄 出变式</button>'
+          + (window.TutorModule ? '<button class="btn btn-sm btn-ghost sp-tutor-post" data-exam="' + exam.id + '" data-qi="' + qi + '" style="font-size:11px">🧑‍🏫 问私教</button>' : '')
           + '</div>';
       }).join('') : '<div style="color:var(--ok)">🎉 本轮零错题，状态极佳！</div>';
       scoreCard = '<div class="card sp-scorecard" style="margin:10px 0;background:var(--bg-muted)">'
@@ -17843,6 +17936,8 @@ function bind(el, next) {
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-back">← 返回智能押题</button>'
       + '<span style="flex:1;min-width:0"><b>📝 ' + U.esc(exam.title) + '</b>'
       + '<span class="muted-sm" style="margin-left:6px">' + qn + '题 · 满分' + totalScore + ' · ' + (done ? '已完成' : '限时' + (exam.timeLimit || 180) + '分钟') + '</span></span>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-exam-print">🖨 打印试卷</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-exam-star" title="标星收藏">' + (exam.starred ? '⭐' : '☆') + '</button>'
       + (!done ? '<span id="sp-exam-timer" style="font-variant-numeric:tabular-nums;font-weight:600;color:var(--danger)"></span>' : '<span class="tag tag-ok">✓ 已完成</span>')
       + '</div>'
       + '<div class="sp-exam-progress" style="margin:8px 0 4px"><span class="muted-sm" style="font-size:12px">作答进度 ' + answeredN + '/' + qn + '</span>'
@@ -17860,6 +17955,14 @@ function bind(el, next) {
     var examId = exam.id;
     var back = el.querySelector('#sp-exam-back');
     if (back) back.onclick = function () { examSession = null; clearExamTimer(); App.refresh(); };
+    var printBtn = el.querySelector('#sp-exam-print');
+    if (printBtn) printBtn.onclick = function () { printExam(exam); };
+    var starBtn = el.querySelector('#sp-exam-star');
+    if (starBtn) starBtn.onclick = function () {
+      Store.update(function (s) { var e = (s.sprintData.mockExams || []).find(function (x) { return x.id === examId; }); if (e) e.starred = !e.starred; });
+      Toast.show(exam.starred ? '已取消标星' : '⭐ 已标星收藏', 'info', 1200);
+      if (currentEl) render(currentEl);
+    };
     var submit = el.querySelector('#sp-exam-submit');
     if (submit) submit.onclick = function () { gradeExam(examId, el); };
 
@@ -17906,6 +18009,7 @@ function bind(el, next) {
       }
       if (t.classList.contains('sp-to-bank')) { addQuestionToBank(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
       if (t.classList.contains('sp-to-mistake')) { addQuestionToMistakes(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
+      if (t.classList.contains('sp-variant')) { variantOfQuestion(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
       if (t.classList.contains('sp-method-post')) { if (window.InspectorModule && InspectorModule.openPlaybook) InspectorModule.openPlaybook(t.getAttribute('data-pb')); return; }
       if (t.classList.contains('sp-prac-post')) {
         var subj = t.getAttribute('data-subj'), name = t.getAttribute('data-name');
@@ -18121,12 +18225,30 @@ function bind(el, next) {
           return { label: (h.examName || '').slice(0, 8), value: Math.round((h.hit || []).length / Math.max(1, (h.topics || []).length) * 100) };
         }), { h: 90 }) + '</div>';
     }
+    // 【第二轮⑧】单科命中率：按 topic id 前缀分科（m→数学 c→专业课 e→英语 p→政治）
+    var subjHit = {};
+    SUBJ_ORDER.forEach(function (s2) { subjHit[s2] = { hit: 0, tot: 0 }; });
+    tracker.forEach(function (h) {
+      var hitSet = {}; (h.hit || []).forEach(function (x) { hitSet[x] = true; });
+      (h.topics || []).forEach(function (tid) {
+        var k = (typeof tid === 'string' ? tid.charAt(0) : '') === 'm' ? 'math' : (typeof tid === 'string' ? tid.charAt(0) : '') === 'c' ? 'ctrl' : (typeof tid === 'string' ? tid.charAt(0) : '') === 'e' ? 'eng' : (typeof tid === 'string' ? tid.charAt(0) : '') === 'p' ? 'pol' : null;
+        if (!k || !subjHit[k]) return;
+        subjHit[k].tot++;
+        if (hitSet[tid]) subjHit[k].hit++;
+      });
+    });
+    var subjTags = SUBJ_ORDER.map(function (s2) {
+      var v = subjHit[s2];
+      if (!v.tot) return '<span class="tag tag-mod">' + subjName(s2) + ' 暂无</span>';
+      var pct = Math.round(v.hit / v.tot * 100);
+      return '<span class="tag" style="background:' + subjColor(s2) + ';color:#fff">' + subjName(s2) + ' 命中 ' + pct + '% (' + v.hit + '/' + v.tot + ')</span>';
+    }).join('');
 
     var topicOpts = rows.map(function (r) { return '<option value="' + r.id + '">' + subjName(r.subj) + ':' + U.esc(r.name) + '</option>'; }).join('');
 
     Modal.open({
       title: '🎯 押题命中追踪', wide: true, dismissable: true,
-      html: trendHtml + '<div class="muted-sm" style="margin-bottom:8px">做完真题后，选择今年真题考过的考点，系统会自动对比你的押题列表，计算命中率。</div>'
+      html: trendHtml + (tracker.length ? '<div class="card" style="margin:8px 0;background:var(--bg-muted)"><div class="card-title-sm">🧩 单科命中率</div><div style="display:flex;gap:6px;flex-wrap:wrap">' + subjTags + '</div></div>' : '') + '<div class="muted-sm" style="margin-bottom:8px">做完真题后，选择今年真题考过的考点，系统会自动对比你的押题列表，计算命中率。</div>'
         + '<div class="card-title-sm">添加命中记录</div>'
         + '<input class="input" id="sp-hit-name" placeholder="真题名称（如 2025数学一）" style="margin:4px 0">'
         + '<input class="input" id="sp-hit-year" placeholder="年份" style="margin:4px 0;width:100px">'
@@ -18265,7 +18387,7 @@ function bind(el, next) {
   }
 
   // ==================== 我的题库浏览 ====================
-  function bankCardHtml(b, idx) {
+  function bankCardHtml(b, idx, showPick) {
     var diffStars = { easy: 2, medium: 3, hard: 5 };
     var dn = diffStars[b.diff] || 3;
     var stars = '★'.repeat(dn) + '☆'.repeat(5 - dn);
@@ -18277,7 +18399,8 @@ function bind(el, next) {
         }).join('') + '</div>' : '';
     return '<div class="card sp-exam-card" style="margin:10px 0" data-bank="' + b.id + '">'
       + '<div class="sp-exam-head" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">'
-      + '<span class="sp-exam-no">题 ' + (idx + 1) + '</span>'
+      + (showPick ? '<input type="checkbox" class="sp-bank-pick" data-id="' + b.id + '" style="width:auto;margin:0">' : '')
+      + '<span class="sp-exam-no">' + (b.source === 'variant' ? '🔄 变式' : '题 ' + (idx + 1)) + '</span>'
       + '<span style="font-size:11.5px;color:var(--warn)">' + stars + ' ' + (b.diff === 'hard' ? '压轴' : '中档') + '</span>'
       + '<span class="tag tag-mod">' + (b.score || 0) + ' 分</span>'
       + (b.topicName ? '<span class="tag" style="background:#096dd9;color:#fff">' + U.esc(b.topicName) + '</span>' : '')
@@ -18290,17 +18413,30 @@ function bind(el, next) {
       + '<button class="btn btn-sm btn-ghost sp-bank-del" data-id="' + b.id + '" style="font-size:11px">🗑 移出</button>'
       + '</div></div>';
   }
+  // 【第二轮⑤】题库科目筛选状态
+  var bankSubj = '';
   function openBank(el) {
-    var list2 = bankList();
+    var all = bankList();
+    var list2 = bankSubj ? all.filter(function (b) { return b.subject === bankSubj; }) : all;
+    var subjOpts = '<option value="">全部科目</option>' + SUBJ_ORDER.map(function (s) {
+      return '<option value="' + s + '"' + (bankSubj === s ? ' selected' : '') + '>' + subjName(s) + '</option>';
+    }).join('');
     var html = list2.length
-      ? list2.map(function (b, i) { return bankCardHtml(b, i); }).join('')
-      : '<div class="empty" style="padding:20px 4px">📚 题库还是空的。在押题卷的任意题目点「📥 加入题库」收藏好题，在这里集中复习。</div>';
+      ? list2.map(function (b, i) { return bankCardHtml(b, i, true); }).join('')
+      : '<div class="empty" style="padding:20px 4px">' + (bankSubj ? '该科目下没有收藏题。' : '📚 题库还是空的。在押题卷的任意题目点「📥 加入题库」收藏好题，在这里集中复习。') + '</div>';
     Modal.open({
-      title: '📚 我的题库（' + list2.length + '）', wide: true, dismissable: true,
-      html: '<div class="muted-sm" style="margin-bottom:8px">从押题卷收藏的好题/易错题集中在这里，可随时查看解析或跳去练习。</div>' + html,
+      title: '📚 我的题库（' + list2.length + '/' + all.length + '）', wide: true, dismissable: true,
+      html: '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+        + '<select id="sp-bank-subj" class="input input-sm">' + subjOpts + '</select>'
+        + '<button class="btn btn-ghost btn-sm" id="sp-bank-checkall" style="font-size:11px">☑ 全选</button>'
+        + '<button class="btn btn-ghost btn-sm" id="sp-bank-batchdel" style="font-size:11px;color:#cf1322">🗑 移出选中（0）</button>'
+        + '<span class="muted-sm" style="font-size:11px">从押题卷收藏的好题/变式集中在这里，可查看解析或跳去练习。</span></div>'
+        + html,
       actions: [{ label: '关闭', kind: 'btn-ghost' }]
     });
     setTimeout(function () {
+      var subjSel = document.getElementById('sp-bank-subj');
+      if (subjSel) subjSel.onchange = function () { bankSubj = subjSel.value; Modal.close(); openBank(el); };
       document.querySelectorAll('.sp-bank-prac').forEach(function (b2) {
         b2.onclick = function () {
           Modal.close();
@@ -18315,6 +18451,34 @@ function bind(el, next) {
           Modal.close(); openBank(el);
         };
       });
+      // 全选 / 批量移出
+      var ckAll = document.getElementById('sp-bank-checkall');
+      var batch = document.getElementById('sp-bank-batchdel');
+      var refreshBatch = function () {
+        if (!batch) return;
+        var n = document.querySelectorAll('.sp-bank-pick:checked').length;
+        batch.textContent = '🗑 移出选中（' + n + '）';
+        batch.disabled = !n;
+      };
+      if (ckAll) ckAll.onclick = function () {
+        var boxes = document.querySelectorAll('.sp-bank-pick');
+        var on = Array.prototype.some.call(boxes, function (b2) { return !b2.checked; });
+        boxes.forEach(function (b2) { b2.checked = on; });
+        refreshBatch();
+      };
+      if (batch) {
+        batch.disabled = true;
+        batch.onclick = function () {
+          var ids = Array.prototype.map.call(document.querySelectorAll('.sp-bank-pick:checked'), function (b2) { return b2.getAttribute('data-id'); });
+          if (!ids.length) return;
+          Modal.confirm('批量移出', '确定移出选中的 <b>' + ids.length + '</b> 道题？', '移出', function () {
+            Store.update(function (s) { s.questionBank = (s.questionBank || []).filter(function (x) { return ids.indexOf(x.id) < 0; }); });
+            Toast.show('已移出 ' + ids.length + ' 道', 'info', 1500);
+            Modal.close(); openBank(el);
+          }, true);
+        };
+      }
+      document.querySelectorAll('.sp-bank-pick').forEach(function (b2) { b2.onchange = refreshBatch; });
     }, 80);
   }
 
@@ -18358,17 +18522,29 @@ function bind(el, next) {
     var copy = el.querySelector('#sp-copy'); if (copy) copy.onclick = function () { copyList(list); };
     // 【轮10】导出图片
     var imgBtn = el.querySelector('#sp-img'); if (imgBtn) imgBtn.onclick = function () { exportListImage(list); };
-    // 【轮11】每日推荐点击 → 去练
+    // 【轮11】每日推荐点击 → 去练（【第二轮⑦】记录已练）
     el.querySelectorAll('[data-daily]').forEach(function (c) {
       c.onclick = function () {
         var id = c.getAttribute('data-daily');
         var row = list.find(function (r) { return r.id === id; }) || rowsOf()[0];
         goPractice(row.subj, row.id, row.name);
+        // 记录今日已练（当天不重复推荐）
+        Store.update(function (s) {
+          s.sprintData = s.sprintData || {};
+          var todayKey = U.shortDate();
+          var daily = s.sprintData.dailyDone || {};
+          if (daily.date !== todayKey) daily = { date: todayKey, ids: [] };
+          if (daily.ids.indexOf(id) < 0) daily.ids.push(id);
+          s.sprintData.dailyDone = daily;
+        });
+        if (currentEl) render(currentEl);
       };
     });
 
     var tBtn = el.querySelector('#sp-ai-trend'); if (tBtn) tBtn.onclick = function () { aiTrend(el); };
     var eBtn = el.querySelector('#sp-ai-exam'); if (eBtn) eBtn.onclick = function () { openExamConfig(el); };
+    var rushExam = el.querySelector('#sp-rush-exam');
+    if (rushExam) rushExam.onclick = function () { saveExamPref({ diff: 'hard', count: 'lite' }); openExamConfig(el); };
     var rBtn = el.querySelector('#sp-ai-reason'); if (rBtn) rBtn.onclick = function () { aiReasons(el); };
     var pBtn = el.querySelector('#sp-rush-plan'); if (pBtn) pBtn.onclick = function () { rushPlan(el); };
     var hBtn = el.querySelector('#sp-hit-track'); if (hBtn) hBtn.onclick = function () { hitTrack(el); };
@@ -18434,7 +18610,7 @@ function bind(el, next) {
         var examsHtml = '<div class="card" style="background:var(--bg-muted);margin:8px 0"><div class="card-title-sm" style="display:flex;justify-content:space-between;align-items:center">📝 已生成的押题卷'
           + '<span style="display:flex;gap:6px;align-items:center"><button class="btn btn-ghost btn-sm" id="sp-open-bank">📚 我的题库（' + bankList().length + '）</button><span class="muted-sm" style="font-size:11px">' + exams.length + ' 套' + (doneExams.length ? ' · 已做 ' + doneExams.length : '') + '</span></span></div>'
           + trendHtml
-          + exams.slice(0, 8).map(function (e) {
+          + exams.slice().sort(function (a, b) { return (b.starred ? 1 : 0) - (a.starred ? 1 : 0); }).slice(0, 8).map(function (e) {
             var totalScore = e.questions.reduce(function (s, q) { return s + (q.score || 0); }, 0);
             var done = e.completedAt != null;
             var pct = totalScore ? Math.round((e.score || 0) / totalScore * 100) : 0;
@@ -18448,7 +18624,7 @@ function bind(el, next) {
               reviewTxt = '<span class="tag ' + (overdue ? 'tag-warn' : '') + '" style="font-size:10.5px;margin-left:4px">' + (overdue ? '⏰ 已到期' : '复习 ' + dueS) + '</span>';
             }
             return '<div style="padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:6px" data-exam="' + e.id + '">'
-              + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + U.esc(e.title) + reviewTxt + '</span>'
+              + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.starred ? '⭐ ' : '') + U.esc(e.title) + reviewTxt + '</span>'
               + '<span class="muted-sm" style="font-size:12px;flex-shrink:0">' + (done ? '<span style="color:' + (pct >= 60 ? 'var(--ok)' : pct >= 40 ? 'var(--warn)' : 'var(--danger)') + '">' + pct + '%</span> (' + (e.score || 0) + '/' + totalScore + ')' : e.questions.length + '题') + ' · ' + ((e.createdAt || '').slice(0, 10)) + '</span>'
               + '<button class="btn btn-sm btn-ghost sp-exam-del" data-id="' + e.id + '" style="font-size:11px;flex-shrink:0">🗑</button>'
               + '</div>';
@@ -18556,7 +18732,9 @@ function bind(el, next) {
     bankList: bankList,
     questionInBank: questionInBank,
     addQuestionToBank: addQuestionToBank,
-    addQuestionToMistakes: addQuestionToMistakes
+    addQuestionToMistakes: addQuestionToMistakes,
+    printExam: printExam,
+    variantOfQuestion: variantOfQuestion
   };
 })();
 
