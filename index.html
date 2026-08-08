@@ -17686,7 +17686,62 @@ function bind(el, next) {
       + optsHtml
       + (r && r.comment ? '<div class="gd-teach" style="margin-top:6px">🏫 ' + Tex.renderInline(r.comment) + '</div>' : '')
       + (done || answered ? '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(q.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(q.solution || '') + '</div></details>' : '')
+      // 【新增】加入题库 / 加入错题（任意题可收藏或手动入错题本）
+      + (function () {
+        var inBank = questionInBank(examId, qi);
+        var bankBtn = inBank
+          ? '<button class="btn btn-sm btn-ghost" disabled style="font-size:11px;opacity:.6">✓ 已在题库</button>'
+          : '<button class="btn btn-sm btn-ghost sp-to-bank" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px">📥 加入题库</button>';
+        var mkBtn = '<button class="btn btn-sm btn-ghost sp-to-mistake" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px;color:#cf1322">❌ 加入错题</button>';
+        return '<div class="btn-row" style="margin-top:8px">' + bankBtn + mkBtn + '</div>';
+      })()
       + '</div>';
+  }
+
+  // ==================== 个人题库（押题卷题目收藏） ====================
+  function bankList() { return (Store.get().questionBank) || []; }
+  function questionInBank(examId, qi) {
+    return bankList().some(function (b) { return b.examId === examId && b.qi === qi; });
+  }
+  // 加入题库（dedup：同卷同题只存一次）
+  function addQuestionToBank(examId, qi) {
+    var st = Store.get();
+    var exam = ((st.sprintData && st.sprintData.mockExams) || []).find(function (e) { return e.id === examId; });
+    var q = exam && exam.questions[qi];
+    if (!q) { Toast.warn('题目不存在'); return; }
+    if (questionInBank(examId, qi)) { Toast.show('该题已在题库', 'info', 1500); return; }
+    Store.update(function (s) {
+      s.questionBank = s.questionBank || [];
+      s.questionBank.unshift({
+        id: U.uid(), examId: examId, qi: qi, subject: exam.subject,
+        stem: q.stem || '', options: (q.options || []).slice(), answer: q.answer || '',
+        solution: q.solution || '', diff: q.diff || 'medium', score: q.score || 0,
+        topicName: q.topicName || '', addedAt: new Date().toISOString()
+      });
+      if (s.questionBank.length > 200) s.questionBank = s.questionBank.slice(0, 200);
+    });
+    Toast.success('已加入我的题库');
+    if (currentEl) render(currentEl);
+  }
+  // 手动加入错题（判对也能加；dedup 与交卷自动入画像共用 key 防重）
+  function addQuestionToMistakes(examId, qi) {
+    var st = Store.get();
+    var exam = ((st.sprintData && st.sprintData.mockExams) || []).find(function (e) { return e.id === examId; });
+    var q = exam && exam.questions[qi];
+    if (!q) { Toast.warn('题目不存在'); return; }
+    var dedup = 'mockExam:' + examId + ':' + qi;
+    if ((st.mistakes || []).some(function (m) { return m.dedupKey === dedup; })) { Toast.show('该题已在错题本', 'info', 1500); return; }
+    Store.update(function (s) {
+      s.mistakes = s.mistakes || [];
+      s.mistakes.unshift({
+        id: U.uid(), subject: exam.subject, type: 'concept',
+        desc: '【押题卷】' + (q.topicName || ('第' + (qi + 1) + '题')) + '：手动收录',
+        stem: q.stem || '', answer: q.answer || '', solution: q.solution || '',
+        refId: q.topicName || '', source: 'mock-exam', dedupKey: dedup,
+        date: U.shortDate(), createdAt: new Date().toISOString()
+      });
+    });
+    Toast.success('已加入错题本');
   }
 
   // 打开押题卷（全屏考试子页面）
@@ -17849,6 +17904,8 @@ function bind(el, next) {
         refreshExamProgress(examId);
         return;
       }
+      if (t.classList.contains('sp-to-bank')) { addQuestionToBank(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
+      if (t.classList.contains('sp-to-mistake')) { addQuestionToMistakes(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
       if (t.classList.contains('sp-method-post')) { if (window.InspectorModule && InspectorModule.openPlaybook) InspectorModule.openPlaybook(t.getAttribute('data-pb')); return; }
       if (t.classList.contains('sp-prac-post')) {
         var subj = t.getAttribute('data-subj'), name = t.getAttribute('data-name');
@@ -18207,6 +18264,60 @@ function bind(el, next) {
     }, 80);
   }
 
+  // ==================== 我的题库浏览 ====================
+  function bankCardHtml(b, idx) {
+    var diffStars = { easy: 2, medium: 3, hard: 5 };
+    var dn = diffStars[b.diff] || 3;
+    var stars = '★'.repeat(dn) + '☆'.repeat(5 - dn);
+    var optsHtml = (b.options && b.options.length)
+      ? '<div class="sp-exam-opts" style="margin-top:6px">' + b.options.map(function (o) {
+          var letter = (o || '').trim().charAt(0);
+          var isAns = (b.answer || '').trim().charAt(0).toUpperCase() === letter;
+          return '<span class="btn btn-sm sp-exam-opt' + (isAns ? ' sp-opt-ans' : '') + '" style="margin:2px;font-size:12px;cursor:default">' + Tex.renderInline(o) + '</span>';
+        }).join('') + '</div>' : '';
+    return '<div class="card sp-exam-card" style="margin:10px 0" data-bank="' + b.id + '">'
+      + '<div class="sp-exam-head" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">'
+      + '<span class="sp-exam-no">题 ' + (idx + 1) + '</span>'
+      + '<span style="font-size:11.5px;color:var(--warn)">' + stars + ' ' + (b.diff === 'hard' ? '压轴' : '中档') + '</span>'
+      + '<span class="tag tag-mod">' + (b.score || 0) + ' 分</span>'
+      + (b.topicName ? '<span class="tag" style="background:#096dd9;color:#fff">' + U.esc(b.topicName) + '</span>' : '')
+      + '<span class="tag">' + subjName(b.subject) + '</span></div>'
+      + '<div class="report" style="margin-top:6px">' + Tex.renderInline(b.stem) + '</div>'
+      + optsHtml
+      + '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(b.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(b.solution || '') + '</div></details>'
+      + '<div class="btn-row" style="margin-top:8px">'
+      + '<button class="btn btn-sm btn-primary sp-bank-prac" data-subj="' + b.subject + '" data-name="' + U.esc(b.topicName || (b.stem || '').slice(0, 20)) + '" style="font-size:11px">去练</button>'
+      + '<button class="btn btn-sm btn-ghost sp-bank-del" data-id="' + b.id + '" style="font-size:11px">🗑 移出</button>'
+      + '</div></div>';
+  }
+  function openBank(el) {
+    var list2 = bankList();
+    var html = list2.length
+      ? list2.map(function (b, i) { return bankCardHtml(b, i); }).join('')
+      : '<div class="empty" style="padding:20px 4px">📚 题库还是空的。在押题卷的任意题目点「📥 加入题库」收藏好题，在这里集中复习。</div>';
+    Modal.open({
+      title: '📚 我的题库（' + list2.length + '）', wide: true, dismissable: true,
+      html: '<div class="muted-sm" style="margin-bottom:8px">从押题卷收藏的好题/易错题集中在这里，可随时查看解析或跳去练习。</div>' + html,
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+    setTimeout(function () {
+      document.querySelectorAll('.sp-bank-prac').forEach(function (b2) {
+        b2.onclick = function () {
+          Modal.close();
+          goPractice(b2.getAttribute('data-subj'), '', b2.getAttribute('data-name'));
+        };
+      });
+      document.querySelectorAll('.sp-bank-del').forEach(function (b2) {
+        b2.onclick = function () {
+          var id = b2.getAttribute('data-id');
+          Store.update(function (s) { s.questionBank = (s.questionBank || []).filter(function (x) { return x.id !== id; }); });
+          Toast.show('已移出题库', 'info', 1500);
+          Modal.close(); openBank(el);
+        };
+      });
+    }, 80);
+  }
+
   // ==================== 事件绑定 ====================
   // 去练（跳 AI 测验变式，公共逻辑）
   function goPractice(subj, id, name) {
@@ -18321,7 +18432,7 @@ function bind(el, next) {
           }), { h: 90 }) + '</div>';
         }
         var examsHtml = '<div class="card" style="background:var(--bg-muted);margin:8px 0"><div class="card-title-sm" style="display:flex;justify-content:space-between;align-items:center">📝 已生成的押题卷'
-          + '<span class="muted-sm" style="font-size:11px">' + exams.length + ' 套' + (doneExams.length ? ' · 已做 ' + doneExams.length : '') + '</span></div>'
+          + '<span style="display:flex;gap:6px;align-items:center"><button class="btn btn-ghost btn-sm" id="sp-open-bank">📚 我的题库（' + bankList().length + '）</button><span class="muted-sm" style="font-size:11px">' + exams.length + ' 套' + (doneExams.length ? ' · 已做 ' + doneExams.length : '') + '</span></span></div>'
           + trendHtml
           + exams.slice(0, 8).map(function (e) {
             var totalScore = e.questions.reduce(function (s, q) { return s + (q.score || 0); }, 0);
@@ -18343,6 +18454,8 @@ function bind(el, next) {
               + '</div>';
           }).join('') + '</div>';
         zone.innerHTML = examsHtml;
+        var bankBtn = zone.querySelector('#sp-open-bank');
+        if (bankBtn) bankBtn.onclick = function () { openBank(el); };
         zone.querySelectorAll('[data-exam]').forEach(function (row) {
           row.onclick = function () { openExam(row.getAttribute('data-exam'), el); };
         });
@@ -18439,7 +18552,11 @@ function bind(el, next) {
     collectSubjTopics: collectSubjTopics,
     examQCardHtml: examQCardHtml,
     exportListImage: exportListImage,
-    forceDiff: forceDiff
+    forceDiff: forceDiff,
+    bankList: bankList,
+    questionInBank: questionInBank,
+    addQuestionToBank: addQuestionToBank,
+    addQuestionToMistakes: addQuestionToMistakes
   };
 })();
 
