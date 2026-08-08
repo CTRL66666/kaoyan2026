@@ -20235,6 +20235,8 @@ function bind(el, next) {
           + '<button class="btn btn-ghost btn-sm" data-gotab="add">✍️ 收录单词</button>'
           + '<button class="btn btn-ghost btn-sm" data-gotab="books">📚 学习词书</button>'
           + '<button class="btn btn-ghost btn-sm" data-gotab="stats">📊 查看数据</button></div>'
+          // 【修复】队列已清空但词库仍有困难词（EF<2.0/遗忘≥3）时，困难词特训入口常驻可见
+          + (hardN > 0 ? '<div class="btn-row" style="justify-content:center;margin-top:6px"><button class="btn btn-ghost btn-sm" id="vb-hard-only">🔁 只复习困难词（' + hardN + '）</button></div>' : '')
           + '<div class="muted-sm" style="text-align:center">明天再来，间隔复习会在这等你。</div>';
       } else {
         html += '<div class="form-grid" style="margin-top:12px">'
