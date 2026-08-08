@@ -2055,6 +2055,22 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 .sp-phase-adj { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 400; color: var(--text-muted); }
 html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(240, 185, 90, .1), rgba(122, 162, 255, .07)); }
 
+/* ---------- AI 心理医生（mental.js psy-*） ---------- */
+.psy-persona { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0 8px; }
+.psy-box { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-btn); }
+.psy-empty { padding: 10px 4px; text-align: center; }
+.psy-msg { display: flex; }
+.psy-msg.psy-user { justify-content: flex-end; }
+.psy-msg.psy-ai { justify-content: flex-start; }
+.psy-bubble { max-width: 84%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.7; word-break: break-word; }
+.psy-user .psy-bubble { background: var(--text-primary); color: #fff; border-bottom-right-radius: 3px; }
+.psy-ai .psy-bubble { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--ok); border-bottom-left-radius: 3px; color: var(--text-primary); }
+.psy-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.psy-input-row { display: flex; gap: 8px; align-items: flex-end; }
+.psy-input-row .input { flex: 1; }
+.psy-loading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted); }
+.psy-loading .tr-spin { width: 14px; height: 14px; flex-basis: 14px; }
+
 </style>
 </head>
 <body>
@@ -18179,8 +18195,9 @@ function bind(el, next) {
 
 /* ===== js/modules/mental.js ===== */
 /* ============================================================
- * mental.js — 心理状态量化追踪（每日强制1分钟）
+ * mental.js — 心理状态量化追踪（每日强制1分钟）+ AI 心理医生
  * 预警：连续3天<5分 → 强制休息建议；硬件冲动 → 复读红线禁令
+ * AI 心理医生：知心/客观双口吻、数据驱动画像、多轮对话、焦虑缓解
  * ============================================================ */
 (function () {
   'use strict';
@@ -18190,6 +18207,226 @@ function bind(el, next) {
     try { return (DB.coachProfile().distractions) || '分心源'; } catch (e) { return '分心源'; }
   }
 
+  /* ==================== AI 心理医生 ==================== */
+  var PSY_CHIPS = [
+    { label: '😰 我现在很焦虑', q: '我现在很焦虑，感觉学不进去了，怎么办？' },
+    { label: '📋 拆解今天任务', q: '帮我拆解一下今天的学习任务，安排合理节奏。' },
+    { label: '🧘 放松引导', q: '给我一段5分钟的呼吸放松引导。' },
+    { label: '🕳 卡壳了', q: '我有个知识点一直卡壳，越急越学不进去，怎么破？' }
+  ];
+  var PSY_PERSONA = {
+    warm: {
+      name: '知心', emoji: '🤗',
+      sys: '你是考生的知心心理医生，语气温暖、共情，像一位懂心理学的挚友。先接住情绪再给建议，多用第二人称"你"，语言柔软但不说空话，给可执行的缓解动作。'
+    },
+    objective: {
+      name: '客观', emoji: '🧠',
+      sys: '你是严谨客观的心理健康分析师，基于数据理性分析。语气专业、简洁、直接：先摆事实（引用用户心理数据），再给结构化建议（问题→原因→对策），不情绪化安慰，给可验证可执行的方法。'
+    }
+  };
+  var psyBusy = false;
+  var psyAc = null; // 当前回复 AbortController
+
+  // 心理画像（本地聚合，不依赖 AI）
+  function psyProfile() {
+    const s = Store.get();
+    const list = (s.mental || []).slice();
+    const recent30 = list.filter(m => new Date(m.date) > new Date(Date.now() - 30 * U.DAY_MS));
+    const moods = recent30.map(m => m.mood).filter(x => x != null);
+    const avg = moods.length ? Math.round(moods.reduce(function (a, b) { return a + b; }, 0) / moods.length * 10) / 10 : null;
+    const min = moods.length ? Math.min.apply(null, moods) : null;
+    var lowStreak = 0;
+    for (var i = 0; i < recent30.length; i++) { var mm = recent30[i].mood; if (mm != null && mm < 5) lowStreak++; else break; }
+    const jumpyN = recent30.filter(m => m.jumpy).length;
+    const urgeN = recent30.filter(m => m.hwUrge).length;
+    const fatigue = U.countBy(recent30.filter(m => m.fatigue).map(m => m.fatigue), function (x) { return x; });
+    const stucks = recent30.filter(m => m.stuck).map(m => m.stuck);
+    const cnt = U.countBy(stucks, function (x) { return x; });
+    const top = U.topN(cnt, 3).map(function (t) { return t.key + '(' + t.count + '次)'; }).join('、');
+    return { days: recent30.length, avg: avg, min: min, lowStreak: lowStreak, jumpyN: jumpyN, urgeN: urgeN, fatigue: fatigue, top: top };
+  }
+  // 画像摘要文本（注入系统提示）
+  function psyProfileText(p) {
+    var lines = ['心理数据画像（近' + (p.days || 0) + '天记录）：'];
+    lines.push('· 心情均值 ' + (p.avg == null ? '暂无' : p.avg) + '/10，最低 ' + (p.min == null ? '暂无' : p.min) + (p.lowStreak > 1 ? '，连续 ' + p.lowStreak + ' 天低于5分' : ''));
+    lines.push('· 跳步冲动 ' + p.jumpyN + ' 次，分心冲动 ' + p.urgeN + ' 次');
+    if (p.top) lines.push('· 卡壳热点：' + p.top);
+    if (p.fatigue && p.fatigue.giveup) lines.push('· 曾出现「想放弃」状态 ' + p.fatigue.giveup + ' 次');
+    return lines.join('\n');
+  }
+  // 单线程持久化（上限 30 轮）
+  function psyThread() {
+    const s = Store.get();
+    return (s.psy && s.psy.threads && s.psy.threads.main) || null;
+  }
+  function psySaveThread(patch) {
+    Store.update(function (s) {
+      s.psy = s.psy || { persona: 'warm', threads: {} };
+      var t = s.psy.threads.main || { thread: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      Object.assign(t, patch || {}, { updatedAt: new Date().toISOString() });
+      if (t.thread.length > 30) t.thread = t.thread.slice(-30);
+      s.psy.threads.main = t;
+      s.psy.persona = s.psy.persona || 'warm';
+    });
+    return psyThread();
+  }
+  // 心理画像卡（Modal）
+  function openPsyProfile() {
+    const p = psyProfile();
+    var fatCn = { fresh: '清醒', tired: '略累', exhausted: '疲惫', giveup: '想放弃' };
+    var fatRows = Object.keys(p.fatigue).length
+      ? Object.keys(p.fatigue).map(function (k) { return '<span class="tag tag-mod">' + (fatCn[k] || k) + '×' + p.fatigue[k] + '</span>'; }).join(' ')
+      : '<span class="muted-sm">暂无</span>';
+    Modal.open({
+      title: '📊 我的心理画像（近30天）',
+      html: '<div class="stat-row">'
+        + '<div class="stat"><div class="stat-num">' + (p.avg == null ? '—' : p.avg) + '</div><div class="stat-label">心情均值/10</div></div>'
+        + '<div class="stat"><div class="stat-num">' + (p.min == null ? '—' : p.min) + '</div><div class="stat-label">最低心情</div></div>'
+        + '<div class="stat"><div class="stat-num">' + p.days + '</div><div class="stat-label">记录天数</div></div>'
+        + '<div class="stat"><div class="stat-num">' + p.jumpyN + '</div><div class="stat-label">跳步冲动</div></div>'
+        + '</div>'
+        + '<div class="muted-sm" style="margin-top:6px">疲劳分布：' + fatRows + '</div>'
+        + (p.lowStreak > 1 ? '<div class="alert alert-danger" style="margin-top:10px">⚠ 连续 ' + p.lowStreak + ' 天心情 &lt;5 分——身体在报警，建议明天强制休息半日。</div>' : '')
+        + (p.top ? '<div class="alert alert-warn" style="margin-top:8px">🕳 卡壳热点：' + p.top + '</div>' : '')
+        + '<div class="muted-sm" style="margin-top:8px">这些数据会实时注入 AI 心理医生的分析，让它"懂你"。</div>',
+      actions: [{ label: '知道了' }]
+    });
+  }
+  // 渲染医生卡片
+  function psyCardHtml() {
+    const s = Store.get();
+    const persona = (s.psy && s.psy.persona) || 'warm';
+    const t = psyThread() || { thread: [] };
+    var bubbles = t.thread.map(function (m) {
+      var cls = m.role === 'user' ? 'psy-user' : 'psy-ai';
+      return '<div class="psy-msg ' + cls + '"><div class="psy-bubble">' + (m.role === 'user' ? U.esc(m.content) : Tex.renderInline(m.content)) + '</div></div>';
+    }).join('');
+    return '<div class="card"><div class="card-title-row"><span class="card-title">🧑‍⚕️ AI 心理医生</span>'
+      + '<button class="btn btn-ghost btn-sm" id="psy-profile">📊 我的心理画像</button></div>'
+      + '<div class="psy-persona">'
+      + ['warm', 'objective'].map(function (k) {
+        return '<button class="btn btn-sm ' + (persona === k ? 'btn-primary' : 'btn-ghost') + '" data-psy-persona="' + k + '">' + PSY_PERSONA[k].emoji + ' ' + PSY_PERSONA[k].name + '口吻</button>';
+      }).join('')
+      + '<span class="muted-sm">' + (persona === 'warm' ? '温暖共情 · 像挚友' : '理性专业 · 基于数据') + '</span>'
+      + '</div>'
+      + '<div class="psy-box" id="psy-box">'
+      + (bubbles || '<div class="muted-sm psy-empty">你好，我是你的 AI 心理医生。跟我说说今天的感受吧——我会结合你的心理数据，用' + PSY_PERSONA[persona].name + '的口吻陪你聊。焦虑、卡壳、想放弃，都可以说。</div>')
+      + '</div>'
+      + '<div class="psy-chips">' + PSY_CHIPS.map(function (c) {
+        return '<button class="btn btn-sm btn-ghost" data-psy-chip="' + U.esc(c.q) + '">' + c.label + '</button>';
+      }).join('') + '</div>'
+      + '<div class="psy-input-row"><textarea id="psy-in" class="input" rows="2" placeholder="输入你想聊的…（Enter 发送）"></textarea>'
+      + '<button class="btn btn-primary" id="psy-send">发送</button></div>'
+      + '</div>';
+  }
+  // 追加气泡（就地 DOM，不整页刷新）
+  function psyAppend(msgHtml, cls) {
+    var box = document.getElementById('psy-box');
+    if (!box) return null;
+    var d = document.createElement('div');
+    d.className = 'psy-msg ' + cls;
+    d.innerHTML = '<div class="psy-bubble">' + msgHtml + '</div>';
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+    return d;
+  }
+  function psyAsk(question) {
+    if (!question || !question.trim()) return;
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
+    if (psyBusy) { Toast.warn('心理医生正在回复…'); return; }
+    const persona = (Store.get().psy && Store.get().psy.persona) || 'warm';
+    // 存用户消息
+    var t = psyThread() || { thread: [] };
+    t.thread = t.thread.concat([{ role: 'user', content: question.trim() }]);
+    psySaveThread({ thread: t.thread });
+    psyAppend(U.esc(question.trim()), 'psy-user');
+    // AI loading 气泡
+    var aiBubble = psyAppend('<div class="psy-loading"><div class="tr-spin"></div><div>正在思考…</div><button class="btn btn-ghost btn-sm" id="psy-stop">停止</button></div>', 'psy-ai');
+    var aiTxt = null;
+    // 组装上下文：画像 + 记忆 + 历史
+    const p = psyProfile();
+    const profileTxt = psyProfileText(p);
+    var mem = '';
+    try { if (window.AI && AI.memoryDigest) mem = AI.memoryDigest(400); } catch (e) {}
+    const sys = PSY_PERSONA[persona].sys
+      + '\n\n【你的心理数据】\n' + profileTxt
+      + (mem ? '\n\n【对你的长期记忆】\n' + mem : '')
+      + '\n\n【回复要求】结合上面的数据说话（客观口吻引用数据、知心口吻化为关心）；回答 ≤200 字；若涉及焦虑/低落，先安抚情绪再给 1-3 个今天就能做的具体动作；结尾可用「→」引导继续。';
+    var hist = t.thread.slice(-16, -1).map(function (m) { return (m.role === 'user' ? '我：' : '医生：') + m.content; }).join('\n');
+    const user = (hist ? '历史对话：\n' + hist + '\n\n' : '') + '我：' + question.trim();
+    psyBusy = true;
+    var ac = new AbortController();
+    psyAc = ac;
+    var stopBtn = document.getElementById('psy-stop');
+    if (stopBtn) stopBtn.onclick = function () { ac.abort(); };
+    AI.chatStream(sys, user, function (full) {
+      if (!aiBubble) return;
+      if (!aiTxt) { aiTxt = document.createElement('span'); }
+      // 更新气泡内容（流式）
+      if (aiBubble.querySelector('.psy-loading')) {
+        aiBubble.innerHTML = '<div class="psy-bubble">' + Tex.renderInline(full || '') + '</div>';
+      } else {
+        aiBubble.querySelector('.psy-bubble').innerHTML = Tex.renderInline(full || '');
+      }
+      var box = document.getElementById('psy-box');
+      if (box) box.scrollTop = box.scrollHeight;
+    }, null, { cache: false, noThink: false, timeout: 180000, signal: ac.signal }).then(function (full) {
+      psyBusy = false; psyAc = null;
+      // 存 AI 回复
+      var t2 = psyThread() || { thread: [] };
+      t2.thread = t2.thread.concat([{ role: 'assistant', content: full }]);
+      psySaveThread({ thread: t2.thread });
+      if (aiBubble && aiBubble.parentNode) {
+        aiBubble.innerHTML = '<div class="psy-bubble">' + Tex.renderInline(full) + '</div>';
+        var box2 = document.getElementById('psy-box');
+        if (box2) box2.scrollTop = box2.scrollHeight;
+      }
+    }).catch(function (e) {
+      psyBusy = false; psyAc = null;
+      var msg = (e && e.name === 'AbortError') ? '已停止回复' : ('回复失败：' + ((e && e.message) || String(e)));
+      if (aiBubble && aiBubble.parentNode) {
+        aiBubble.innerHTML = '<div class="psy-bubble muted-sm">' + U.esc(msg) + '</div>';
+      }
+      if (!(e && e.name === 'AbortError')) Toast.warn(msg);
+    });
+  }
+  // 绑定医生卡片事件
+  function bindPsy(el) {
+    var personaBtns = el.querySelectorAll('[data-psy-persona]');
+    personaBtns.forEach(function (b) {
+      b.onclick = function () {
+        var k = b.getAttribute('data-psy-persona');
+        Store.update(function (s) { s.psy = s.psy || {}; s.psy.persona = k; });
+        Toast.show('已切换为' + PSY_PERSONA[k].name + '口吻（' + PSY_PERSONA[k].emoji + '）', 'info', 2000);
+        App.refresh();
+      };
+    });
+    var pb = el.querySelector('#psy-profile');
+    if (pb) pb.onclick = openPsyProfile;
+    var chips = el.querySelectorAll('[data-psy-chip]');
+    chips.forEach(function (c) {
+      c.onclick = function () { psyAsk(c.getAttribute('data-psy-chip')); };
+    });
+    var send = el.querySelector('#psy-send');
+    if (send) send.onclick = function () {
+      var inp = document.getElementById('psy-in');
+      if (!inp) return;
+      var q = inp.value;
+      inp.value = '';
+      psyAsk(q);
+    };
+    var tin = el.querySelector('#psy-in');
+    if (tin) tin.onkeydown = function (ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        var q = tin.value;
+        tin.value = '';
+        psyAsk(q);
+      }
+    };
+  }
+
+  /* ==================== 原有：每日记录 ==================== */
   function render(el) {
     const s = Store.get();
     const today = s.mental.find(m => m.date === U.dkey());
@@ -18231,6 +18468,9 @@ function bind(el, next) {
       + (lowStreak ? '<div class="alert alert-danger">😴 疲劳预警：连续3天心情<5分。建议明天强制休息半日——效率崩了，努力只是自我感动。</div>' : '')
       + (urgeWeek > 0 ? '<div class="alert alert-danger">🔧 冲动预警：本周检测到 ' + urgeWeek + ' 次「' + U.esc(distractions()) + '」冲动。复读红线：<b>初试前绝对禁止 ' + U.esc(distractions()) + '</b>。把每一小时都还给数学。</div>' : '')
 
+      // 🧑⚕️ AI 心理医生（数据驱动 · 双口吻 · 多轮）
+      + psyCardHtml()
+
       + '<div class="card"><div class="card-title">心情趋势（近7天）</div>'
       + (last7.length >= 2 ? Charts.line(last7, { height: 150, min: 0, max: 10, warnBelow: 5 }) : '<div class="empty">记录满2天后显示趋势</div>')
       + '</div>'
@@ -18246,6 +18486,7 @@ function bind(el, next) {
       : '暂无卡壳记录';
 
     bind(el, today);
+    bindPsy(el);
   }
 
   function bind(el, today) {
@@ -18299,7 +18540,7 @@ function bind(el, next) {
         const low = r3.every(v => v != null && v < 5);
         if (low || urge) {
           if (window.AiMemory) AiMemory.recordEvent(urge ? '检出「' + distractions() + '」冲动' : '连续3天心情<5分', urge ? '已拦截并提醒禁止' : '状态偏低需关注');
-          Toast.show('状态预警已记录，累了就去和 AI 教练聊聊', 'info', 4000);
+          Toast.show('状态预警已记录，累了就去和 AI 心理医生聊聊', 'info', 4000);
           if (window.Copilot && Copilot.isOpen) Copilot.pushAssistant(low ? '看你最近状态有点耗，别硬扛。今天能专注学进去多少算多少，休息也是备考。' : '冲动刚被拦下了。把这一小时还给数学，别给分心留缝。');
         }
       } catch (e) {}
@@ -18307,7 +18548,7 @@ function bind(el, next) {
     };
   }
 
-  window.MentalModule = { render };
+  window.MentalModule = { render, psyProfile, psyProfileText, psyThread, psySaveThread };
 })();
 
 
