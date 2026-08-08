@@ -2070,6 +2070,12 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .psy-input-row .input { flex: 1; }
 .psy-loading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted); }
 .psy-loading .tr-spin { width: 14px; height: 14px; flex-basis: 14px; }
+/* 情绪标签（用户气泡内） */
+.psy-emotion { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 99px; background: rgba(250, 173, 20, .12); border: 1px solid rgba(250, 173, 20, .4); color: var(--warn); margin-bottom: 3px; }
+/* 4-7-8 呼吸放松动效 */
+.breath-wrap { text-align: center; padding: 26px 10px 14px; }
+.breath-ring { width: 130px; height: 130px; margin: 0 auto 18px; border-radius: 50%; background: radial-gradient(circle, rgba(64, 169, 255, .18), rgba(64, 169, 255, .06)); border: 3px solid #40a9ff; transition: transform 4s cubic-bezier(.4, 0, .2, 1); transform: scale(.8); }
+.breath-txt { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 
 </style>
 </head>
@@ -18227,6 +18233,77 @@ function bind(el, next) {
   var psyBusy = false;
   var psyAc = null; // 当前回复 AbortController
 
+  // 情绪识别（本地关键词，付费级体验：输入即感知）
+  var EMOTIONS = [
+    { key: 'anxiety', label: '焦虑', emoji: '😰', words: ['焦虑', '紧张', '害怕', '担心', '慌', '压力好大', '睡不着', '失眠', '心慌'] },
+    { key: 'sad', label: '低落', emoji: '😔', words: ['难过', '伤心', '沮丧', '失落', '想哭', 'emo', '没劲', '提不起精神', '孤独'] },
+    { key: 'anger', label: '烦躁', emoji: '😤', words: ['烦躁', '生气', '愤怒', '烦死', '气死', '受不了', '火大'] },
+    { key: 'tired', label: '疲惫', emoji: '🥱', words: ['好累', '疲惫', '疲劳', '精疲力尽', '撑不住', '学不动', '虚脱'] },
+    { key: 'giveup', label: '想放弃', emoji: '🫠', words: ['放弃', '坚持不下去', '不想学了', '摆烂', '躺平', '学不进去'] },
+    { key: 'frustrated', label: '挫败', emoji: '😞', words: ['挫败', '失败', '做崩', '考砸', '不会做', '好笨', '白学了'] },
+    { key: 'calm', label: '平静', emoji: '😌', words: ['还好', '可以', '平静', '顺利', '不错', '正常', '稳'] }
+  ];
+  function detectEmotion(text) {
+    var t = String(text || '');
+    for (var i = 0; i < EMOTIONS.length; i++) {
+      var w = EMOTIONS[i].words;
+      for (var j = 0; j < w.length; j++) { if (t.indexOf(w[j]) >= 0) return EMOTIONS[i]; }
+    }
+    return null;
+  }
+  // 危机信号检测（极端负面 → 必须弹求助卡，AI 不能只靠文字安抚）
+  var CRISIS_WORDS = ['活不下去', '不想活', '自杀', '轻生', '结束生命', '没意义了', '一了百了', '想消失', '告别世界'];
+  function isCrisis(text) {
+    var t = String(text || '');
+    for (var i = 0; i < CRISIS_WORDS.length; i++) { if (t.indexOf(CRISIS_WORDS[i]) >= 0) return true; }
+    return false;
+  }
+  function openCrisisCard() {
+    Modal.open({
+      title: '💗 请先照顾好自己',
+      html: '<div class="alert alert-danger">我听到你现在非常非常难受。请相信：<b>眼前这一刻的感受不是永久的</b>，也绝不是你的全部。</div>'
+        + '<div class="card-title-sm" style="margin-top:10px">现在可以马上做的事</div>'
+        + '<div style="font-size:13px;line-height:2">① 拨打 <b>全国心理援助热线 12356</b>（24小时，免费）<br>② 或拨打 <b>北京市心理危机研究与干预中心 010-82951332</b><br>③ 找身边信任的人陪你说说话，别一个人扛</div>'
+        + '<p class="muted-sm" style="margin-top:8px">也可以继续和我说说发生了什么——我会认真听。但如果是伤害自己的想法，请一定先联系上面的人。</p>',
+      actions: [{ label: '深呼吸，我会好好的', kind: 'btn-primary' }]
+    });
+  }
+  // 4-7-8 呼吸放松动效（可视化引导）
+  var breathTimer = null;
+  function openBreath() {
+    if (breathTimer) { clearInterval(breathTimer); breathTimer = null; }
+    var phases = [
+      { t: '🌬 吸气（4 秒）…', ms: 4000, scale: 1.35 },
+      { t: '🫁 屏住呼吸（7 秒）…', ms: 7000, scale: 1.35 },
+      { t: '🌬️ 缓缓呼气（8 秒）…', ms: 8000, scale: 0.8 }
+    ];
+    var round = 0, pi = 0;
+    var ring = null, txt = null;
+    Modal.open({
+      title: '🧘 4-7-8 呼吸放松（共 3 轮 · 约 1 分钟）',
+      html: '<div class="breath-wrap"><div class="breath-ring" id="breath-ring"></div>'
+        + '<div class="breath-txt" id="breath-txt">🌬 吸气（4 秒）…</div>'
+        + '<div class="muted-sm" style="margin-top:8px">跟着圆环节奏：吸 4 秒 → 屏住 7 秒 → 呼出 8 秒。闭上眼效果更好。</div></div>',
+      actions: [{ label: '结束放松', onClick: function (close) { if (breathTimer) { clearInterval(breathTimer); breathTimer = null; } close(); } }]
+    });
+    ring = document.getElementById('breath-ring');
+    txt = document.getElementById('breath-txt');
+    function step() {
+      var ph = phases[pi];
+      if (ring) { ring.style.transform = 'scale(' + ph.scale + ')'; }
+      if (txt) txt.textContent = ph.t;
+      pi++;
+      if (pi >= phases.length) { pi = 0; round++; }
+      if (round >= 3) {
+        if (breathTimer) { clearInterval(breathTimer); breathTimer = null; }
+        if (txt) txt.textContent = '✅ 完成 3 轮，感觉如何？可以再来一轮，或回去继续学习。';
+        return;
+      }
+      breathTimer = setTimeout(step, ph.ms);
+    }
+    breathTimer = setTimeout(step, 4000);
+  }
+
   // 心理画像（本地聚合，不依赖 AI）
   function psyProfile() {
     const s = Store.get();
@@ -18278,6 +18355,13 @@ function bind(el, next) {
     var fatRows = Object.keys(p.fatigue).length
       ? Object.keys(p.fatigue).map(function (k) { return '<span class="tag tag-mod">' + (fatCn[k] || k) + '×' + p.fatigue[k] + '</span>'; }).join(' ')
       : '<span class="muted-sm">暂无</span>';
+    // 对话情绪分布（moodLog）
+    var moodLog = [];
+    try { moodLog = (Store.get().psy && Store.get().psy.moodLog) || []; } catch (e) {}
+    var moodCnt = U.countBy(moodLog.map(function (m) { return m.label; }), function (x) { return x; });
+    var moodRows = Object.keys(moodCnt).length
+      ? Object.keys(moodCnt).map(function (k) { return '<span class="tag tag-warn">' + k + '×' + moodCnt[k] + '</span>'; }).join(' ')
+      : '<span class="muted-sm">聊天中会自动识别情绪，记录在这里</span>';
     Modal.open({
       title: '📊 我的心理画像（近30天）',
       html: '<div class="stat-row">'
@@ -18289,6 +18373,8 @@ function bind(el, next) {
         + '<div class="muted-sm" style="margin-top:6px">疲劳分布：' + fatRows + '</div>'
         + (p.lowStreak > 1 ? '<div class="alert alert-danger" style="margin-top:10px">⚠ 连续 ' + p.lowStreak + ' 天心情 &lt;5 分——身体在报警，建议明天强制休息半日。</div>' : '')
         + (p.top ? '<div class="alert alert-warn" style="margin-top:8px">🕳 卡壳热点：' + p.top + '</div>' : '')
+        + '<div class="card-title-sm" style="margin-top:10px">💬 对话情绪分布</div>'
+        + '<div style="margin-top:4px">' + moodRows + '</div>'
         + '<div class="muted-sm" style="margin-top:8px">这些数据会实时注入 AI 心理医生的分析，让它"懂你"。</div>',
       actions: [{ label: '知道了' }]
     });
@@ -18336,11 +18422,28 @@ function bind(el, next) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先在设置中配置 AI'); return; }
     if (psyBusy) { Toast.warn('心理医生正在回复…'); return; }
     const persona = (Store.get().psy && Store.get().psy.persona) || 'warm';
+    // 情绪识别 + 危机检测
+    var emo = detectEmotion(question);
+    var crisis = isCrisis(question);
+    if (crisis) openCrisisCard();
+    if (emo) {
+      // 沉淀情绪日志（长期分布）
+      try {
+        Store.update(function (s) {
+          s.psy = s.psy || {};
+          s.psy.moodLog = s.psy.moodLog || [];
+          s.psy.moodLog.push({ at: new Date().toISOString(), emotion: emo.key, label: emo.label });
+          if (s.psy.moodLog.length > 200) s.psy.moodLog = s.psy.moodLog.slice(-200);
+        });
+      } catch (e) {}
+    }
     // 存用户消息
     var t = psyThread() || { thread: [] };
     t.thread = t.thread.concat([{ role: 'user', content: question.trim() }]);
     psySaveThread({ thread: t.thread });
-    psyAppend(U.esc(question.trim()), 'psy-user');
+    // 用户气泡带情绪标签
+    var userBubbleHtml = (emo ? '<span class="psy-emotion">' + emo.emoji + ' ' + emo.label + '</span>' : '') + U.esc(question.trim());
+    psyAppend(userBubbleHtml, 'psy-user');
     // AI loading 气泡
     var aiBubble = psyAppend('<div class="psy-loading"><div class="tr-spin"></div><div>正在思考…</div><button class="btn btn-ghost btn-sm" id="psy-stop">停止</button></div>', 'psy-ai');
     var aiTxt = null;
@@ -18352,6 +18455,8 @@ function bind(el, next) {
     const sys = PSY_PERSONA[persona].sys
       + '\n\n【你的心理数据】\n' + profileTxt
       + (mem ? '\n\n【对你的长期记忆】\n' + mem : '')
+      + (emo ? '\n\n【本条消息情绪】识别为「' + emo.emoji + emo.label + '」——请先回应该情绪，再给建议。' : '')
+      + (crisis ? '\n\n【⚠ 危机响应】用户出现严重负面信号！本回复必须先共情安抚，并明确建议联系心理援助热线（12356），不给任何"空泛鼓励"或"比惨"，务必郑重。' : '')
       + '\n\n【回复要求】结合上面的数据说话（客观口吻引用数据、知心口吻化为关心）；回答 ≤200 字；若涉及焦虑/低落，先安抚情绪再给 1-3 个今天就能做的具体动作；结尾可用「→」引导继续。';
     var hist = t.thread.slice(-16, -1).map(function (m) { return (m.role === 'user' ? '我：' : '医生：') + m.content; }).join('\n');
     const user = (hist ? '历史对话：\n' + hist + '\n\n' : '') + '我：' + question.trim();
@@ -18447,12 +18552,14 @@ function bind(el, next) {
     chips.forEach(function (c) {
       c.onclick = function () {
         var orig = c.textContent;
+        var q = c.getAttribute('data-psy-chip') || '';
+        // 放松引导 chip：同时打开 4-7-8 呼吸动效
+        if (q.indexOf('放松') >= 0) openBreath();
         if (!ensureAiReady()) return;
         chipLoading(c, orig);
-        try { psyAsk(c.getAttribute('data-psy-chip')); } catch (e) {
+        try { psyAsk(q); } catch (e) {
           Toast.warn('心理医生调用失败：' + ((e && e.message) || String(e)));
         }
-        // 流式输出过程中按钮保持 loading；超时强制恢复（AI 完成由 psyAsk 流程主导，这里兜底）
         setTimeout(function () { if (!psyBusy) chipRestore(c); }, 180000);
       };
     });
@@ -18608,7 +18715,7 @@ function bind(el, next) {
     };
   }
 
-  window.MentalModule = { render, psyProfile, psyProfileText, psyThread, psySaveThread };
+  window.MentalModule = { render, psyProfile, psyProfileText, psyThread, psySaveThread, detectEmotion, isCrisis };
 })();
 
 
