@@ -19942,11 +19942,14 @@ function bind(el, next) {
 
   // 词书入库进度：按 word 小写匹配 vocab 判断已入库数
   function booksProgress(b) {
-    var set = {};
-    list().forEach(function (c) { set[c.word.trim().toLowerCase()] = true; });
-    var done = 0;
-    b.words.forEach(function (w) { if (set[w.word.trim().toLowerCase()]) done++; });
-    return { total: b.words.length, done: done };
+    var byWord = {};
+    list().forEach(function (c) { byWord[c.word.trim().toLowerCase()] = c; });
+    var done = 0, mastered = 0;
+    b.words.forEach(function (w) {
+      var c = byWord[w.word.trim().toLowerCase()];
+      if (c) { done++; if (c.phase === 'review' && c.interval >= MASTER_IVL) mastered++; }
+    });
+    return { total: b.words.length, done: done, mastered: mastered };
   }
 
   // 学习本书：把尚未入库的词按每日新词上限分批引入 vocab（source=词书名），复用 addWords 不碰 SM-2
@@ -19990,7 +19993,19 @@ function bind(el, next) {
     var qtypes = {};
     due.forEach(function (c) { qtypes[c.id] = pickQType(c); });
     var queue = learning.concat(due).concat(news).map(function (c) { return c.id; });
-    return { queue: queue, stats: { again: 0, hard: 0, good: 0, easy: 0 }, done: 0, newLearned: 0, qtypes: qtypes };
+    return { queue: queue, stats: { again: 0, hard: 0, good: 0, easy: 0 }, done: 0, newLearned: 0, qtypes: qtypes, startedAt: Date.now() };
+  }
+
+  // 【轮2】顽固词专区：一键只复习困难词（EF<2.0 或 lapses≥3，含重学/到期/新词中符合条件的）
+  function startHardSession() {
+    var hard = list().filter(function (c) { return c.ef < 2.0 || c.lapses >= 3; });
+    if (!hard.length) { Toast.show('没有困难词 🎉', 'info', 2000); return; }
+    var qtypes = {};
+    hard.forEach(function (c) { qtypes[c.id] = pickQType(c); });
+    session = { queue: hard.map(function (c) { return c.id; }), stats: { again: 0, hard: 0, good: 0, easy: 0 }, done: 0, newLearned: 0, qtypes: qtypes, startedAt: Date.now(), hardOnly: true };
+    flipped = false; answered = null; spellChecked = null;
+    if (lastEl) render(lastEl);
+    Toast.show('🔁 已构建困难词特训：' + hard.length + ' 张', 'info', 2500);
   }
 
   function currentCard() {
@@ -20175,10 +20190,26 @@ function bind(el, next) {
           : '新词上限 ' + dailyNew() + ' 个（近 7 天记住率 ' + Math.round(ret * 100) + '%，保持稳定）');
       var examDays = daysUntilExam();
       var examNote = examDays != null ? '；距考研 <b>' + examDays + '</b> 天，困难词与临考加权优先复习' : '';
+      // 【轮1】队列构成明细
+      var dueN = dueCards().length;
+      var learningN = learningCards().length;
+      var newQ = Math.max(0, smartCap - newIntroducedToday());
+      var hardN = hardCount();
       var html = '<div class="card"><div class="card-title">今日复习队列</div>'
-        + '<div class="muted-sm">队列共 <b>' + learnN + '</b> 张卡（重学/到期优先，' + capNote + examNote + '）。SM-2 算法按你的评分自适应安排下次复习日。</div>';
+        + '<div class="muted-sm">队列共 <b>' + learnN + '</b> 张 = 到期复习 <b>' + dueN + '</b> · 学习中重排 <b>' + learningN + '</b> · 新词 <b>' + newQ + '</b>（上限 ' + smartCap + '）'
+        + '<br>' + capNote + examNote + '。SM-2 算法按你的评分自适应安排下次复习日。</div>';
+      // 【轮4】临考冲刺徽章
+      if (examDays != null && examDays <= 30) {
+        html += '<div class="alert alert-warn" style="margin-top:8px">🚀 <b>冲刺模式</b>：距考研仅 ' + examDays + ' 天，队列已按「遗忘×2 + EF惩罚 + 临考加权」排序，困难词优先。</div>';
+      }
       if (!learnN) {
-        html += '<div class="empty" style="margin-top:12px">🎉 今日队列已清空。去「收录单词」补充词库，或明天再来。</div>';
+        // 【轮9】空状态引导：三入口直达
+        html += '<div class="empty" style="margin-top:12px">🎉 今日队列已清空</div>'
+          + '<div class="btn-row" style="justify-content:center;margin-top:8px">'
+          + '<button class="btn btn-ghost btn-sm" data-gotab="add">✍️ 收录单词</button>'
+          + '<button class="btn btn-ghost btn-sm" data-gotab="books">📚 学习词书</button>'
+          + '<button class="btn btn-ghost btn-sm" data-gotab="stats">📊 查看数据</button></div>'
+          + '<div class="muted-sm" style="text-align:center">明天再来，间隔复习会在这等你。</div>';
       } else {
         html += '<div class="form-grid" style="margin-top:12px">'
           + '<label class="fld"><span>抽认方向</span><select id="vb-dir" class="input input-sel">'
@@ -20191,26 +20222,41 @@ function bind(el, next) {
           + '</select></label>'
           + '<label class="fld"><span>每日新词上限（个）</span><input id="vb-newcap" class="input" type="number" min="1" max="100" value="' + dailyNew() + '"></label>'
           + '</div>'
-          + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="vb-start">开始复习（' + learnN + ' 张）</button></div>';
+          + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="vb-start">开始复习（' + learnN + ' 张）</button>'
+          // 【轮2】顽固词专区：一键只复习困难词
+          + (hardN > 0 ? '<button class="btn btn-ghost" id="vb-hard-only">🔁 只复习困难词（' + hardN + '）</button>' : '')
+          + '</div>';
       }
       return html + '</div>';
     }
 
     var card = currentCard();
     if (!card) {
-      // 会话总结
+      // 会话总结（【轮8】加本次用时 + 存档累计统计）
       var st = session.stats;
       var total = st.again + st.hard + st.good + st.easy;
       var acc = total ? Math.round((st.hard + st.good + st.easy) / total * 100) : 0;
       var tomorrow = list().filter(function (c) { return c.due === daysFromNow(1); }).length;
+      var dur = session.startedAt ? Math.max(1, Math.round((Date.now() - session.startedAt) / 60000)) : null;
+      try {
+        Store.update(function (s) {
+          s.vbSessionStats = s.vbSessionStats || { count: 0, cards: 0, again: 0, good: 0 };
+          s.vbSessionStats.count++;
+          s.vbSessionStats.cards += total;
+          s.vbSessionStats.again += st.again;
+          s.vbSessionStats.good += (st.hard + st.good + st.easy);
+        });
+      } catch (e) {}
       var html = '<div class="card"><div class="card-title">✅ 本会话完成</div>'
+        + (session.hardOnly ? '<div class="alert alert-warn" style="margin-bottom:8px">🔁 本次为<strong>困难词特训</strong>——坚持把这些顽固词打下来，后面的复习会轻松很多。</div>' : '')
         + '<div class="stat-row">'
         + stat('评分次数', total) + stat('记住率', acc + '%', acc >= 80 ? 'var(--ok)' : 'var(--warn)')
         + stat('遗忘(重来)', st.again, st.again > 0 ? 'var(--danger)' : '')
-        + stat('明日到期', tomorrow)
+        + stat('本次用时', dur != null ? dur + '分' : '—')
         + '</div>'
         + '<div class="btn-row" style="margin-top:10px"><button class="btn btn-primary" id="vb-again">再来一轮</button>'
-        + '<button class="btn btn-ghost" id="vb-quit">完成</button></div></div>';
+        + (session.hardOnly ? '' : '<button class="btn btn-ghost" id="vb-quit">完成</button>')
+        + '<span class="muted-sm" style="margin-left:auto">明日到期 ' + tomorrow + ' 张</span></div></div>';
       return html;
     }
 
@@ -20233,16 +20279,20 @@ function bind(el, next) {
 
   // 翻面题（原 4 档评分兜底，learn/relearn 与降级场景均走此分支）
   function flipHtml(card) {
+    // 【轮3】发音按钮（TTS）+ 学习状态透明
+    var sayBtn = '<button class="link-btn" id="vb-say" style="font-size:13px">🔊 发音</button>';
+    var stateRow = '<div class="muted-sm" style="text-align:center;margin-top:6px;font-size:11px;opacity:.8">EF ' + card.ef + ' · 遗忘 ' + (card.lapses || 0) + ' 次 · 间隔 ' + card.interval + ' 天' + (card.lastReview ? ' · 上次 ' + U.esc(card.lastReview) : '') + '</div>';
     var front, back;
     if (direction === 'e2c') {
-      front = '<div class="fc-word">' + U.esc(card.word) + '</div>'
+      front = sayBtn
+        + '<div class="fc-word">' + U.esc(card.word) + '</div>'
         + (card.phonetic ? '<div class="fc-hint" style="font-size:14px">' + U.esc(card.phonetic) + '</div>' : '')
         + '<div class="fc-hint">点击翻面（先回忆释义）</div>';
       back = backHtml(card);
     } else {
       front = '<div class="fc-word" style="font-size:22px;line-height:1.7">' + U.esc(card.meaning) + '</div>'
         + '<div class="fc-hint">点击翻面（先回想英文' + (spellMode ? '，或在下方拼写' : '') + '）</div>';
-      back = '<div class="fc-word" style="font-size:30px">' + U.esc(card.word) + '</div>'
+      back = sayBtn + '<div class="fc-word" style="font-size:30px">' + U.esc(card.word) + '</div>'
         + (card.phonetic ? '<div class="fc-hint" style="font-size:14px">' + U.esc(card.phonetic) + '</div>' : '')
         + backHtml(card);
     }
@@ -20261,7 +20311,7 @@ function bind(el, next) {
       + '<div class="btn-row" style="justify-content:center;margin-top:6px">'
       + '<button class="link-btn" id="vb-ai-detail">🔍 AI 记忆法/搭配解析</button></div>'
       : '';
-    return '<div class="flashcard" id="vb-card">' + (flipped ? back : front) + '</div>' + spellHtml + gradeRow;
+    return '<div class="flashcard" id="vb-card">' + (flipped ? back : front) + '</div>' + spellHtml + stateRow + gradeRow;
   }
 
   // 看义选词：显示释义，4 选 1 选对单词（选对=good，选错=again）
@@ -20362,7 +20412,13 @@ function bind(el, next) {
       + '</div>'
       + '<label class="fld"><span>例句（英文，可选）</span><input id="vb-ex" class="input" placeholder="We must address the problem."></label>'
       + '<label class="fld"><span>例句翻译（可选）</span><input id="vb-excn" class="input" placeholder="我们必须处理这个问题。"></label>'
-      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary" id="vb-add-one">✓ 加入单词本</button></div></div>';
+      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-primary" id="vb-add-one">✓ 加入单词本</button></div></div>'
+
+      + '<div class="card"><div class="card-title">📋 批量粘贴导入</div>'
+      + '<div class="muted-sm">每行一个词条：<code>单词&nbsp;&nbsp;释义</code>（空格/Tab 分隔），或只写单词（释义留空后续补）。自动去重，已存在词智能合并不丢进度。</div>'
+      + '<textarea class="input" id="vb-batch" rows="4" placeholder="abandon  放弃；抛弃&#10;address  地址；处理，探讨（僻义）&#10;zeal  热情，热忱"></textarea>'
+      + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost" id="vb-batch-import">📥 批量导入</button>'
+      + '<span class="muted-sm" id="vb-batch-result"></span></div></div>';
   }
 
   // AI 提取结果预览（勾选/编辑后入库）
@@ -20417,11 +20473,13 @@ function bind(el, next) {
       var p = booksProgress(b);
       var pct = p.total ? Math.round(p.done / p.total * 100) : 0;
       var complete = p.total > 0 && p.done >= p.total;
+      // 【轮7】进度条按掌握率配色（<30% 橙 / <70% 蓝 / 完成 绿）
+      var barColor = pct >= 100 ? '#52c41a' : pct >= 70 ? '#237804' : pct >= 30 ? '#1677ff' : '#faad14';
       return '<div class="card vb-bookcard">'
         + '<div class="card-title">' + U.esc(b.name) + (b.builtIn ? ' <span class="tag">内置</span>' : '') + '</div>'
         + (b.desc ? '<div class="muted-sm" style="margin:4px 0">' + U.esc(b.desc) + '</div>' : '')
-        + '<div class="vb-progress"><div class="vb-progress-fill" style="width:' + pct + '%"></div></div>'
-        + '<div class="muted-sm" style="margin:4px 0;display:flex;justify-content:space-between"><span>已入库 ' + p.done + '/' + p.total + '</span><span>' + pct + '%</span></div>'
+        + '<div class="vb-progress"><div class="vb-progress-fill" style="width:' + pct + '%;background:' + barColor + '"></div></div>'
+        + '<div class="muted-sm" style="margin:4px 0;display:flex;justify-content:space-between"><span>已入库 ' + p.done + '/' + p.total + '</span><span>' + pct + '%' + (p.mastered ? ' · 已牢固 ' + p.mastered : '') + '</span></div>'
         + (complete
           ? '<div class="alert alert-ok" style="margin-top:6px">✓ 已完成</div>'
           : '<div class="btn-row" style="margin-top:6px"><button class="btn btn-primary btn-sm vb-booklearn" data-id="' + U.esc(b.id) + '">学习本书（剩 ' + (p.total - p.done) + ' 词）</button></div>')
@@ -20492,6 +20550,15 @@ function bind(el, next) {
       + '<span class="cal-legend"><span class="vb-heat heat-1"></span>1-2</span>'
       + '<span class="cal-legend"><span class="vb-heat heat-2"></span>3-5</span>'
       + '<span class="cal-legend"><span class="vb-heat heat-3"></span>6+</span></div></div>'
+
+      + '<div class="card"><div class="card-title">词库阶段分布</div>'
+      + Charts.bar([
+        { label: '新词', value: all.filter(function (c) { return c.phase === 'learn' && !c.lastReview; }).length },
+        { label: '学习中', value: all.filter(function (c) { return c.phase === 'learn' && c.lastReview; }).length },
+        { label: '复习中', value: all.filter(function (c) { return c.phase === 'review' && c.interval < MASTER_IVL; }).length },
+        { label: '已牢固', value: masteredCount() }
+      ], { height: 140, color: '#722ed1' })
+      + '<div class="muted-sm">新词=刚录入未学过 · 学习中=SM-2 进行中 · 复习中=间隔&lt;21天 · 已牢固=间隔≥21天。</div></div>'
 
       + '<div class="card"><div class="card-title">遗忘曲线（近 30 天每日记住率）</div>'
       + Charts.bar(forgetData, { height: 140, unit: '%', color: '#2f54eb' })
@@ -20722,6 +20789,16 @@ function bind(el, next) {
       flipped = false; spellChecked = null; answered = null;
       render(el);
     };
+    // 【轮2】顽固词专区
+    var hardBtn = el.querySelector('#vb-hard-only');
+    if (hardBtn) hardBtn.onclick = function () { startHardSession(); };
+    // 【轮9】空状态三入口
+    el.querySelectorAll('[data-gotab]').forEach(function (b) {
+      b.onclick = function () { tab = b.getAttribute('data-gotab'); session = null; flipped = false; render(el); };
+    });
+    // 【轮3】发音按钮
+    var sayBtn = el.querySelector('#vb-say');
+    if (sayBtn) sayBtn.onclick = function (e) { e.stopPropagation(); var c = currentCard(); if (c) speak(c.word); };
     var againBtn = el.querySelector('#vb-again');
     if (againBtn) againBtn.onclick = function () { session = null; answered = null; render(el); };
     var quitBtn = el.querySelector('#vb-quit');
@@ -20758,7 +20835,29 @@ function bind(el, next) {
         advanceCard(c.id, q);
       };
     });
-
+    // 【轮10】复习快捷键：空格=翻面，1=重来 2=困难 3=良好 4=简单（输入框聚焦时不触发）
+    try {
+      document.addEventListener('keydown', function (e) {
+        if (!(window.App && App.current === 'wordbook')) return;
+        var tag = (e.target && e.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (!session || !currentCard()) return;
+        if (e.key === ' ' || e.key === 'Spacebar') {
+          e.preventDefault();
+          if (!flipped) { flipped = true; if (lastEl) render(lastEl); }
+          return;
+        }
+        if (flipped && (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4')) {
+          e.preventDefault();
+          var q = { '1': 1, '2': 3, '3': 4, '4': 5 }[e.key];
+          var c = currentCard();
+          if (c && session) {
+            if (spellMode && direction === 'c2e' && spellChecked && !spellChecked.ok) q = Math.min(q, 3);
+            advanceCard(c.id, q);
+          }
+        }
+      });
+    } catch (e) {}
     // ---- 复习：新题型作答（choice/listen/cloze + 继续） ----
     el.querySelectorAll('.vb-choice-opt').forEach(function (b) {
       b.onclick = function () {
@@ -20848,6 +20947,29 @@ function bind(el, next) {
       Toast.success(res.added ? '✓ 已收录「' + w + '」' : '已存在，已合并更新');
       ['#vb-w', '#vb-m', '#vb-ph', '#vb-pos', '#vb-ex', '#vb-excn'].forEach(function (sel) { el.querySelector(sel).value = ''; });
       el.querySelector('#vb-w').focus();
+    };
+
+    // 【轮6】批量粘贴导入：每行「单词 释义」解析 → addWords
+    var batchBtn = el.querySelector('#vb-batch-import');
+    if (batchBtn) batchBtn.onclick = function () {
+      var raw = el.querySelector('#vb-batch').value || '';
+      var items = [];
+      raw.split(/\r?\n/).forEach(function (line) {
+        line = line.trim();
+        if (!line) return;
+        var parts = line.split(/\s{2,}|\t|[,，;；]\s+/);
+        var word = (parts[0] || '').trim().replace(/^[0-9.、\-\s]+/, '');
+        var meaning = parts.slice(1).join(' ').trim();
+        if (!word) return;
+        items.push({ word: word, meaning: meaning, source: '批量' });
+      });
+      if (!items.length) { Toast.warn('未解析到有效词条（每行：单词 空格 释义）'); return; }
+      var res = addWords(items, '批量');
+      var rEl = el.querySelector('#vb-batch-result');
+      if (rEl) rEl.innerHTML = '<span class="tag tag-ok">✓ 新收录 ' + res.added + '</span>'
+        + (res.merged ? ' <span class="tag tag-mod">合并 ' + res.merged + '</span>' : '')
+        + ' <span class="muted-sm">共解析 ' + items.length + ' 行</span>';
+      Toast.success('批量导入完成：新增 ' + res.added + '，合并 ' + (res.merged || 0));
     };
 
     // ---- 后台提取任务横幅：查看导入 / 丢弃 ----
@@ -20945,7 +21067,7 @@ function bind(el, next) {
     });
   }
 
-  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam };
+  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount };
 })();
 
 
