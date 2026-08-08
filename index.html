@@ -18381,6 +18381,7 @@ function bind(el, next) {
         var box2 = document.getElementById('psy-box');
         if (box2) box2.scrollTop = box2.scrollHeight;
       }
+      restorePsyButtons();
     }).catch(function (e) {
       psyBusy = false; psyAc = null;
       var msg = (e && e.name === 'AbortError') ? '已停止回复' : ('回复失败：' + ((e && e.message) || String(e)));
@@ -18388,7 +18389,18 @@ function bind(el, next) {
         aiBubble.innerHTML = '<div class="psy-bubble muted-sm">' + U.esc(msg) + '</div>';
       }
       if (!(e && e.name === 'AbortError')) Toast.warn(msg);
+      restorePsyButtons();
     });
+  }
+  // 心理医生回复完成后统一恢复所有"思考中"按钮
+  function restorePsyButtons() {
+    document.querySelectorAll('.psy-chip-loading').forEach(function (b) {
+      b.disabled = false;
+      if (b.dataset.origLabel) b.textContent = b.dataset.origLabel;
+      b.classList.remove('psy-chip-loading');
+    });
+    var s = document.getElementById('psy-send');
+    if (s && s.disabled && s.textContent === '发送中…') { s.disabled = false; s.textContent = '发送'; }
   }
   // 绑定医生卡片事件
   function bindPsy(el) {
@@ -18403,25 +18415,72 @@ function bind(el, next) {
     });
     var pb = el.querySelector('#psy-profile');
     if (pb) pb.onclick = openPsyProfile;
+    // 心理医生前置检查：AI 未配置 → 弹引导 Modal（不只是一闪而过的 Toast）
+    function ensureAiReady() {
+      if (typeof AI !== 'undefined' && AI.configured()) return true;
+      Modal.open({
+        title: '🧑⚕️ AI 心理医生需要 AI 配置',
+        html: '<div class="card-title-sm">首次使用 AI 心理医生前</div>'
+          + '<p style="margin-top:8px">请先在<strong>设置 → 云端 AI 配置</strong>填入 API 地址、密钥和模型名。</p>'
+          + '<p class="muted-sm">配置后即可基于你的心理数据陪你多轮对话。</p>',
+        actions: [
+          { label: '知道了' },
+          { label: '去设置', kind: 'btn-primary', onClick: function (close) { close(); if (typeof App !== 'undefined' && App.go) App.go('settings'); } }
+        ]
+      });
+      return false;
+    }
+    // 即时视觉反馈 helper：按下后立刻变 loading，完成后恢复
+    function chipLoading(btn, originalLabel) {
+      btn.disabled = true;
+      btn.dataset.origLabel = originalLabel;
+      btn.textContent = '💭 思考中…';
+      btn.classList.add('psy-chip-loading');
+    }
+    function chipRestore(btn) {
+      btn.disabled = false;
+      if (btn.dataset.origLabel) btn.textContent = btn.dataset.origLabel;
+      btn.classList.remove('psy-chip-loading');
+    }
     var chips = el.querySelectorAll('[data-psy-chip]');
     chips.forEach(function (c) {
-      c.onclick = function () { psyAsk(c.getAttribute('data-psy-chip')); };
+      c.onclick = function () {
+        var orig = c.textContent;
+        if (!ensureAiReady()) return;
+        chipLoading(c, orig);
+        try { psyAsk(c.getAttribute('data-psy-chip')); } catch (e) {
+          Toast.warn('心理医生调用失败：' + ((e && e.message) || String(e)));
+        }
+        // 流式输出过程中按钮保持 loading；超时强制恢复（AI 完成由 psyAsk 流程主导，这里兜底）
+        setTimeout(function () { if (!psyBusy) chipRestore(c); }, 180000);
+      };
     });
     var send = el.querySelector('#psy-send');
     if (send) send.onclick = function () {
       var inp = document.getElementById('psy-in');
       if (!inp) return;
       var q = inp.value;
+      if (!q.trim()) { Toast.show('请输入内容', 'info', 1500); return; }
+      if (!ensureAiReady()) return;
       inp.value = '';
-      psyAsk(q);
+      var orig = send.textContent;
+      send.disabled = true; send.textContent = '发送中…';
+      try { psyAsk(q); } catch (e) {
+        Toast.warn('心理医生调用失败：' + ((e && e.message) || String(e)));
+      }
+      setTimeout(function () { if (!psyBusy) { send.disabled = false; send.textContent = orig; } }, 180000);
     };
     var tin = el.querySelector('#psy-in');
     if (tin) tin.onkeydown = function (ev) {
       if (ev.key === 'Enter' && !ev.shiftKey) {
         ev.preventDefault();
         var q = tin.value;
+        if (!q.trim()) return;
+        if (!ensureAiReady()) return;
         tin.value = '';
-        psyAsk(q);
+        try { psyAsk(q); } catch (e) {
+          Toast.warn('心理医生调用失败：' + ((e && e.message) || String(e)));
+        }
       }
     };
   }
