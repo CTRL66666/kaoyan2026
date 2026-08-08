@@ -18261,12 +18261,13 @@ function bind(el, next) {
   }
   function psySaveThread(patch) {
     Store.update(function (s) {
-      s.psy = s.psy || { persona: 'warm', threads: {} };
+      s.psy = s.psy || {};
+      s.psy.persona = s.psy.persona || 'warm';
+      s.psy.threads = s.psy.threads || {};
       var t = s.psy.threads.main || { thread: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       Object.assign(t, patch || {}, { updatedAt: new Date().toISOString() });
       if (t.thread.length > 30) t.thread = t.thread.slice(-30);
       s.psy.threads.main = t;
-      s.psy.persona = s.psy.persona || 'warm';
     });
     return psyThread();
   }
