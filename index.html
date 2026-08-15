@@ -816,6 +816,10 @@ body.cp-lock { overflow: hidden; }
 .cp-act { border: 1px solid var(--text-primary); background: var(--surface); color: var(--text-primary); border-radius: var(--r-btn); padding: 5px 10px; font-size: 12px; cursor: pointer; transition: all 120ms; }
 .cp-act:active { transform: scale(.96); }
 .cp-act:disabled { border-color: var(--ok); color: var(--ok); cursor: default; }
+.cp-act.cp-act-done { border-color: var(--ok); color: var(--ok); background: var(--surface); cursor: default; }
+.cp-act.cp-act-undo { border-color: var(--text-muted); color: var(--text-muted); cursor: pointer; margin-left: 2px; }
+.cp-act.cp-act-undo:hover { border-color: var(--danger); color: var(--danger); }
+.cp-exec-note { font-size: 11.5px; color: var(--ok); margin-top: 5px; padding: 3px 8px; background: var(--surface); border: 1px dashed var(--ok); border-radius: 6px; display: inline-block; }
 .cp-quick { display: flex; gap: 6px; padding: 8px 12px; overflow-x: auto; flex: 0 0 auto; background: var(--surface-muted); scrollbar-width: none; }
 .cp-quick::-webkit-scrollbar { display: none; }
 .cp-chip { flex: 0 0 auto; border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 5px 12px; font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: all 120ms; }
@@ -18734,7 +18738,8 @@ function bind(el, next) {
     addQuestionToBank: addQuestionToBank,
     addQuestionToMistakes: addQuestionToMistakes,
     printExam: printExam,
-    variantOfQuestion: variantOfQuestion
+    variantOfQuestion: variantOfQuestion,
+    openExamConfig: openExamConfig
   };
 })();
 
@@ -22034,7 +22039,7 @@ function bind(el, next) {
     };
   }
 
-  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount, extractPrompt: extractPrompt };
+  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount, extractPrompt: extractPrompt, addWords: addWords };
 })();
 
 
@@ -25397,11 +25402,17 @@ function bind(el, next) {
       + '你看得见他的实时数据与长期记忆，要像老朋友一样自然地引用（"你这周符号错误已经3次了"），但禁止机械罗列数据。'
       + (memBlock ? '\n' + memBlock + '\n' : '')
       + '\n' + snapshot()
-      + '\n【动作协议】必要时你可以在回复末尾附一个动作（每回复最多1个），系统会渲染成可点按钮：'
+      + '\n【动作协议·你可以直接指挥工具】当用户要求"帮我/把/去/记/排/打卡"等操作时，在回复末尾附动作（每回复最多1个；低风险动作会自动执行，系统会显示执行结果）：'
       + '加任务 [[ACTION:{"type":"addTask","subject":"math|ctrl|eng|pol","text":"任务内容"}]]；'
+      + '打卡任务 [[ACTION:{"type":"toggleTask","text":"任务关键词"}]]；'
+      + '加单词 [[ACTION:{"type":"addWord","word":"单词","meaning":"释义","pos":"v./n.","example":"例句(可省)"}]]；'
+      + '记心情 [[ACTION:{"type":"recordMood","mood":1-10,"note":"备注(可省)"}]]；'
       + '跳转页面 [[ACTION:{"type":"goto","tab":"页面id","label":"按钮文字"}]]（可选tab：' + Object.keys(PAGE_NAMES).join('/') + '）；'
-      + '一键排今日计划 [[ACTION:{"type":"planDay","tasks":[{"subject":"math|ctrl|eng|pol","text":"..."}]}]]（最多8条）。'
-      + '当用户要求“排今天/排满/给我计划”时，用 planDay 一次性给出当日任务清单并排好优先级，而不是逐条 addTask。'
+      + '一键排今日计划 [[ACTION:{"type":"planDay","tasks":[{"subject":"...","text":"..."}]}]]（最多8条，用户说"排今天/排满"时用 planDay 而非逐条 addTask）；'
+      + '发起测验 [[ACTION:{"type":"startQuiz","subject":"math","name":"考点名"}]]；'
+      + '打开方法卡 [[ACTION:{"type":"openMethod","title":"题型名"}]]；'
+      + '生成押题卷 [[ACTION:{"type":"genExam","subject":"math|ctrl|pol|eng|auto"}]]；'
+      + '录错题 [[ACTION:{"type":"addMistake","subject":"math","desc":"错题描述"}]]。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
       + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
       + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。';
@@ -25447,31 +25458,156 @@ function bind(el, next) {
     return out.filter(function (a) { return a.type !== 'planDay'; }).slice(0, 2);
   }
 
+  // ---------- 动作注册表（AI 教练接管工具：9 种动作，auto 低风险自动执行） ----------
+  // 每个动作：label 显示名 / auto 是否自动执行（低风险）/ run(a, btn) 执行函数（返回提示文案，'' 表示无）
+  var ACTIONS = {
+    goto: {
+      label: '跳转页面', auto: true,
+      run: function (a) { close(); App.go(a.tab); return '已跳转到' + (PAGE_NAMES[a.tab] || a.tab); }
+    },
+    addTask: {
+      label: '添加任务', auto: true,
+      run: function (a) {
+        var now = new Date().toISOString();
+        Store.update(function (s) {
+          var maxOrder = 0;
+          s.tasks.forEach(function (t) { if (t.order != null && t.order > maxOrder) maxOrder = t.order; });
+          s.tasks.push({ id: U.uid(), subject: a.subject || 'math', text: a.text, done: false, createdAt: now, updatedAt: now, order: maxOrder + 1 });
+        });
+        AiMemory.recordEvent('AI教练自动添加任务', a.text);
+        if (App.current === 'dashboard' || App.current === 'scheduler') App.refresh();
+        return '已添加任务：' + a.text;
+      },
+      undo: function (a) {
+        Store.update(function (s) { s.tasks = s.tasks.filter(function (t) { return !(t.text === a.text && !t.done); }); });
+        if (App.current === 'dashboard' || App.current === 'scheduler') App.refresh();
+      }
+    },
+    toggleTask: {
+      label: '打卡任务', auto: true,
+      run: function (a) {
+        if (!a.text) return '';
+        var hit = null;
+        Store.get().tasks.forEach(function (t) { if (!hit && !t.done && t.text.indexOf(a.text) >= 0) hit = t; });
+        if (!hit) return '未找到匹配的未完成任务：' + a.text;
+        TasksModule.toggleTask(hit.id, true, { silent: true });
+        return '已打卡：' + hit.text;
+      }
+    },
+    addWord: {
+      label: '加单词', auto: true,
+      run: function (a) {
+        if (!a.word || !a.meaning) return '';
+        var res = WordbookModule.addWords([{ word: a.word, meaning: a.meaning, pos: a.pos || '', example: a.example || '', exampleCn: '' }], 'AI教练');
+        return res.added ? '已收录单词：' + a.word : '单词已存在，已合并：' + a.word;
+      },
+      undo: function (a) {
+        var w = (a.word || '').trim().toLowerCase();
+        Store.update(function (s) {
+          s.vocab = (s.vocab || []).filter(function (c) { return c.word.trim().toLowerCase() !== w; });
+        });
+      }
+    },
+    recordMood: {
+      label: '记心情', auto: true,
+      run: function (a) {
+        var mood = U.clamp(Math.round(+a.mood || 0), 1, 10);
+        Store.update(function (s) {
+          s.mental = s.mental || [];
+          s.mental.push({ date: U.shortDate(), mood: mood, note: (a.note || '').slice(0, 100), source: 'copilot', createdAt: new Date().toISOString() });
+        });
+        return '已记录心情 ' + mood + '/10' + (a.note ? '：' + a.note : '');
+      }
+    },
+    planDay: {
+      label: '排今日计划', auto: false,
+      run: function (a, btn) { planDayPreview((a.tasks || []).slice(0, 8), btn); return ''; }
+    },
+    startQuiz: {
+      label: '发起测验', auto: false,
+      run: function (a) {
+        close();
+        App.go('quiz');
+        setTimeout(function () {
+          if (window.QuizModule && QuizModule.startVariant) QuizModule.startVariant({ subject: a.subject || 'math', type: 'concept', desc: a.name || '', refId: '' });
+        }, 0);
+        return '已发起测验' + (a.name ? '：' + a.name : '');
+      }
+    },
+    openMethod: {
+      label: '打开方法卡', auto: false,
+      run: function (a) {
+        var title = (a.title || '').trim();
+        var pb = null;
+        (Store.get().playbooks || []).forEach(function (p) {
+          if (!pb && p.title && title && p.title.indexOf(title.slice(0, 2)) >= 0) pb = p;
+        });
+        if (!pb) return '未找到方法卡：' + title;
+        if (window.InspectorModule && InspectorModule.openPlaybook) InspectorModule.openPlaybook(pb.id);
+        return '已打开方法卡：' + pb.title;
+      }
+    },
+    genExam: {
+      label: '生成押题卷', auto: false,
+      run: function (a) {
+        close();
+        App.go('sprint');
+        setTimeout(function () {
+          if (window.SprintModule && SprintModule.openExamConfig) {
+            SprintModule.saveExamPref({ subject: a.subject || 'auto' });
+            SprintModule.openExamConfig();
+          }
+        }, 120);
+        return '正在打开押题卷生成配置…';
+      }
+    },
+    addMistake: {
+      label: '录错题', auto: false,
+      run: function (a) {
+        if (!a.desc) return '';
+        Store.update(function (s) {
+          s.mistakes = s.mistakes || [];
+          s.mistakes.unshift({ id: U.uid(), subject: a.subject || 'math', type: 'concept', desc: '【AI教练】' + a.desc.slice(0, 80), source: 'copilot', date: U.shortDate(), createdAt: new Date().toISOString() });
+        });
+        return '已录入错题：' + a.desc.slice(0, 30);
+      }
+    }
+  };
+
   function actionLabel(a) {
-    if (a.type === 'goto') return a.label || ('→ 去' + (PAGE_NAMES[a.tab] || a.tab));
-    if (a.type === 'addTask') return '＋ 添加任务：' + (a.text || '').slice(0, 14) + ((a.text || '').length > 14 ? '…' : '');
-    if (a.type === 'planDay') return '＋ 一键排入今日 ' + ((a.tasks || []).length) + ' 项计划';
+    var def = ACTIONS[a.type];
+    if (def) {
+      if (a.type === 'goto') return a.label || ('→ 去' + (PAGE_NAMES[a.tab] || a.tab));
+      if (a.type === 'addTask') return '＋ 任务：' + (a.text || '').slice(0, 14);
+      if (a.type === 'planDay') return '＋ 一键排入今日 ' + ((a.tasks || []).length) + ' 项';
+      return def.label + (a.text || a.word || a.name || a.desc || a.title ? '：' + (a.text || a.word || a.name || a.desc || a.title).slice(0, 14) : '');
+    }
     return a.label || '执行';
   }
 
+  // 执行动作：auto 自动执行；返回执行结果文案（供气泡状态显示）
   function executeAction(a, btn) {
-    if (a.type === 'goto' && PAGE_NAMES[a.tab]) {
-      close();
-      App.go(a.tab);
-    } else if (a.type === 'addTask' && a.text) {
-      var now = new Date().toISOString();
-      Store.update(function (s) {
-        var maxOrder = 0;
-        s.tasks.forEach(function (t) { if (t.order != null && t.order > maxOrder) maxOrder = t.order; });
-        s.tasks.push({ id: U.uid(), subject: a.subject || 'math', text: a.text, done: false, createdAt: now, updatedAt: now, order: maxOrder + 1 });
-      });
-      AiMemory.recordEvent('AI教练建议并添加任务', a.text);
-      btn.textContent = '✓ 已添加';
-      btn.disabled = true;
-      Toast.show('已加入今日任务', 'success');
-      if (App.current === 'dashboard' || App.current === 'scheduler') App.refresh();
-    } else if (a.type === 'planDay' && a.tasks && a.tasks.length) {
-      planDayPreview(a.tasks, btn);
+    var def = ACTIONS[a.type];
+    if (!def) { if (btn) { btn.textContent = '⚠ 未知动作'; btn.disabled = true; } return ''; }
+    try {
+      var msg = def.run(a, btn) || '';
+      if (btn) {
+        btn.textContent = '✓ ' + (msg ? msg.slice(0, 10) : (def.label + ' 已执行'));
+        btn.disabled = true;
+        btn.classList.add('cp-act-done');
+        // 可撤销动作附撤销钮
+        if (def.undo) {
+          var undoBtn = document.createElement('button');
+          undoBtn.className = 'cp-act cp-act-undo';
+          undoBtn.textContent = '↩ 撤销';
+          undoBtn.onclick = function () { def.undo(a); Toast.show('已撤销', 'info', 1500); undoBtn.remove(); };
+          btn.parentNode && btn.parentNode.appendChild(undoBtn);
+        }
+      }
+      return msg;
+    } catch (e) {
+      if (btn) { btn.textContent = '⚠ 执行失败'; btn.disabled = false; }
+      return '执行失败：' + ((e && e.message) || String(e));
     }
   }
 
@@ -25861,14 +25997,38 @@ function bind(el, next) {
       box.scrollTop = box.scrollHeight;
     }, img).then(function (full) {
       sending = false;
-      pushHistory('assistant', full || '（无回复）');
+      if (!full || !full.trim()) { renderMessages(); return; }
+      pushHistory('assistant', full);
       renderMessages();
+      // 【接管工具】新消息内的低风险动作自动执行（历史回显不重复执行）
+      parseActions(full).forEach(function (a) {
+        var def = ACTIONS[a.type];
+        if (def && def.auto) {
+          var msg = executeAction(a, null);
+          if (msg) appendExecNote(msg);
+        }
+      });
       memBadge();
       reflectIfWorthy(false);
     }).catch(function (e) {
       sending = false;
       bubble.innerHTML = '调用失败：' + U.esc(e.message) + '<br>请检查设置中的 AI 配置。';
     });
+  }
+
+  // 在最新 AI 气泡下追加「⚡ 已自动执行」提示
+  function appendExecNote(msg) {
+    var box = document.getElementById('cp-msgs');
+    if (!box) return;
+    var rows = box.querySelectorAll('.cp-row.cp-ai');
+    if (!rows.length) return;
+    var last = rows[rows.length - 1];
+    var note = document.createElement('div');
+    note.className = 'cp-exec-note';
+    note.textContent = '⚡ 已自动执行：' + msg;
+    last.appendChild(note);
+    box.scrollTop = box.scrollHeight;
+    if (msg && msg.indexOf('失败') < 0) Toast.show(msg, 'success', 2500);
   }
 
   // 满2条用户消息（或关闭面板时有余量）→ 自动反思沉淀记忆
@@ -25896,6 +26056,9 @@ function bind(el, next) {
     mount: mount,
     pushAssistant: pushAssistant,
     superviseCheck: superviseCheck,
+    parseActions: parseActions,
+    actionLabel: actionLabel,
+    actionTypes: function () { return Object.keys(ACTIONS); },
     get isOpen() { return isOpen; }
   };
 })();
