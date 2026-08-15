@@ -2152,6 +2152,14 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .tr-r-time-warn { color: var(--warn); font-size: 12px; }
 .tr-r-time-ok { color: var(--ok); font-size: 12px; }
 
+/* ============================================================
+ * 单词助记法（wordbook.js）：词根/联想/考研考点/易混辨析
+ * ============================================================ */
+.mn-block { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.mn-row { display: flex; gap: 6px; font-size: 12.5px; line-height: 1.65; color: var(--text-secondary); text-align: left; }
+.mn-k { flex: 0 0 66px; font-weight: 600; color: var(--accent); }
+.mn-row b { color: var(--text-primary); }
+
 </style>
 </head>
 <body>
@@ -21443,7 +21451,7 @@ function bind(el, next) {
       + gradeBtn('easy', '简单', 5, 'btn-ghost')
       + '</div>'
       + '<div class="btn-row" style="justify-content:center;margin-top:6px">'
-      + '<button class="link-btn" id="vb-ai-detail">🔍 AI 记忆法/搭配解析</button>'
+      + '<button class="link-btn" id="vb-ai-detail">' + (card.mnemonic ? '✨ 记忆法（点击重新生成）' : '🔍 AI 记忆法/搭配解析') + '</button>'
       // 【斩】直接删词
       + '<button class="link-btn" id="vb-slay" style="color:var(--danger)">✂️ 斩掉这个词</button>'
       + '</div>'
@@ -21507,7 +21515,41 @@ function bind(el, next) {
       + '<div class="btn-row" style="justify-content:center;flex-wrap:wrap">'
       + '<button class="btn btn-primary" id="vb-continue">继续下一张</button></div>'
       + '<div class="btn-row" style="justify-content:center;margin-top:6px">'
-      + '<button class="link-btn" id="vb-ai-detail">🔍 AI 记忆法/搭配解析</button></div>';
+      + '<button class="link-btn" id="vb-ai-detail">' + (card.mnemonic ? '✨ 记忆法（点击重新生成）' : '🔍 AI 记忆法/搭配解析') + '</button></div>';
+  }
+
+  // ---------- 助记法（词根/联想/考研考点/易混辨析，生成即持久化到 card.mnemonic） ----------
+  function mnemonicSystem(card) {
+    return '你是考研英语词汇专家。为单词生成结构化助记信息，只输出 JSON、不要任何多余文字：\n'
+      + '{"root":"词根词缀拆解(一句话≤60字，如 re-=再次+spect=看→再看一眼=尊重；无词根可写词源/谐音联想)","mnemonic":"一句话联想记忆(≤30字，好记优先)","examUse":"考研最常考的2-3个含义/用法(≤60字)","collocations":["常考搭配1","常考搭配2","常考搭配3"],"confuse":[{"word":"易混词1","diff":"与它区别(≤25字)"}]}\n'
+      + '硬约束：① 只输出 JSON、数组必须完整闭合；② collocations 给 2-4 个考研常考短语；③ confuse 给 0-2 个（没有形近/义近词就给空数组，不要编造）；④ 用简体中文。';
+  }
+  function genMnemonic(card) {
+    if (!card || !card.id) return Promise.reject(new Error('无词条'));
+    if (!hasAI()) return Promise.reject(new Error('未配置 AI Key'));
+    return AI.chatJSON(mnemonicSystem(card), '单词：' + card.word + '（释义：' + card.meaning + '）', null, { cache: false, noThink: true, timeout: 90000 }).then(function (r) {
+      if (!r) throw new Error('AI 未返回有效助记');
+      var data = {
+        root: String(r.root || '').slice(0, 120),
+        mnemonic: String(r.mnemonic || '').slice(0, 80),
+        examUse: String(r.examUse || '').slice(0, 120),
+        collocations: Array.isArray(r.collocations) ? r.collocations.slice(0, 4).map(function (x) { return String(x || '').slice(0, 40); }) : [],
+        confuse: Array.isArray(r.confuse) ? r.confuse.slice(0, 2).map(function (c) { return { word: String((c && c.word) || '').slice(0, 30), diff: String((c && c.diff) || '').slice(0, 40) }; }) : []
+      };
+      patchWord(card.id, { mnemonic: data });
+      return data;
+    });
+  }
+  function mnemonicHtml(m) {
+    if (!m || typeof m !== 'object') return '';
+    var parts = [];
+    if (m.root) parts.push('<div class="mn-row"><span class="mn-k">🔤 词根</span><span>' + U.esc(m.root) + '</span></div>');
+    if (m.mnemonic) parts.push('<div class="mn-row"><span class="mn-k">🧠 联想</span><span>' + U.esc(m.mnemonic) + '</span></div>');
+    if (m.examUse) parts.push('<div class="mn-row"><span class="mn-k">📌 考研考点</span><span>' + U.esc(m.examUse) + '</span></div>');
+    if (m.collocations && m.collocations.length) parts.push('<div class="mn-row"><span class="mn-k">🔗 常考搭配</span><span>' + m.collocations.map(function (c) { return U.esc(c); }).join(' · ') + '</span></div>');
+    if (m.confuse && m.confuse.length) parts.push('<div class="mn-row"><span class="mn-k">⚠️ 易混辨析</span><span>' + m.confuse.map(function (c) { return '<b>' + U.esc(c.word || '') + '</b>' + (c.diff ? '：' + U.esc(c.diff) : ''); }).join('；') + '</span></div>');
+    if (!parts.length) return '';
+    return '<div class="mn-block">' + parts.join('') + '</div>';
   }
 
   function backHtml(card) {
@@ -21515,6 +21557,7 @@ function bind(el, next) {
       + (card.pos ? '<span class="tag">' + U.esc(card.pos) + '</span> ' : '')
       + '<b>' + U.esc(card.meaning) + '</b>'
       + (card.example ? '<div class="fc-ex" style="margin-top:8px">' + U.esc(card.example) + (card.exampleCn ? '<br>' + U.esc(card.exampleCn) : '') + '</div>' : '')
+      + (card.mnemonic ? mnemonicHtml(card.mnemonic) : '')
       + '</div>';
   }
 
@@ -22074,31 +22117,27 @@ function bind(el, next) {
       advanceCard(c.id, answered.ok ? 4 : 1);   // 选对/拼对=good(4)，错=again(1)
     };
 
-    // ---- 复习：AI 深度解析 ----
+    // ---- 复习：AI 记忆法（生成即持久化到 card.mnemonic，翻面背面直接显示） ----
     var aiBtn = el.querySelector('#vb-ai-detail');
     if (aiBtn) aiBtn.onclick = function () {
       var c = currentCard();
       if (!c) return;
       if (!hasAI()) { Toast.warn('需先配置 AI Key'); return; }
-      aiBtn.disabled = true; aiBtn.textContent = U.icon('search') + ' 解析中…';
+      aiBtn.disabled = true; aiBtn.textContent = U.icon('search') + ' 生成中…';
       var resEl = document.getElementById('vb-ai-result');
-      if (resEl) resEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在解析「' + U.esc(c.word) + '」…</div>';
-      AI.chatStream(
-        '你是考研英语词汇专家。对给定单词做助记解析，用简体中文回答，结构：\n'
-        + '1. **记忆法**：词根词缀拆解或联想记忆（一句话）\n'
-        + '2. **考研考点**：最常考的2-3个含义/用法\n'
-        + '3. **高频搭配**：3-5个常考短语\n'
-        + '4. **易混词**：1-2个形近/义近词辨析\n'
-        + '简洁，用 emoji 分段，不要JSON。',
-        '单词：' + c.word + '（释义：' + c.meaning + '）',
-        function (text) {
-          if (resEl) resEl.innerHTML = '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap;margin-top:10px;padding:12px;background:var(--bg-card);border-radius:8px;border:1px solid var(--accent)">' + U.esc(text) + '</div>';
-        }
-      ).then(function () { aiBtn.disabled = false; aiBtn.textContent = U.icon('search') + ' AI 记忆法/搭配解析'; })
-        .catch(function (err) {
-          if (resEl) resEl.innerHTML = '<div class="alert alert-danger">解析失败：' + U.esc(err && err.message || '') + '</div>';
-          aiBtn.disabled = false; aiBtn.textContent = U.icon('search') + ' AI 记忆法/搭配解析';
-        });
+      if (resEl) resEl.innerHTML = '<div class="muted-sm" style="padding:8px">⏳ AI 正在为「' + U.esc(c.word) + '」生成词根/联想/易混辨析…</div>';
+      genMnemonic(c).then(function (data) {
+        aiBtn.disabled = false; aiBtn.textContent = '✨ 记忆法（点击重新生成）';
+        // 翻面背面直接显示助记（更新当前卡背面 + 结果区）
+        var fcBack = document.querySelector('#vb-card .fc-back');
+        if (fcBack) fcBack.outerHTML = backHtml(currentCard() || c);
+        if (resEl) resEl.innerHTML = mnemonicHtml(data)
+          + '<div class="muted-sm" style="padding:4px 8px 8px">✅ 已保存到词条，翻面即见。点击「记忆法」可重新生成。</div>';
+        Toast.show('记忆法已保存', 'success', 2000);
+      }).catch(function (err) {
+        aiBtn.disabled = false; aiBtn.textContent = c.mnemonic ? '✨ 记忆法（点击重新生成）' : '🔍 AI 记忆法/搭配解析';
+        if (resEl) resEl.innerHTML = '<div class="alert alert-danger">生成失败：' + U.esc(err && err.message || '') + '</div>';
+      });
     };
 
     // ---- 收录：手动 ----
@@ -22276,7 +22315,7 @@ function bind(el, next) {
     };
   }
 
-  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount, extractPrompt: extractPrompt, addWords: addWords };
+  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount, extractPrompt: extractPrompt, addWords: addWords, mnemonicSystem: mnemonicSystem, mnemonicHtml: mnemonicHtml, genMnemonic: genMnemonic };
 })();
 
 
@@ -22506,6 +22545,7 @@ function bind(el, next) {
   var lastGradeText = '';    // 最近一次批改的原文（红笔批改模式复用）
   var lastGradeResult = null; // 最近一次批改的结构化结果（切回普通模式复用）
   var lastGradeType = null;   // 最近一次批改的作文类型
+  var lastEssayId = null;     // 最近一次批改的 essay 记录 id（润色稿持久化挂靠）
 
   function history() {
     return (Store.get().essays || []).slice().sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
@@ -22660,11 +22700,12 @@ function bind(el, next) {
     }
     if (r.modelSentence) html += '<div class="pm-ai-section"><b>💎 背诵句型：</b><div class="pm-ai-body">' + U.esc(r.modelSentence) + '</div></div>';
     if (r.advice) html += '<div class="pm-ai-section"><b>🎯 备考建议：</b><div class="pm-ai-body">' + U.esc(r.advice) + '</div></div>';
-    // 「红笔批改」入口：仅当传 origText 时渲染（历史记录无完整原文，跳过）
+    // 「红笔批改」+「整篇润色升级」入口：仅当传 origText 时渲染（历史记录无完整原文，跳过）
     if (origText) {
       html += '<div class="pm-ai-section" style="text-align:center;margin-top:14px">'
-        + '<button class="btn btn-primary" id="es-anno-btn">🎨 切换红笔批改模式（精细标注）</button>'
-        + '<div class="muted-sm" style="margin-top:6px">保留原文，划线标注需修改处并附点评建议</div></div>';
+        + '<button class="btn btn-primary" id="es-anno-btn">🎨 红笔批改（精细标注）</button>'
+        + ' <button class="btn btn-primary" id="es-polish-btn">✨ 整篇润色升级</button>'
+        + '<div class="muted-sm" style="margin-top:6px">红笔保留原文划线标注；润色把整篇改写为高分版并逐处说明改了什么。</div></div>';
     }
     return html;
   }
@@ -22755,6 +22796,79 @@ function bind(el, next) {
       + '<div class="pm-ai-section" style="text-align:center;margin-top:14px"><button class="btn btn-ghost" id="es-anno-back">← 返回普通批改结果</button></div>'
       + '</div>';
   }
+  // ---------- 整篇润色升级（保留原意，词汇句式高一档，逐处标注） ----------
+  function polishSystem(tk) {
+    var t = ESSAY_TYPES[tk];
+    return '你是考研英语阅卷组长，擅长把中等水平作文润色成高分作文。对考生的' + t.full + '做「整篇润色升级」：保留原文全部观点与结构，把词汇、句式、衔接提升一档，输出润色后的完整全文，并逐处标注改动。\n'
+      + '只输出 JSON，不要多余文字、不要 markdown 代码块。格式：\n'
+      + '{"polished":"润色后的整篇作文全文（保留原意与原分段，词汇句式明显更高一档，长度不超过原文1.2倍）",'
+      + '"score":0-100整数（润色后可达到的预估百分制得分）,'
+      + '"summary":"整体提升点一句话(≤50字)",'
+      + '"changes":[{"from":"原文片段（必须能在原文中精确找到）","to":"润色后表达","type":"用词|语法|句式|衔接|逻辑|结构 六选一","why":"为什么这么改(≤40字)"}]}\n'
+      + '硬约束：① polished 必须覆盖原文全部要点，不得删减观点、不得编造新内容；② changes 给 3-6 条，from 必须能从原文 substring 精确找到（不要选整段）；③ type 严格六选一；④ 数组完整闭合（绝不能截断）；⑤ 只输出 JSON。';
+  }
+  function polishResultHtml(r) {
+    var html = '<div class="card">'
+      + '<div class="card-title">✨ 整篇润色升级' + (typeof r.score === 'number' ? ' · 预估可达 <b>' + r.score + '</b>/100' : '') + '</div>'
+      + (r.summary ? '<div class="pm-ai-body" style="margin-bottom:8px">' + U.esc(r.summary) + '</div>' : '')
+      + '<div style="white-space:pre-wrap;line-height:1.9;background:var(--bg-card);border:1px solid var(--accent);border-radius:8px;padding:12px;margin-bottom:10px;font-size:14px">' + U.esc(r.polished || '') + '</div>'
+      + '<button class="btn btn-sm btn-ghost" id="es-polish-copy" style="margin-bottom:10px">📋 复制润色稿</button>';
+    if (r.changes && r.changes.length) {
+      html += '<div class="pm-ai-section"><b>🔧 逐处标注（' + r.changes.length + ' 处改动）：</b>'
+        + r.changes.map(function (c) {
+          var m = issueMeta({ type: c.type });
+          return '<div class="es-anno" style="border-left-color:' + m.c + '">'
+            + '<span class="es-anno-tag" style="background:' + m.c + '">' + U.esc(m.key) + '</span>'
+            + '<div class="es-anno-q">✍️ ' + U.esc(c.from || '') + '</div>'
+            + '<div class="es-anno-f">✨ ' + U.esc(c.to || '') + '</div>'
+            + '<div class="muted-sm" style="margin-top:2px">' + U.esc(c.why || '') + '</div>'
+            + '</div>';
+        }).join('') + '</div>';
+    }
+    html += '<div class="pm-ai-section" style="text-align:center;margin-top:10px"><button class="btn btn-ghost" id="es-polish-back">← 返回普通批改结果</button></div></div>';
+    return html;
+  }
+  function polishGrade(el, originalText, tk) {
+    if (grading) return;
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    grading = true;
+    var slot = document.getElementById('es-result-slot');
+    if (slot) slot.innerHTML = '<div class="card"><div class="card-title">✨ 整篇润色升级中…</div><div class="pm-ai-body" id="es-polish-stream"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w80"></div></div></div>';
+    var topic = (el.querySelector('#es-topic') || {}).value || '';
+    AI.chatJSON(polishSystem(tk), (topic ? '作文题目：' + topic + '\n\n' : '') + '考生作文全文：\n' + originalText, null, { cache: false, noThink: true, maxTokens: 8000 }).then(function (r) {
+      grading = false;
+      if (!r || !r.polished) throw new Error('AI 未返回润色全文');
+      // 持久化到最近一次批改记录（历史详情可回看润色稿）
+      if (lastEssayId) {
+        Store.update(function (s) {
+          var e = (s.essays || []).find(function (x) { return x.id === lastEssayId; });
+          if (e) e.polish = { polished: r.polished, score: typeof r.score === 'number' ? r.score : null, summary: r.summary || '', changes: (r.changes || []).slice(0, 6), at: new Date().toISOString() };
+        });
+      }
+      if (window.AiMemory) AiMemory.recordEvent('完成作文润色升级', ESSAY_TYPES[tk].name + ' 预估可达 ' + (typeof r.score === 'number' ? r.score + '/100' : ''));
+      if (slot) slot.innerHTML = polishResultHtml(r);
+      var copyBtn = document.getElementById('es-polish-copy');
+      if (copyBtn) copyBtn.onclick = function () {
+        try { navigator.clipboard.writeText(r.polished || ''); Toast.success('润色稿已复制'); }
+        catch (e) { Toast.show('复制失败，请手动长按选择', 'warn'); }
+      };
+      var back = document.getElementById('es-polish-back');
+      if (back) back.onclick = function () {
+        var s2 = document.getElementById('es-result-slot');
+        if (s2 && lastGradeResult) {
+          s2.innerHTML = resultHtml(lastGradeResult, lastGradeType || tk, lastGradeText);
+          var btn = document.getElementById('es-anno-btn');
+          if (btn) btn.onclick = function () { annotateGrade(el, lastGradeText, lastGradeType || tk); };
+          var pbtn = document.getElementById('es-polish-btn');
+          if (pbtn) pbtn.onclick = function () { polishGrade(el, lastGradeText, lastGradeType || tk); };
+        }
+      };
+    }).catch(function (e) {
+      grading = false;
+      if (slot) slot.innerHTML = '<div class="alert alert-danger">润色失败：' + U.esc(e.message || '') + '</div>';
+    });
+  }
+
   function annotateGrade(el, originalText, tk) {
     if (grading) return;
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
@@ -22772,9 +22886,11 @@ function bind(el, next) {
       if (back) back.onclick = function () {
         var s2 = document.getElementById('es-result-slot');
         if (s2 && lastGradeResult) {
-          s2.innerHTML = resultHtml(lastGradeResult, lastGradeType || tk);
+          s2.innerHTML = resultHtml(lastGradeResult, lastGradeType || tk, lastGradeText);
           var btn = document.getElementById('es-anno-btn');
           if (btn) btn.onclick = function () { annotateGrade(el, lastGradeText, lastGradeType || tk); };
+          var pbtn = document.getElementById('es-polish-btn');
+          if (pbtn) pbtn.onclick = function () { polishGrade(el, lastGradeText, lastGradeType || tk); };
         }
       };
     }).catch(function (e) {
@@ -22860,6 +22976,7 @@ function bind(el, next) {
       imgData = null;
       // 保存原文与结果供红笔批改/切回普通模式复用（拍照无文本时跳过红笔入口）
       if (text) { lastGradeText = text; lastGradeResult = r; lastGradeType = tk; }
+      lastEssayId = rec.id;
       Toast.show(rec.score >= 0 ? '批改完成：' + rec.score + '/' + rec.max + ' ' + rec.band : '无法辨认字迹', rec.score >= 0 ? 'success' : 'warn', 4000);
       App.refresh();
       // App.refresh 会重建 DOM，延迟到下一帧再把结果渲染进结果区并绑定红笔批改入口
@@ -22868,6 +22985,8 @@ function bind(el, next) {
         if (slot2) slot2.innerHTML = resultHtml(r, tk, text);
         var btn = document.getElementById('es-anno-btn');
         if (btn) btn.onclick = function () { annotateGrade(el, lastGradeText, tk); };
+        var pbtn = document.getElementById('es-polish-btn');
+        if (pbtn) pbtn.onclick = function () { polishGrade(el, lastGradeText, tk); };
       }, 0);
     }).catch(function () { /* 流式失败已在 onError 渲染错误与按钮，无需重复处理 */ });
   }
@@ -22900,7 +23019,11 @@ function bind(el, next) {
           wide: true,
           html: (h.imageBase64 ? '<div style="text-align:center;margin-bottom:10px"><img src="' + h.imageBase64 + '" style="max-width:100%;max-height:240px;border-radius:8px;border:1px solid var(--line)"></div>' : '')
             + (h.textSnippet ? '<div class="muted-sm" style="margin-bottom:8px">原文：' + U.esc(h.textSnippet) + (h.textSnippet.length >= 200 ? '…' : '') + '</div>' : '')
-            + resultHtml(h.result || {}, h.essayType),
+            + resultHtml(h.result || {}, h.essayType)
+            + (h.polish ? '<div class="pm-ai-section" style="margin-top:12px"><b>✨ 润色稿（' + ((h.polish.at || '').slice(0, 10)) + '）' + (typeof h.polish.score === 'number' ? ' · 预估可达 <b>' + h.polish.score + '</b>/100' : '') + '：</b>'
+              + '<div style="white-space:pre-wrap;line-height:1.9;background:var(--bg-card);border:1px solid var(--accent);border-radius:8px;padding:12px;margin:6px 0;font-size:14px">' + U.esc(h.polish.polished || '') + '</div>'
+              + ((h.polish.changes || []).length ? '<div class="muted-sm">🔧 ' + h.polish.changes.length + ' 处改动：' + h.polish.changes.map(function (c) { return U.esc(c.to || ''); }).join(' · ') + '</div>' : '')
+              + '</div>' : ''),
           actions: [{ label: '关闭' }]
         });
       };
@@ -22916,7 +23039,7 @@ function bind(el, next) {
     });
   }
 
-  window.EssayModule = { render, resultHtml, annotateResultHtml, annotateSystem };  // 供作文升级单测（含红笔批改）
+  window.EssayModule = { render, resultHtml, annotateResultHtml, annotateSystem, polishSystem, polishResultHtml };  // 供作文升级单测（含红笔批改+整篇润色）
 })();
 
 
