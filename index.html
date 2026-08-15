@@ -18739,7 +18739,8 @@ function bind(el, next) {
     addQuestionToMistakes: addQuestionToMistakes,
     printExam: printExam,
     variantOfQuestion: variantOfQuestion,
-    openExamConfig: openExamConfig
+    openExamConfig: openExamConfig,
+    rushPlan: rushPlan
   };
 })();
 
@@ -25412,7 +25413,13 @@ function bind(el, next) {
       + '发起测验 [[ACTION:{"type":"startQuiz","subject":"math","name":"考点名"}]]；'
       + '打开方法卡 [[ACTION:{"type":"openMethod","title":"题型名"}]]；'
       + '生成押题卷 [[ACTION:{"type":"genExam","subject":"math|ctrl|pol|eng|auto"}]]；'
-      + '录错题 [[ACTION:{"type":"addMistake","subject":"math","desc":"错题描述"}]]。'
+      + '录错题 [[ACTION:{"type":"addMistake","subject":"math","desc":"错题描述"}]]；'
+      + '政治选择题刷题 [[ACTION:{"type":"startDrill"}]]；'
+      + '单词困难词特训 [[ACTION:{"type":"hardVocab"}]]；'
+      + '生成冲刺路径 [[ACTION:{"type":"rushPlan"}]]；'
+      + '标记考点已掌握 [[ACTION:{"type":"markMastered","name":"考点名（与考点库完全一致）"}]]；'
+      + '去复习到期 [[ACTION:{"type":"reviewDue","tab":"可选页面id"}]]；'
+      + '定时提醒 [[ACTION:{"type":"addReminder","text":"提醒内容","hours":2}]]（hours 几小时后，或用 "time":"20:00" 今天/明天该时刻）。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
       + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
       + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。';
@@ -25492,6 +25499,11 @@ function bind(el, next) {
         if (!hit) return '未找到匹配的未完成任务：' + a.text;
         TasksModule.toggleTask(hit.id, true, { silent: true });
         return '已打卡：' + hit.text;
+      },
+      undo: function (a) {
+        var hit = null;
+        Store.get().tasks.forEach(function (t) { if (!hit && t.done && t.text.indexOf(a.text) >= 0) hit = t; });
+        if (hit) TasksModule.toggleTask(hit.id, false, { silent: true });
       }
     },
     addWord: {
@@ -25571,8 +25583,121 @@ function bind(el, next) {
         });
         return '已录入错题：' + a.desc.slice(0, 30);
       }
+    },
+    // ==================== 第二轮接管动作（工匠精神·细节化扩展） ====================
+    startDrill: {
+      label: '政治刷题', auto: false,
+      run: function (a) {
+        close(); App.go('polrecite');
+        setTimeout(function () {
+          if (window.PolReciteModule && PolReciteModule.startDrill) PolReciteModule.startDrill();
+          else { var b = document.getElementById('pr-ch-drill'); if (b) b.click(); }
+        }, 150);
+        return '已打开政治选择题刷题…';
+      }
+    },
+    hardVocab: {
+      label: '困难词特训', auto: false,
+      run: function (a) {
+        close(); App.go('wordbook');
+        setTimeout(function () { if (window.WordbookModule) WordbookModule.startHardSession(); }, 150);
+        return '已开始困难词特训…';
+      }
+    },
+    rushPlan: {
+      label: '冲刺路径', auto: false,
+      run: function (a) {
+        close(); App.go('sprint');
+        setTimeout(function () { if (window.SprintModule && SprintModule.rushPlan) SprintModule.rushPlan(null); }, 150);
+        return '正在生成冲刺路径…';
+      }
+    },
+    markMastered: {
+      label: '标记掌握', auto: true,
+      run: function (a) {
+        if (!a.name) return '';
+        var id = null;
+        SUBJ_ALL.forEach(function (t) { if (!id && t.name === a.name) id = t.id; });
+        if (!id) return '未找到考点：' + a.name;
+        Store.update(function (s) { s.heat = s.heat || {}; s.heat[id] = { level: 2, score: 90, updatedAt: new Date().toISOString() }; });
+        if (id[0] === 'm' && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
+        return '已标记掌握：' + a.name;
+      },
+      undo: function (a) {
+        var id = null;
+        SUBJ_ALL.forEach(function (t) { if (!id && t.name === a.name) id = t.id; });
+        if (!id) return;
+        Store.update(function (s) { s.heat = s.heat || {}; s.heat[id] = { level: 0, score: null, updatedAt: new Date().toISOString() }; });
+        if (id[0] === 'm' && Store.recomputeMathAccuracy) Store.recomputeMathAccuracy();
+      }
+    },
+    reviewDue: {
+      label: '去复习到期', auto: true,
+      run: function (a) {
+        close(); App.go(a.tab && PAGE_NAMES[a.tab] ? a.tab : 'review');
+        return '已打开' + (a.tab && PAGE_NAMES[a.tab] ? PAGE_NAMES[a.tab] : '复盘') + '页';
+      }
+    },
+    addReminder: {
+      label: '定时提醒', auto: true,
+      run: function (a) {
+        if (!a.text) return '';
+        var at = null;
+        if (a.hours != null) at = Date.now() + Math.max(1, Math.round(+a.hours)) * 3600000;
+        else if (a.time && /^\d{1,2}:\d{2}$/.test(a.time)) {
+          var now = new Date();
+          var parts = a.time.split(':');
+          var t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), +parts[0], +parts[1], 0, 0);
+          if (t0.getTime() <= now.getTime()) t0.setDate(t0.getDate() + 1);
+          at = t0.getTime();
+        }
+        if (!at) return '提醒时间格式不对（用 hours 或 "HH:MM"）';
+        Store.update(function (s) {
+          s.reminders = s.reminders || [];
+          s.reminders.push({ id: U.uid(), text: a.text.slice(0, 60), at: at, done: false, createdAt: new Date().toISOString() });
+          if (s.reminders.length > 50) s.reminders = s.reminders.slice(-50);
+        });
+        reminderTicker(); // 立即检查一次
+        var d = new Date(at);
+        return '已设置提醒：' + (a.hours != null ? a.hours + ' 小时后' : '今天 ' + a.time) + '「' + a.text + '」';
+      },
+      undo: function (a) {
+        var w = a.text;
+        Store.update(function (s) { s.reminders = (s.reminders || []).filter(function (r) { return !(r.text === w && !r.done); }); });
+      }
     }
   };
+
+  // 定时提醒检查器（每 20 秒轮询一次，到期 Toast + Notification）
+  var reminderTimer = null;
+  function reminderTicker() {
+    var s = Store.get();
+    var list = (s.reminders || []).filter(function (r) { return !r.done && r.at <= Date.now(); });
+    if (list.length) {
+      Store.update(function (st) {
+        (st.reminders || []).forEach(function (r) { if (list.some(function (x) { return x.id === r.id; })) r.done = true; });
+      });
+      list.forEach(function (r) {
+        Toast.show('⏰ 提醒：' + r.text, 'info', 6000);
+        try {
+          if (window.Notification && Notification.permission === 'granted') new Notification('考研提醒', { body: r.text });
+        } catch (e2) {}
+      });
+    }
+    if (!reminderTimer) reminderTimer = setInterval(function () {
+      var s2 = Store.get();
+      var pend = (s2.reminders || []).some(function (r) { return !r.done; });
+      if (pend) reminderTicker();
+      else if (reminderTimer) { clearInterval(reminderTimer); reminderTimer = null; }
+    }, 20000);
+  }
+  // 全部科目考点表（markMastered 用）
+  var SUBJ_ALL = [];
+  (function () {
+    try {
+      SUBJ_ALL = (DB.TOPICS && [].concat(DB.TOPICS.math || [], DB.TOPICS.ctrl || [], DB.TOPICS.eng || [], DB.TOPICS.pol || [])) || [];
+    } catch (e) {}
+  })();
 
   function actionLabel(a) {
     var def = ACTIONS[a.type];
@@ -26049,6 +26174,9 @@ function bind(el, next) {
       }
     });
   }
+
+  // 启动提醒检查器（有 pending 自动轮询，清空自动停）
+  try { reminderTicker(); } catch (e) {}
 
   window.Copilot = {
     open: open,
