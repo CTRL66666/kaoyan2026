@@ -2142,6 +2142,16 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .tr-summary { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .tr-summary-no { color: var(--ok); font-weight: 500; }
 
+/* ============================================================
+ * 特训营 6.0：限时挑战 + 连续特训 + 里程碑徽章（零幻觉）
+ * ============================================================ */
+.tr-streak { display: block; font-size: 11.5px; color: var(--ok); font-weight: 500; margin-top: 2px; }
+.tr-time { font-size: 11.5px; color: var(--blue); margin-left: 6px; }
+.tr-r-time { display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; margin-top: 5px; }
+.tr-r-time-k { font-weight: 500; color: var(--text-primary); }
+.tr-r-time-warn { color: var(--warn); font-size: 12px; }
+.tr-r-time-ok { color: var(--ok); font-size: 12px; }
+
 </style>
 </head>
 <body>
@@ -15431,6 +15441,61 @@ function bind(el, next) {
     return arr[1] + arr[2] + arr[3] + arr[4];
   }
   function trainOf(n) { return nBag(n.id).train || null; }
+  // 【6.0】限时挑战：建议用时（本地计算，零幻觉）+ 做题计时
+  function suggestMin(diff) { var m = { 1: 2, 2: 4, 3: 6, 4: 10, 5: 15 }; return m[diff] || 6; }
+  var trainAttempts = {}; // key: nodeId:s:qi → 首次作答渲染时间戳
+  function attemptKey(n, s, qi) { return n.id + ':' + s + ':' + qi; }
+  function prepareAttempts(n, tr) {
+    [1, 2, 3, 4].forEach(function (s) {
+      var items = (tr.items && tr.items[s]) || [];
+      var ans = (tr.answers && tr.answers[s]) || [];
+      items.forEach(function (it, qi) {
+        if (!ans[qi] && !trainAttempts[attemptKey(n, s, qi)]) trainAttempts[attemptKey(n, s, qi)] = Date.now();
+      });
+    });
+  }
+  function attemptMin(n, s, qi) {
+    var st = trainAttempts[attemptKey(n, s, qi)];
+    return st ? Math.max(0, Math.round((Date.now() - st) / 60000)) : 0;
+  }
+  function clearAttempt(n, s, qi) { delete trainAttempts[attemptKey(n, s, qi)]; }
+  // 【6.0】连续特训打卡：检定毕业当天记一次，连续天数/总次数（本地确定性）
+  function trainStreak() {
+    var s = Store.get();
+    var bag = (s.conceptAI && s.conceptAI.streak) || { days: 0, last: null };
+    var cnt = (s.conceptAI && s.conceptAI.trainCount) || 0;
+    return { days: bag.days || 0, last: bag.last || null, count: cnt };
+  }
+  function trainStreakText() {
+    var st = trainStreak();
+    var parts = [];
+    if (st.days >= 2) parts.push('🔥 连续特训 ' + st.days + ' 天');
+    else if (st.days === 1) parts.push('🔥 今日已特训');
+    if (st.count) parts.push('🏅 累计 ' + st.count + ' 次');
+    return parts.length ? ' · ' + parts.join(' · ') : '';
+  }
+  function bumpTrainStreak() {
+    var s = Store.get();
+    var today = U.shortDate();
+    Store.update(function (st) {
+      st.conceptAI = st.conceptAI || {};
+      st.conceptAI.trainCount = (st.conceptAI.trainCount || 0) + 1;
+      var bag = st.conceptAI.streak || { days: 0, last: null };
+      var yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+      var yd = yesterday.toISOString().slice(0, 10);
+      bag.days = (bag.last === yd) ? (bag.days || 0) + 1 : 1;
+      bag.last = today;
+      st.conceptAI.streak = bag;
+    });
+  }
+  // 【6.0】里程碑徽章：累计特训次数分档（本地确定性）
+  function milestoneBadges() {
+    var cnt = (Store.get().conceptAI && Store.get().conceptAI.trainCount) || 0;
+    var tiers = [[3, '🥉 初战 3 次'], [10, '🥈 十炼 10 次'], [25, '🥇 深耕 25 次'], [50, '🏆 大师 50 次']];
+    var got = [];
+    tiers.forEach(function (t) { if (cnt >= t[0]) got.push(t[1]); });
+    return got.map(function (b) { return '<span class="tag" style="background:#722ed1;color:#fff">' + b + '</span>'; }).join('');
+  }
   function ensureTrain(n) {
     var tr = trainOf(n);
     if (!tr) {
@@ -15460,7 +15525,7 @@ function bind(el, next) {
       : '';
     return '针对考点「' + n.name + '」' + mode + '。教材定位：' + (n.book || textbook()) + '。\n'
       + '【输出格式硬约束】（严格 JSON，不要任何多余文字、不要 markdown 围栏）：\n'
-      + '{"items":[{"type":"choice|solve","stem":"题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"标准答案（choice 填正确选项字母如 A；solve 填完整过程）","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","diff":1-5,"imageNeeded":true|false,"imageHint":"图描述","teach":{"insight":"这题先看什么/怎么想到这一步(≤80字,像名师点拨)","deadPath":"90%的人会走错的错误思路(≤60字)","why":"为什么那条路走不通(≤60字)"},"origEx":{"year":2019,"subject":"数二","no":19,"note":"原题问法(≤40字,可省)"},' + dualSol + '"solA2":"仅综合/压轴步需要，其他步填空字符串","solB2":"同上"}]}\n'
+      + '{"items":[{"type":"choice|solve","stem":"题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"标准答案（choice 填正确选项字母如 A；solve 填完整过程）","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","diff":1-5,"imageNeeded":true|false,"imageHint":"图描述","teach":{"insight":"这题先看什么/怎么想到这一步(≤80字,像名师点拨)","deadPath":"90%的人会走错的错误思路(≤60字)","why":"为什么那条路走不通(≤60字)"},' + dualSol + '"solA2":"仅综合/压轴步需要，其他步填空字符串","solB2":"同上"}]}\n'
       + '【判题要求】：\n'
       + '① type 必填：概念辨析/判断/正误类出 "choice"（4选1），其他出 "solve"。\n'
       + '② choice 必须给 4 个互斥选项（干扰项须有明确错误依据，不能"都对/都错"），answerIdx 给正确选项下标 0-3；solve 不用给 options/answerIdx（给空数组和 -1）。\n'
@@ -15468,9 +15533,8 @@ function bind(el, next) {
       + '④ imageNeeded：题目涉及电路/几何/力学示意图/流程框图等需要配图才能理解时填 true；纯文字题填 false。\n'
       + '⑤ imageHint 仅在 imageNeeded=true 时填（≤80字）：用文字精准描述图的关键内容——节点、元件、参数值、连接关系，让读者脑补出图像（例："电路：Ui → R1=1Ω → 节点a → R2=2Ω → 节点b → C=1F → 地；Uo 从节点b 取"）。\n'
       + '⑥ quality teach 字段必填（除 choice 类概念辨析可简化为 insight 一项）：这是名师精讲——insight 讲清审题切入点与关键思维转折（不是复述解题步骤），deadPath 讲清最常见错误思路，why 解释为什么错，让学生"先懂怎么想，再动手做"。\n'
-      + '⑦ 质量纪律：题干含必要数据/参数；solve 题不要送分；solution 必须含关键步骤。\n'
-      + '⑧ 真题溯源（origEx，非选择题必填，选择题可省）：尽量标注该题对应的考研真题出处——year 年份数字、subject 如"数二/数一/政治/英语一"、no 题号、note 一句原题问法；实在没有对应的就 origEx 填 null（不要编造）。\n'
-      + (s >= 3 ? '⑨ 综合/压轴步必须给双解法：solA 常规稳妥解 + solB 技巧/简捷解（可能用到特殊值、对称性、图形直觉等），useBoth 一句说清考场怎么二选一。' : '');
+      + '⑦ 质量纪律：题干含必要数据/参数；solve 题不要送分；solution 必须含关键步骤。'
+      + (s >= 3 ? '⑧ 综合/压轴步必须给双解法：solA 常规稳妥解 + solB 技巧/简捷解（可能用到特殊值、对称性、图形直觉等），useBoth 一句说清考场怎么二选一。' : '');
   }
   // 判分提示词（支持选择题/含图题）
   function trainJudgePrompt(n, s, item, userAns) {
@@ -15597,10 +15661,8 @@ function bind(el, next) {
           imageNeeded: !!it.imageNeeded,
           imageHint: String(it.imageHint || ''),
           teach: teach,
-          // 【5.0】真题溯源
-          origEx: (it && it.origEx && typeof it.origEx === 'object' && it.origEx.year != null)
-            ? { year: parseInt(it.origEx.year, 10) || 0, subject: String(it.origEx.subject || ''), no: String(it.origEx.no != null ? it.origEx.no : ''), note: String(it.origEx.note || '') }
-            : null,
+          // origEx 真题溯源已按用户要求移除（易幻觉），解析保留兼容旧数据但不再生成
+          origEx: null,
           solA: String(it.solA || it.solA2 || ''),
           solB: String(it.solB || it.solB2 || ''),
           useBoth: String(it.useBoth || '')
@@ -15638,7 +15700,7 @@ function bind(el, next) {
       var tr2 = trainOf(n);
       var answers = Object.assign({}, (tr2 && tr2.answers) || {});
       answers[s] = answers[s] || [];
-      var ans = { user: userAns, correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '', cause: o.cause ? String(o.cause).slice(0, 60) : '', suggest: o.suggest ? String(o.suggest).slice(0, 60) : '' };
+      var ans = { user: userAns, correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '', cause: o.cause ? String(o.cause).slice(0, 60) : '', suggest: o.suggest ? String(o.suggest).slice(0, 60) : '', durationMin: attemptMin(n, s, qi) };
       answers[s][qi] = ans;
       saveTrain(n, { answers: answers });
       trainToMistake(n, s, item, ans);
@@ -15801,6 +15863,7 @@ function bind(el, next) {
   function renderTrainModal(n) {
     clearTrainTimer();
     var tr = ensureTrain(n);
+    prepareAttempts(n, tr); // 【6.0】初始化未答题的作答计时
     if (!trainSession || trainSession.id !== n.id) {
       trainSession = { id: n.id, at: new Date().toISOString() };
       if (lastEl) render(lastEl); else if (typeof App !== 'undefined' && App.refresh) App.refresh();
@@ -15979,7 +16042,10 @@ function bind(el, next) {
       + dashHtml(score)
       + '<div class="tr-head-main">'
       + '<div class="tr-title">⚡ 考点特训营</div>'
-      + '<div class="tr-sub">' + U.esc(n.name) + ' · 从概念到能力飞跃</div>'
+      + '<div class="tr-sub">' + U.esc(n.name) + ' · 从概念到能力飞跃'
+      // 【6.0】连续特训 + 训练次数徽章（本地确定性数据，零幻觉）
+      + '<span class="tr-streak">' + trainStreakText() + '</span>'
+      + '</div>'
       + '<div class="tr-prog">完成 <b>' + doneN + '</b>/5 · ' + (tr.finished ? '已毕业 🎓' : '坚持就是胜利') + '</div>'
       + '</div></div>'
       + '<div class="tr-intensity">'
@@ -16083,6 +16149,8 @@ function bind(el, next) {
       + '<div class="tr-q-main">'
       + '<div class="tr-q-top">'
       + (it.diff ? '<span class="tr-diff">' + '★★★★★'.slice(0, it.diff) + '<span class="muted-sm">' + '☆☆☆☆☆'.slice(it.diff) + '</span></span>' : '')
+      // 【6.0】限时挑战：建议用时（本地按难度计算，零幻觉）
+      + '<span class="tr-time">⏱ 建议 ' + suggestMin(it.diff) + ' 分钟</span>'
       + (it.variantOf != null ? '<span class="tag tag-mod">变式' + (it.variantOf + 1) + '</span>' : '')
       + '</div>'
       + '<div class="tr-q-stem">' + Tex.renderInline(it.stem) + '</div>'
@@ -16097,13 +16165,7 @@ function bind(el, next) {
         }).join('') + '</div>'
         : '')
       + (it.trap ? '<div class="tr-q-trap">🕳 易错点：' + Tex.renderInline(it.trap) + '</div>' : '')
-      // 【5.0】真题溯源：标注对应考研真题出处
-      + (it.origEx
-        ? '<div class="tr-orig"><span class="tr-orig-tag">📌 真题溯源</span>'
-          + '<span class="tr-orig-txt">' + U.esc((it.origEx.year || '') + (it.origEx.subject ? ' ' + it.origEx.subject : '') + (it.origEx.no ? ' 第' + it.origEx.no + '题' : '')) + '</span>'
-          + (it.origEx.note ? '<span class="muted-sm">' + U.esc(it.origEx.note) + '</span>' : '')
-          + '</div>'
-        : '')
+      // 【6.0】真题溯源已移除（用户要求，防 AI 幻觉）；此处留空
       // 【特训营4.0】名师精讲：先懂怎么想，再动手做（网课式点拨）
       + (it.teach && (it.teach.insight || it.teach.deadPath)
         ? '<details class="tr-teach"><summary>🎓 名师精讲（先看思路，再作答）</summary>'
@@ -16124,6 +16186,13 @@ function bind(el, next) {
             + '<div class="tr-r-head"><span class="tr-r-badge">' + (ans.correct === '对' ? '✓ 对' : ans.correct === '错' ? '✗ 错' : '△ 部分对') + '</span>'
             + '<span class="tr-r-score">' + ans.score + ' 分</span></div>'
             + '<div class="tr-r-comment">' + Tex.renderInline(ans.comment || '') + '</div>'
+            // 【6.0】限时挑战：实际用时 vs 建议用时
+            + (typeof ans.durationMin === 'number'
+              ? '<div class="tr-r-time"><span class="tr-r-time-k">⏱ 用时 ' + ans.durationMin + ' 分钟</span>'
+                + '<span class="muted-sm">（建议 ' + suggestMin(it.diff) + ' 分钟）</span>'
+                + (ans.durationMin > suggestMin(it.diff) * 1.5 ? '<span class="tr-r-time-warn">· 超时，速度要加强</span>' : '<span class="tr-r-time-ok">· 节奏不错</span>')
+                + '</div>'
+              : '')
             // 【5.0】薄弱归因：根因 + 补课建议
             + ((ans.cause || ans.suggest) && typeof ans.score === 'number' && ans.score < 80
               ? '<div class="tr-r-cause"><div class="tr-r-cause-h">🔗 薄弱归因</div>'
@@ -16188,7 +16257,7 @@ function bind(el, next) {
         var tr2 = trainOf(n);
         var answers = Object.assign({}, (tr2 && tr2.answers) || {});
         answers[s] = answers[s] || [];
-        var ans = { user: '[拍照作答]', correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '', photo: true };
+        var ans = { user: '[拍照作答]', correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '', photo: true, durationMin: attemptMin(n, s, qi) };
         answers[s][qi] = ans;
         saveTrain(n, { answers: answers });
         trainToMistake(n, s, item, ans);
@@ -16292,6 +16361,7 @@ function bind(el, next) {
         answers2[s2] = answers2[s2] || [];
         answers2[s2][qi2] = { skipped: true };
         saveTrain(n, { answers: answers2 });
+        clearAttempt(n, s2, qi2); // 【6.0】跳过即停表
         var card2 = document.querySelector('[data-tq="' + n.id + '-' + s2 + '-' + qi2 + '"]');
         if (card2) card2.outerHTML = trainQCardHtml(n, s2, qi2);
         refreshTrainFoot(n);
@@ -16389,6 +16459,7 @@ function bind(el, next) {
         var history = (tr.history || []).concat([{ at: new Date().toISOString(), avgScore: score, durationMin: report.durationMin }]).slice(-8);
         saveTrain(n, { done: done, finished: true, bestScore: Math.max(tr.bestScore || 0, score), report: report, history: history, finishReviewAt: reviewDueDate(score) });
         if (window.Mastery) Mastery.recordAnswer({ topicId: n.id, topicName: n.name, subject: 'ctrl', score: score, verdict: score >= 60 ? '通过' : '未通过', source: 'concept-train', sourceLabel: '考点特训', noMistake: true, tier: 0 });
+        bumpTrainStreak(); // 【6.0】毕业即记连续打卡/次数
         renderTrainModal(n);
         fireConfetti();
         Toast.success('🎓 特训完成！检定 ' + score + ' 分，掌握度已回写');
@@ -16445,6 +16516,8 @@ function bind(el, next) {
           + '<span class="tag tag-ok">🎓 已特训 · 最佳 ' + (trainOf(n).bestScore || 0) + ' 分</span>'
           + (((trainOf(n).history || []).length > 1) ? '<span class="tag tag-mod">' + (trainOf(n).history.length) + ' 次训练</span>' : '')
           + (reviewText(n) ? '<span class="tag ' + ((trainOf(n).finishReviewAt <= todayKey()) ? 'tag-warn' : '') + '">' + reviewText(n) + '</span>' : '')
+          // 【6.0】里程碑徽章（累计特训次数，本地确定性）
+          + milestoneBadges()
           + '<span class="muted-sm">' + U.esc((trainOf(n).report && trainOf(n).report.advice) || '') + '</span></div>'
         : '')
 
@@ -17071,7 +17144,7 @@ function bind(el, next) {
     };
   }
 
-  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepScored: stepScored, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain, changeIntensity: changeIntensity, reviewDueDate: reviewDueDate, reviewText: reviewText, wrongItems: wrongItems, historyTrendSvg: historyTrendSvg, stepCountOf: stepCountOf, totalStepCount: totalStepCount, consolidateWrong: consolidateWrong, trainVariantPrompt: trainVariantPrompt, trainMethodCard: trainMethodCard };
+  window.ConceptMapModule = { render, TRAIN_STEPS: TRAIN_STEPS, trainGenPrompt: trainGenPrompt, trainJudgePrompt: trainJudgePrompt, ensureTrain: ensureTrain, saveTrain: saveTrain, trainOf: trainOf, advanceTrain: advanceTrain, stepDone: stepDone, stepScored: stepScored, stepAvg: stepAvg, buildReport: buildReport, trainToMistake: trainToMistake, resetTrain: resetTrain, changeIntensity: changeIntensity, reviewDueDate: reviewDueDate, reviewText: reviewText, wrongItems: wrongItems, historyTrendSvg: historyTrendSvg, stepCountOf: stepCountOf, totalStepCount: totalStepCount, consolidateWrong: consolidateWrong, trainVariantPrompt: trainVariantPrompt, trainMethodCard: trainMethodCard, suggestMin: suggestMin, trainStreak: trainStreak, bumpTrainStreak: bumpTrainStreak, milestoneBadges: milestoneBadges };
 })();
 
 
