@@ -2128,6 +2128,20 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .tr-dual-sol-b { color: var(--text-secondary); }
 .tr-dual-use { font-size: 12.5px; color: var(--ok); margin-top: 4px; font-weight: 500; }
 
+/* ============================================================
+ * 特训营 5.0：真题溯源 / 薄弱归因 / 步骤小结（网课节奏感）
+ * ============================================================ */
+.tr-orig { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; flex-wrap: wrap; background: var(--surface-muted); border: 1px dashed var(--line); border-radius: 6px; padding: 4px 8px; }
+.tr-orig-tag { font-weight: 500; color: var(--blue); }
+.tr-orig-txt { color: var(--text-secondary); }
+.tr-r-cause { border-left: 3px solid var(--warn); background: var(--surface); padding: 6px 10px; margin-top: 6px; border-radius: 0 var(--r-btn) var(--r-btn) 0; }
+.tr-r-cause-h { font-size: 12px; font-weight: 500; color: var(--warn); margin-bottom: 3px; }
+.tr-r-cause-row { display: flex; gap: 6px; font-size: 12.5px; line-height: 1.6; padding: 2px 0; color: var(--text-secondary); }
+.tr-r-cause-k { flex: 0 0 32px; font-weight: 500; color: var(--text-primary); }
+.tr-summaries { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.tr-summary { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.tr-summary-no { color: var(--ok); font-weight: 500; }
+
 </style>
 </head>
 <body>
@@ -15446,7 +15460,7 @@ function bind(el, next) {
       : '';
     return '针对考点「' + n.name + '」' + mode + '。教材定位：' + (n.book || textbook()) + '。\n'
       + '【输出格式硬约束】（严格 JSON，不要任何多余文字、不要 markdown 围栏）：\n'
-      + '{"items":[{"type":"choice|solve","stem":"题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"标准答案（choice 填正确选项字母如 A；solve 填完整过程）","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","diff":1-5,"imageNeeded":true|false,"imageHint":"图描述","teach":{"insight":"这题先看什么/怎么想到这一步(≤80字,像名师点拨)","deadPath":"90%的人会走错的错误思路(≤60字)","why":"为什么那条路走不通(≤60字)"},' + dualSol + '"solA2":"仅综合/压轴步需要，其他步填空字符串","solB2":"同上"}]}\n'
+      + '{"items":[{"type":"choice|solve","stem":"题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"标准答案（choice 填正确选项字母如 A；solve 填完整过程）","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","diff":1-5,"imageNeeded":true|false,"imageHint":"图描述","teach":{"insight":"这题先看什么/怎么想到这一步(≤80字,像名师点拨)","deadPath":"90%的人会走错的错误思路(≤60字)","why":"为什么那条路走不通(≤60字)"},"origEx":{"year":2019,"subject":"数二","no":19,"note":"原题问法(≤40字,可省)"},' + dualSol + '"solA2":"仅综合/压轴步需要，其他步填空字符串","solB2":"同上"}]}\n'
       + '【判题要求】：\n'
       + '① type 必填：概念辨析/判断/正误类出 "choice"（4选1），其他出 "solve"。\n'
       + '② choice 必须给 4 个互斥选项（干扰项须有明确错误依据，不能"都对/都错"），answerIdx 给正确选项下标 0-3；solve 不用给 options/answerIdx（给空数组和 -1）。\n'
@@ -15454,8 +15468,9 @@ function bind(el, next) {
       + '④ imageNeeded：题目涉及电路/几何/力学示意图/流程框图等需要配图才能理解时填 true；纯文字题填 false。\n'
       + '⑤ imageHint 仅在 imageNeeded=true 时填（≤80字）：用文字精准描述图的关键内容——节点、元件、参数值、连接关系，让读者脑补出图像（例："电路：Ui → R1=1Ω → 节点a → R2=2Ω → 节点b → C=1F → 地；Uo 从节点b 取"）。\n'
       + '⑥ quality teach 字段必填（除 choice 类概念辨析可简化为 insight 一项）：这是名师精讲——insight 讲清审题切入点与关键思维转折（不是复述解题步骤），deadPath 讲清最常见错误思路，why 解释为什么错，让学生"先懂怎么想，再动手做"。\n'
-      + '⑦ 质量纪律：题干含必要数据/参数；solve 题不要送分；solution 必须含关键步骤。'
-      + (s >= 3 ? '⑧ 综合/压轴步必须给双解法：solA 常规稳妥解 + solB 技巧/简捷解（可能用到特殊值、对称性、图形直觉等），useBoth 一句说清考场怎么二选一。' : '');
+      + '⑦ 质量纪律：题干含必要数据/参数；solve 题不要送分；solution 必须含关键步骤。\n'
+      + '⑧ 真题溯源（origEx，非选择题必填，选择题可省）：尽量标注该题对应的考研真题出处——year 年份数字、subject 如"数二/数一/政治/英语一"、no 题号、note 一句原题问法；实在没有对应的就 origEx 填 null（不要编造）。\n'
+      + (s >= 3 ? '⑨ 综合/压轴步必须给双解法：solA 常规稳妥解 + solB 技巧/简捷解（可能用到特殊值、对称性、图形直觉等），useBoth 一句说清考场怎么二选一。' : '');
   }
   // 判分提示词（支持选择题/含图题）
   function trainJudgePrompt(n, s, item, userAns) {
@@ -15470,7 +15485,10 @@ function bind(el, next) {
       + '题目：' + (item && item.stem || '') + '\n'
       + '标准答案：' + (item && item.answer || '') + '\n'
       + '考生作答：' + (userAns || '（空白）') + '\n'
-      + '输出JSON：{"correct":"对|错|部分对","score":0-100,"comment":"点评(≤90字，公式用$...$包裹)"}，不要任何多余文字。';
+      // 【5.0】薄弱归因：判错时给出根因 + 补课建议（网课式"这题暴露了你哪块没学透"）
+      + '输出JSON：{"correct":"对|错|部分对","score":0-100,"comment":"点评(≤90字，公式用$...$包裹)",'
+      + '"cause":"若未得满分：导致错误的关键根因(≤40字，如 计算粗心/前置考点XX不牢/方法选错)；全对可空",'
+      + '"suggest":"若未得满分：最该补的 1 个动作(≤40字，如 回看[导数定义]再练2题)"}，不要任何多余文字。';
   }
   // ---------- 非阻塞 AI 辅助（生成/判分可取消、有进度提示、就地更新） ----------
   var tbusy = null; // {key, ac} 当前训练 AI 任务
@@ -15579,6 +15597,10 @@ function bind(el, next) {
           imageNeeded: !!it.imageNeeded,
           imageHint: String(it.imageHint || ''),
           teach: teach,
+          // 【5.0】真题溯源
+          origEx: (it && it.origEx && typeof it.origEx === 'object' && it.origEx.year != null)
+            ? { year: parseInt(it.origEx.year, 10) || 0, subject: String(it.origEx.subject || ''), no: String(it.origEx.no != null ? it.origEx.no : ''), note: String(it.origEx.note || '') }
+            : null,
           solA: String(it.solA || it.solA2 || ''),
           solB: String(it.solB || it.solB2 || ''),
           useBoth: String(it.useBoth || '')
@@ -15616,7 +15638,7 @@ function bind(el, next) {
       var tr2 = trainOf(n);
       var answers = Object.assign({}, (tr2 && tr2.answers) || {});
       answers[s] = answers[s] || [];
-      var ans = { user: userAns, correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '' };
+      var ans = { user: userAns, correct: o.correct || '部分对', score: U.clamp(Math.round(+o.score || 0), 0, 100), comment: o.comment || '', cause: o.cause ? String(o.cause).slice(0, 60) : '', suggest: o.suggest ? String(o.suggest).slice(0, 60) : '' };
       answers[s][qi] = ans;
       saveTrain(n, { answers: answers });
       trainToMistake(n, s, item, ans);
@@ -15969,6 +15991,20 @@ function bind(el, next) {
       + '<label class="tr-think"><input type="checkbox" data-tthink' + (tr.thinkMode ? ' checked' : '') + '>⏳ 启用思考模式</label>'
       + '</div>'
       + '<div class="tr-steps">' + steps + '</div>'
+      // 【5.0】步骤小结卡：已完成的步骤逐个显示"本节小结"（网课章节感）
+      + (function () {
+        var sm = tr.stepSummary || {};
+        var keys = Object.keys(sm).filter(function (k) { return +k >= 1 && +k <= 4 && tr.done[+k]; }).map(Number).sort(function (a, b) { return a - b; });
+        if (!keys.length) return '';
+        return '<div class="tr-summaries">' + keys.map(function (k) {
+          var v = sm[k];
+          var dur = v.at ? Math.max(1, Math.round((new Date(v.at).getTime() - new Date(tr.startedAt).getTime()) / 60000)) : null;
+          return '<div class="tr-summary"><span class="tr-summary-no">✓</span>'
+            + '<span class="tr-summary-txt">第' + (k + 1) + '节「' + TRAIN_STEPS[k].name + '」已完成'
+            + (dur != null ? '（累计用时 ' + dur + ' 分钟）' : '')
+            + (k < 4 ? ' → 下一节：' + (v.next || TRAIN_STEPS[k + 1].name) : ' → 全部学完 🎓') + '</span></div>';
+        }).join('') + '</div>';
+      })()
       + (tr.finished ? reportHtml(n, tr) : '')
       + '<div class="tr-body">' + trainBodyHtml(n, tr, tr.step) + '</div>'
       + trainFootHtml(n, tr)
@@ -16061,6 +16097,13 @@ function bind(el, next) {
         }).join('') + '</div>'
         : '')
       + (it.trap ? '<div class="tr-q-trap">🕳 易错点：' + Tex.renderInline(it.trap) + '</div>' : '')
+      // 【5.0】真题溯源：标注对应考研真题出处
+      + (it.origEx
+        ? '<div class="tr-orig"><span class="tr-orig-tag">📌 真题溯源</span>'
+          + '<span class="tr-orig-txt">' + U.esc((it.origEx.year || '') + (it.origEx.subject ? ' ' + it.origEx.subject : '') + (it.origEx.no ? ' 第' + it.origEx.no + '题' : '')) + '</span>'
+          + (it.origEx.note ? '<span class="muted-sm">' + U.esc(it.origEx.note) + '</span>' : '')
+          + '</div>'
+        : '')
       // 【特训营4.0】名师精讲：先懂怎么想，再动手做（网课式点拨）
       + (it.teach && (it.teach.insight || it.teach.deadPath)
         ? '<details class="tr-teach"><summary>🎓 名师精讲（先看思路，再作答）</summary>'
@@ -16081,6 +16124,13 @@ function bind(el, next) {
             + '<div class="tr-r-head"><span class="tr-r-badge">' + (ans.correct === '对' ? '✓ 对' : ans.correct === '错' ? '✗ 错' : '△ 部分对') + '</span>'
             + '<span class="tr-r-score">' + ans.score + ' 分</span></div>'
             + '<div class="tr-r-comment">' + Tex.renderInline(ans.comment || '') + '</div>'
+            // 【5.0】薄弱归因：根因 + 补课建议
+            + ((ans.cause || ans.suggest) && typeof ans.score === 'number' && ans.score < 80
+              ? '<div class="tr-r-cause"><div class="tr-r-cause-h">🔗 薄弱归因</div>'
+                + (ans.cause ? '<div class="tr-r-cause-row"><span class="tr-r-cause-k">根因</span><span>' + Tex.renderInline(ans.cause) + '</span></div>' : '')
+                + (ans.suggest ? '<div class="tr-r-cause-row"><span class="tr-r-cause-k">补课</span><span>' + Tex.renderInline(ans.suggest) + '</span></div>' : '')
+                + '</div>'
+              : '')
             + (ans.photo ? '<div class="muted-sm" style="margin-top:4px">📷 本次为拍照判分</div>' : '')
             + (it.solution ? '<details class="tr-r-sol"><summary>📖 标准答案与解析</summary><div>' + Tex.renderInline(it.solution) + '</div>'
               // 【特训营4.0】一题多解：常规 vs 技巧 + 考场选择
@@ -16346,8 +16396,16 @@ function bind(el, next) {
       }
       if (s === 0 || stepDone(n, s)) {
         var done = tr.done.slice(); done[s] = true;
-        saveTrain(n, { done: done, step: Math.min(4, s + 1) });
+        // 【5.0】步骤小结：记录本步完成时刻（渲染"章节小结"卡片）
+        var patch = { done: done, step: Math.min(4, s + 1) };
+        if (s >= 1) {
+          var sm = Object.assign({}, (tr.stepSummary || {}));
+          sm[s] = { at: new Date().toISOString(), next: TRAIN_STEPS[Math.min(4, s + 1)].name };
+          patch.stepSummary = sm;
+        }
+        saveTrain(n, patch);
         renderTrainModal(n);
+        if (s >= 1) Toast.show('✅ ' + TRAIN_STEPS[s].name + ' 完成，下一节：' + TRAIN_STEPS[Math.min(4, s + 1)].name, 'success', 2500);
         return;
       }
       Toast.warn('请先完成本步所有题目的作答与判分');
