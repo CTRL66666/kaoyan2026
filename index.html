@@ -20927,22 +20927,27 @@ function bind(el, next) {
   // simple=true：精简模式（不要例句），用于首次失败后的自动重试，大幅降低被截断的概率
   // 说明：拍词表照片时一张图常有 30-50 个词，早期「最多12个」会漏掉大半，
   //       现放宽到 40（精简档 60）；配合 chatJSON 的 maxTokens=8000 兜底防截断。
-  // note：用户备注指令（如「不录入已打勾的词」「只取偶数页」「跳过基础词」），拼进系统提示让 AI 参考
+  // note：用户备注指令（如「不录入已打勾的词」「只取偶数页」「跳过基础词」）
+  // 【修复】优先级提升：放提示词开头 + 明确"高于所有要求"，解决 AI 不遵循
   function extractPrompt(simple, note) {
-    var noteRule = note ? '\n【用户特别要求（必须遵守）】' + note + '\n' : '';
+    var noteRule = note
+      ? '【最高优先级·用户筛选指令】用户明确要求：' + note + '\n'
+        + '⚠️ 这条指令**优先级高于下文所有要求**，如有冲突一律以用户指令为准！'
+        + '对每个候选词先逐词核验是否满足该指令，不满足的坚决剔除（例如用户说"不录入打勾的"就跳过打勾项、"只取偶数页"就只取偶数页的内容）。\n'
+      : '';
     if (simple) {
-      return '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成 JSON 数组，每项只含 3 个字段：'
+      return noteRule + '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成 JSON 数组，每项只含 3 个字段：'
         + '{"word":"单词或短语(转原形)","pos":"词性缩写如v./n./adj./phr.","meaning":"中文释义(考研常考义优先)"}。'
         + '要求：把图片/文本里出现的词尽量都提出来，不要自行缩减数量；跳过过于基础的词(如 a/the/good)；'
-        + '最多 60 个；不要例句、不要音标；务必输出完整闭合的 JSON 数组，只输出数组本身。' + noteRule;
+        + '最多 60 个；不要例句、不要音标；务必输出完整闭合的 JSON 数组，只输出数组本身。';
     }
-    return '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成JSON数组，每项：'
+    return noteRule + '从给定内容（文本或图片）中提取值得背诵的考研英语单词/短语，整理成JSON数组，每项：'
       + '{"word":"单词或短语(单词转原形)","phonetic":"音标(可空)","pos":"词性缩写如v./n./adj./phr.","meaning":"中文释义(考研常考义优先,多义用；分隔)","example":"英文例句(考研难度,可空)","exampleCn":"例句翻译(可空)"}。'
       + '要求：优先考研高频词、熟词僻义词、核心动词短语；跳过过于基础的词(如a/the/good)；'
       + '**如果材料里有很多词（如词表照片），请全部提取，不要只给前十几个**；最多40个。'
       + '硬性约束：①只输出 JSON 数组本身，不要任何前言/后记/markdown 围栏；'
       + '②数组必须完整闭合（宁可少给几个词，也绝不能输出到一半被截断）；'
-      + '③例句务必简短（不超过 15 个词），字段可留空字符串但不能省略引号。' + noteRule;
+      + '③例句务必简短（不超过 15 个词），字段可留空字符串但不能省略引号。';
   }
   function normalizeExtracted(arr) {
     var list = Array.isArray(arr) ? arr : (arr && arr.words) || [];
@@ -21290,7 +21295,8 @@ function bind(el, next) {
       + '<div class="muted-sm">拍单词书页/真题卷/笔记照片，AI 识别图中单词并整理。需使用支持视觉的模型（如 GLM-4V / Qwen-VL / GPT-4o）。</div>'
       + '<input type="file" id="vb-file" accept="image/*" capture="environment" style="display:none">'
       + '<div class="btn-row" style="margin-top:8px"><label for="vb-file" class="btn ' + (has ? 'btn-primary' : 'btn-ghost') + '" style="cursor:pointer' + (has ? '' : ';opacity:.5;pointer-events:none') + '">' + U.icon('snap') + ' 拍照 / 选图</label></div>'
-      + '<textarea id="vb-photo-note" class="input" rows="2" style="margin-top:8px" placeholder="备注（可选）：如「不录入已打勾的词」「只取偶数页」「跳过基础词，只挑熟词僻义」等"></textarea>'
+      + '<textarea id="vb-photo-note" class="input" rows="2" style="margin-top:8px" placeholder="备注（可选）：如「不录入已打勾的词」「只取偶数页」「跳过基础词，只挑熟词僻义」等">' + U.esc((Store.get().settings && Store.get().settings.vocabPhotoNote) || '') + '</textarea>'
+      + '<div class="muted-sm" style="margin-top:2px">备注会作为最高优先级指令交给 AI（如「不录入已打勾的词」），并自动保存。</div>'
       + '<div id="vb-photo-status"></div></div>'
 
       + '<div class="card"><div class="card-title">✍️ 手动添加</div>'
@@ -21906,10 +21912,11 @@ function bind(el, next) {
     if (aiExtract) aiExtract.onclick = function () {
       var raw = el.querySelector('#vb-ai-raw').value.trim();
       if (!raw) { Toast.warn('请先粘贴材料'); return; }
+      var noteAll = (Store.get().settings || {}).vocabPhotoNote; // 备注对文字提取同样生效
       startExtract('文字整理',
-        extractPrompt() + '\n材料：\n' + raw.slice(0, 3000),
+        extractPrompt(false, noteAll) + '\n材料：\n' + raw.slice(0, 3000),
         null,
-        extractPrompt(true) + '\n材料：\n' + raw.slice(0, 3000));
+        extractPrompt(true, noteAll) + '\n材料：\n' + raw.slice(0, 3000));
     };
 
     // ---- 收录：拍照 AI 整理（后台任务，不阻塞页面） ----
@@ -21919,6 +21926,11 @@ function bind(el, next) {
       if (!f) return;
       if (!f.type.startsWith('image/')) { Toast.warn('请选择图片文件'); return; }
       if (extractJob && extractJob.status === 'running') { Toast.warn('已有一个 AI 提取任务在后台进行中，请等它完成'); fileInput.value = ''; return; }
+      // 拍照瞬间把当前备注存入 Store（持久化）
+      var noteEl0 = document.getElementById('vb-photo-note');
+      if (noteEl0) {
+        Store.update(function (s) { s.settings = s.settings || {}; s.settings.vocabPhotoNote = noteEl0.value.trim(); });
+      }
       var stEl = document.getElementById('vb-photo-status');
       if (stEl) stEl.innerHTML = '<div class="muted-sm" style="margin-top:8px">⏳ 压缩图片中…</div>';
       // 保留原站点压缩参数：最大边 1600px / JPEG 0.75（保证 OCR 清晰度）
@@ -21931,6 +21943,11 @@ function bind(el, next) {
           extractPrompt(true, note) + '\n请识别图片中的英语单词并整理。');
       }).catch(function () { /* 原实现压缩失败即静默，保持一致 */ });
       fileInput.value = '';
+    };
+    // 【修复】备注实时持久化（输入即保存，刷新/切换页面不丢）
+    var noteInput = el.querySelector('#vb-photo-note');
+    if (noteInput) noteInput.oninput = function () {
+      Store.update(function (s) { s.settings = s.settings || {}; s.settings.vocabPhotoNote = noteInput.value.trim(); });
     };
 
     // ---- 词书：学习本书 ----
@@ -22017,7 +22034,7 @@ function bind(el, next) {
     };
   }
 
-  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount };
+  window.WordbookModule = { render: render, dueCount: dueCount, grade: grade, smartDailyNew: smartDailyNew, pickQType: pickQType, stressScore: stressScore, daysUntilExam: daysUntilExam, startHardSession: startHardSession, buildSession: buildSession, booksProgress: booksProgress, hardCount: hardCount, extractPrompt: extractPrompt };
 })();
 
 
