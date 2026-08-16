@@ -2168,6 +2168,13 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .pr-gap-row { font-size: 12.5px; line-height: 1.7; color: var(--text-secondary); }
 .pr-gap-row b { color: var(--danger); }
 
+/* ============================================================
+ * 插件系统（pluginbus.js / plugincenter.js）
+ * ============================================================ */
+.plugin-tool-body { margin-top: 10px; }
+.plugin-tool-body .card { background: var(--surface); }
+.plg-cap { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+
 </style>
 </head>
 <body>
@@ -3369,6 +3376,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       polTemplates: [],          // 答题模板库 [{id,type,name,template,keywords,usage,createdAt}]，type∈[原因类/意义类/措施类/认识类/关系类]（首次进入模板 tab 时播种内置 5 条）
       polChoice: [],             // 选择题练习 [{id,stem,options:[4],answer:0-3,analysis,subject,source,year,box:1-5,due,lastReview,wrongCount,createdAt}]（独立 Leitner，与 polRecite 同 BOX_DAYS 调度）
       weaknessProfile: null,      // 弱点画像 {generatedAt, basedOn:[painPoint...], summary, weakAreas:[...], advice} —— 由拍题疑难点汇聚分析得出
+      plugins: [],                // 插件总线（pluginbus.js）：[{id,name,version,desc,author,source(源码文本),enabled,createdAt}]（随云同步，bootstrap 时重放源码）
       dailyQuiz: null,            // 每日一题 {date:'YYYY-MM-DD', question, solution, trap, subject, generatedAt}
       dailyQuizHistory: [],       // 历史每日一题 [{date,question,solution,trap,subject,generatedAt}]（"再来一题"时归档）
       // ---- AI 记忆系统（越用越懂你的核心）----
@@ -8421,6 +8429,237 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   };
 
   window.Mastery = Mastery;
+})();
+
+
+/* ===== js/core/pluginbus.js ===== */
+/* ============================================================
+ * pluginbus.js — 插件能力总线（开源工具，插件 = 你自己的代码，全量权限）
+ * 插件形态：一个 JS 模块文件，内部调用 PluginBus.register({...})。
+ * 能力分类（可组合）：
+ *   skills  : AI 技能 [{trigger, title, prompt}] → 注入教练，识别触发词后执行
+ *   actions : 教练动作 [{type, label, auto, run(ctx)}] → 合并进 Copilot ACTIONS
+ *   tools   : 新工具页 [{id, title, icon, render(ctx)}] → 注册进 TOOL_TABS
+ *   hooks   : 事件钩子 {eventName: fn(ctx, payload)} → 模块触发点 emit 调用
+ *   init    : 插件初始化 fn(ctx) → 模块启用时执行（可注册快捷键/自渲染等）
+ * 数据：Store.plugins[]（源码文本 + 元信息，随云同步跨设备）
+ * 导入：粘贴/拖拽/文件选择 → PluginBus.importText() 执行源码并注册
+ * 安全：开源工具不设沙箱——插件能碰全部全局 API（ctx 透传 window 全量）
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  function plugins() { return Store.get().plugins || []; }
+
+  // 全量上下文：插件能拿到与内置模块同等的全部能力
+  function buildCtx() {
+    var c = {
+      Store: window.Store,
+      AI: window.AI,
+      App: window.App,
+      Toast: window.Toast,
+      Modal: window.Modal,
+      Components: window.Components,
+      Tex: window.Tex,
+      Charts: window.Charts,
+      DB: window.DB,
+      Mastery: window.Mastery,
+      Spaced: window.Spaced,
+      U: window.U,
+      Theme: window.Theme,
+      Cloud: window.Cloud,
+      AiMemory: window.AiMemory,
+      PluginBus: PluginBus,
+      // 便捷别名
+      store: window.Store,
+      ai: window.AI,
+      toast: window.Toast,
+      modal: window.Modal,
+      uid: function (p) { return U.uid ? U.uid() : (p || 'plg') + Date.now().toString(36); },
+      dkey: function () { return U.dkey ? U.dkey() : new Date().toISOString().slice(0, 10); }
+    };
+    // 顺带注入所有 window.XxxModule（插件可跨模块调接口）
+    Object.keys(window).forEach(function (k) {
+      if (/Module$/.test(k) && typeof window[k] === 'object' && window[k]) c[k] = window[k];
+    });
+    return c;
+  }
+
+  // 提取插件元信息 + 校验必填
+  function normalize(m) {
+    if (!m || typeof m !== 'object') throw new Error('插件必须注册一个对象');
+    var id = String(m.id || '').trim();
+    if (!id || !/^[a-z0-9][a-z0-9\-_]{1,31}$/i.test(id)) throw new Error('插件 id 必填且只能含字母数字-_（如 my-plugin）');
+    var name = String(m.name || id).trim().slice(0, 30);
+    var rec = {
+      id: id, name: name,
+      version: String(m.version || '1.0').slice(0, 12),
+      desc: String(m.desc || '').slice(0, 200),
+      author: String(m.author || '').slice(0, 40),
+      skills: Array.isArray(m.skills) ? m.skills.slice(0, 20) : [],
+      actions: Array.isArray(m.actions) ? m.actions.slice(0, 20) : [],
+      tools: Array.isArray(m.tools) ? m.tools.slice(0, 10) : [],
+      hooks: m.hooks && typeof m.hooks === 'object' ? m.hooks : {},
+      init: typeof m.init === 'function' ? m.init : null,
+      enabled: true,
+      createdAt: U.dkey ? U.dkey() : new Date().toISOString().slice(0, 10)
+    };
+    rec.tools.forEach(function (t, i) {
+      if (t && typeof t === 'object' && !t.id) t.id = rec.id + '-tool' + (i + 1);
+      if (t && typeof t.render !== 'function') throw new Error('工具 ' + (t && t.title || '?') + ' 必须有 render 函数');
+    });
+    return rec;
+  }
+
+  // 插件注册表（运行期，不入 Store —— Store 只存源码与元信息；能力函数只能活在运行期）
+  var registry = {};   // id -> {manifest, enabled}
+
+  function enabledRec(id) {
+    var r = registry[id];
+    if (!r) return null;
+    // enabled 以 Store 为准（跨页面持久），registry 只缓存能力
+    var p = plugins().find(function (x) { return x.id === id; });
+    return (p && p.enabled === false) ? null : r.manifest;
+  }
+
+  var PluginBus = {
+    _ver: '1.0.0',
+
+    // 注册插件（导入/页面加载重放时调用）
+    register: function (m) {
+      var rec = normalize(m);
+      registry[rec.id] = { manifest: rec };
+      if (rec.init) {
+        try { rec.init(buildCtx()); } catch (e) { /* init 失败不阻断 */ }
+      }
+      return rec;
+    },
+
+    // 运行期取已注册插件清单
+    list: function () {
+      var out = [];
+      Object.keys(registry).forEach(function (id) { var r = enabledRec(id); if (r) out.push(r); });
+      return out;
+    },
+    get: function (id) { var r = enabledRec(id); return r || null; },
+    ctxOf: function (id) { return registry[id] ? buildCtx() : null; },
+
+    // ---- 能力聚合（消费方调用；一律走运行期 registry，函数才能存活） ----
+    skills: function () {
+      var out = [];
+      this.list().forEach(function (m) {
+        (m.skills || []).forEach(function (s) {
+          if (s && s.trigger && s.prompt) out.push({ pid: m.id, trigger: s.trigger, title: s.title || s.trigger, prompt: s.prompt });
+        });
+      });
+      return out;
+    },
+    actions: function () {
+      var out = [];
+      this.list().forEach(function (m) {
+        (m.actions || []).forEach(function (a) {
+          if (a && a.type) out.push({ pid: m.id, type: a.type, label: a.label || a.type, auto: !!a.auto, run: a.run, needs: a.needs });
+        });
+      });
+      return out;
+    },
+    tools: function () {
+      var out = [];
+      this.list().forEach(function (m) {
+        (m.tools || []).forEach(function (t) {
+          if (t && t.id) out.push({ pid: m.id, id: t.id, title: t.title || t.id, icon: t.icon || '🧩', render: t.render });
+        });
+      });
+      return out;
+    },
+    // 触发事件钩子：返回命中数
+    emit: function (event, payload) {
+      var n = 0;
+      this.list().forEach(function (m) {
+        var fn = (m.hooks || {})[event];
+        if (typeof fn === 'function') {
+          try { fn(buildCtx(), payload || {}); n++; } catch (e) { /* 单钩子失败不阻断 */ }
+        }
+      });
+      return n;
+    },
+
+    // ---- 导入/导出 ----
+    // 源码文本 → 执行 → 注册（源码里调 PluginBus.register）。返回注册的 manifest
+    importText: function (code, silent) {
+      if (!code || typeof code !== 'string' || !code.trim()) throw new Error('空内容');
+      if (code.indexOf('PluginBus.register') < 0 && code.indexOf('register(') < 0) {
+        throw new Error('这不是插件源码：未找到 PluginBus.register({...}) 调用');
+      }
+      var last = null;
+      var orig = window.PluginBus;
+      window.PluginBus = {
+        register: function (m) { last = m; return PluginBus.register(m); }
+      };
+      var err = null;
+      try {
+        var fn = new Function('PluginBus', 'window', '"use strict";\n' + code + '\n;return true;');
+        fn(window.PluginBus, window);
+      } catch (e) { err = e; }
+      window.PluginBus = orig;
+      if (err) throw new Error('插件执行失败：' + (err.message || String(err)));
+      if (!last) throw new Error('插件未调用 PluginBus.register');
+      var rec = normalize(last);
+      // 存进 Store（源码 + 元信息）
+      Store.update(function (s) {
+        s.plugins = s.plugins || [];
+        var i = s.plugins.findIndex(function (p) { return p.id === rec.id; });
+        var entry = {
+          id: rec.id, name: rec.name, version: rec.version, desc: rec.desc, author: rec.author,
+          source: code, enabled: true, createdAt: rec.createdAt
+        };
+        if (i >= 0) s.plugins[i] = entry; else s.plugins.push(entry);
+      });
+      if (!silent) Toast.show('插件「' + rec.name + '」已导入', 'success', 2500);
+      return rec;
+    },
+    // 导出源码文本（含元信息注释头）
+    exportText: function (id) {
+      var p = plugins().find(function (x) { return x.id === id; });
+      if (!p) return null;
+      return '/*\n * ' + p.name + ' v' + p.version + (p.author ? ' by ' + p.author : '') + '\n * ' + (p.desc || '') + '\n */\n' + (p.source || '');
+    },
+
+    // ---- 启停/删除 ----
+    enable: function (id, on) {
+      Store.update(function (s) {
+        var p = (s.plugins || []).find(function (x) { return x.id === id; });
+        if (p) p.enabled = !!on;
+      });
+      if (on) { var r = registry[id]; if (r && r.manifest.init) { try { r.manifest.init(buildCtx()); } catch (e) {} } }
+    },
+    remove: function (id) {
+      Store.update(function (s) { s.plugins = (s.plugins || []).filter(function (x) { return x.id !== id; }); });
+      delete registry[id];
+    },
+    byStore: plugins,
+
+    // 页面加载时重放：对每个已启用插件执行源码（重建注册表）
+    bootstrap: function () {
+      plugins().forEach(function (p) {
+        if (!p.enabled || !p.source) return;
+        try {
+          var fn = new Function('PluginBus', 'window', '"use strict";\n' + p.source);
+          fn(PluginBus, window);
+        } catch (e) { /* 坏插件不阻断启动 */ }
+      });
+    }
+  };
+
+  window.PluginBus = PluginBus;
+  // 页面启动后重放已启用插件（copilot 等消费方在其后读取）
+  if (window.Store && window.U) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () { try { PluginBus.bootstrap(); } catch (e) {} });
+    } else {
+      setTimeout(function () { try { PluginBus.bootstrap(); } catch (e) {} }, 0);
+    }
+  }
 })();
 
 
@@ -18435,6 +18674,8 @@ function bind(el, next) {
       });
       Toast.show('📊 交卷完成：得分 ' + gotScore + '/' + totalScore + '（' + Math.round(gotScore / totalScore * 100) + '%）'
         + (addedWrong ? ' · 已收录 ' + addedWrong + ' 道错题' : ' · 零错题🎉'), 'info', 6000);
+      // 【插件】交卷事件钩子
+      try { if (window.PluginBus) PluginBus.emit('examGraded', { examId: examId, score: gotScore, total: totalScore, wrongCount: addedWrong }); } catch (e) { }
       // 【轮18】押题卷成绩回写掌握度：按考点得分率 → heat（进度趋势/热力图/押题分全链路联动）
       try {
         var byName = {};
@@ -25838,7 +26079,17 @@ function bind(el, next) {
       + '定时提醒 [[ACTION:{"type":"addReminder","text":"提醒内容","hours":2}]]（hours 几小时后，或用 "time":"20:00" 今天/明天该时刻）。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
       + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
-      + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。';
+      + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。'
+      + (function () {
+        // 【插件】注入插件注册的 AI 技能触发词清单：教练识别后调插件动作或直接引用技能上下文
+        try {
+          if (!window.PluginBus) return '';
+          var sk = window.PluginBus.skills();
+          if (!sk.length) return '';
+          return '\n【已安装插件技能（用户说对应触发词时按技能要求作答，可在回复中直接调用同名插件动作）】\n'
+            + sk.map(function (s) { return '·「' + s.trigger + '」→ ' + (s.title || s.trigger) + '：' + s.prompt.slice(0, 120) + (s.prompt.length > 120 ? '…' : ''); }).join('\n');
+        } catch (e) { return ''; }
+      })();
   }
 
   // ---------- 历史持久化（保留最近7天，每天≤60条） ----------
@@ -26115,6 +26366,16 @@ function bind(el, next) {
     } catch (e) {}
   })();
 
+  // 【插件】查找插件注册的教练动作定义（PluginBus.actions()）
+  function pluginActionDef(type) {
+    try {
+      if (!window.PluginBus) return null;
+      var acts = window.PluginBus.actions();
+      for (var i = 0; i < acts.length; i++) if (acts[i].type === type) return acts[i];
+    } catch (e) { }
+    return null;
+  }
+
   function actionLabel(a) {
     var def = ACTIONS[a.type];
     if (def) {
@@ -26123,12 +26384,16 @@ function bind(el, next) {
       if (a.type === 'planDay') return '＋ 一键排入今日 ' + ((a.tasks || []).length) + ' 项';
       return def.label + (a.text || a.word || a.name || a.desc || a.title ? '：' + (a.text || a.word || a.name || a.desc || a.title).slice(0, 14) : '');
     }
+    // 插件动作：label + 简述
+    var pd = pluginActionDef(a.type);
+    if (pd) return pd.label + (a.text || a.word || a.name || a.desc || a.title ? '：' + (a.text || a.word || a.name || a.desc || a.title).slice(0, 14) : '');
     return a.label || '执行';
   }
 
   // 执行动作：auto 自动执行；返回执行结果文案（供气泡状态显示）
   function executeAction(a, btn) {
     var def = ACTIONS[a.type];
+    if (!def) def = pluginActionDef(a.type);   // 插件动作
     if (!def) { if (btn) { btn.textContent = '⚠ 未知动作'; btn.disabled = true; } return ''; }
     try {
       var msg = def.run(a, btn) || '';
@@ -26543,7 +26808,7 @@ function bind(el, next) {
       renderMessages();
       // 【接管工具】新消息内的低风险动作自动执行（历史回显不重复执行）
       parseActions(full).forEach(function (a) {
-        var def = ACTIONS[a.type];
+        var def = ACTIONS[a.type] || pluginActionDef(a.type);
         if (def && def.auto) {
           var msg = executeAction(a, null);
           if (msg) appendExecNote(msg);
@@ -28270,6 +28535,166 @@ function bind(el, next) {
   window.PolReciteModule = { render: render, grade: grade, openReview: openFlip, openSelfTest: openSelfTest, openWrite: openWrite, startDrill: startDrill, isChoiceMulti: isChoiceMulti, choiceAnswer: choiceAnswer, choicePickedRight: choicePickedRight, sanitizeChoice: sanitizeChoice, reciteSortKey: reciteSortKey, printListHtml: printListHtml };
 })();
 
+/* ===== js/modules/plugincenter.js ===== */
+/* ============================================================
+ * plugincenter.js — 插件中心（PluginBus 管理页）
+ * 导入（粘贴/文件选择/示例）/ 列表（启用/禁用/卸载/导出）/ 技能预览
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  function hasAI() { return window.AI && AI.configured(); }
+
+  function render(el) {
+    var list = (window.PluginBus ? PluginBus.byStore() : []);
+    var cards = list.length ? list.map(function (p) {
+      var skillN = (p.skills || []).length, actN = (p.actions || []).length, toolN = (p.tools || []).length, hookN = Object.keys(p.hooks || {}).length;
+      var caps = [];
+      if (skillN) caps.push('<span class="tag tag-mod">技能 ' + skillN + '</span>');
+      if (actN) caps.push('<span class="tag" style="background:#2f54eb;color:#fff">动作 ' + actN + '</span>');
+      if (toolN) caps.push('<span class="tag" style="background:#237804;color:#fff">工具 ' + toolN + '</span>');
+      if (hookN) caps.push('<span class="tag" style="background:#722ed1;color:#fff">钩子 ' + hookN + '</span>');
+      var skillList = (p.skills || []).length
+        ? '<div class="muted-sm" style="margin-top:4px;font-size:12px">触发词：' + (p.skills || []).map(function (s) { return '「' + U.esc(s.trigger || '') + '」'; }).join(' ') + '</div>'
+        : '';
+      return '<div class="card" style="margin:8px 0">'
+        + '<div class="pr-top"><div class="pr-topic">🧩 ' + U.esc(p.name) + ' <span class="muted-sm" style="font-weight:400">v' + U.esc(p.version || '1.0') + '</span></div>'
+        + '<span class="tag ' + (p.enabled ? 'tag-ok' : '') + '">' + (p.enabled ? '已启用' : '已禁用') + '</span></div>'
+        + '<div class="pr-meta" style="flex-wrap:wrap">' + caps
+        + (p.author ? '<span class="muted-sm">by ' + U.esc(p.author) + '</span>' : '')
+        + '<span class="muted-sm">' + U.esc(p.id) + '</span></div>'
+        + (p.desc ? '<div class="muted-sm" style="margin-top:4px">' + U.esc(p.desc) + '</div>' : '')
+        + skillList
+        + '<div class="pr-actions">'
+        + '<button class="btn btn-sm ' + (p.enabled ? 'btn-ghost' : 'btn-primary') + ' plg-toggle" data-id="' + p.id + '">' + (p.enabled ? '⏸ 禁用' : '▶ 启用') + '</button>'
+        + '<button class="btn btn-sm btn-ghost plg-export" data-id="' + p.id + '">📤 导出</button>'
+        + '<button class="btn btn-sm btn-ghost plg-del" data-id="' + p.id + '" style="color:var(--danger)">🗑 卸载</button>'
+        + '</div></div>';
+    }).join('') : '<div class="card empty-hint">还没有插件。粘贴插件源码、选择 .js 文件导入，或点「载入示例」体验插件能力。</div>';
+
+    el.innerHTML =
+      '<div class="card"><div class="card-title-row"><span class="card-title">🧩 插件中心</span>'
+      + '<button class="btn btn-ghost btn-sm" id="plg-sample">✨ 载入示例</button>'
+      + '<button class="btn btn-ghost btn-sm" id="plg-file">📂 导入文件</button>'
+      + '<button class="btn btn-primary btn-sm" id="plg-paste">📋 粘贴导入</button></div>'
+      + '<div class="muted-sm">插件 = 一个 JS 模块文件，内部调用 <code>PluginBus.register({...})</code>，可注册 <b>AI 技能</b>（教练触发词）、<b>教练动作</b>、<b>新工具页</b>、<b>事件钩子</b>。开源工具、全量权限——插件能调用全部模块接口。</div>'
+      + '<input type="file" id="plg-file-input" accept=".js,.txt,text/javascript" style="display:none">'
+      + '<div id="plg-zone" style="margin-top:8px">' + cards + '</div></div>';
+
+    bind(el);
+  }
+
+  function bind(el) {
+    var sample = el.querySelector('#plg-sample');
+    if (sample) sample.onclick = function () {
+      var code = SAMPLE_PLUGINS.join('\n\n// ====================================\n\n');
+      try { PluginBus.importText(code); } catch (e) { Toast.warn(e.message); }
+      App.refresh();
+    };
+    var paste = el.querySelector('#plg-paste');
+    if (paste) paste.onclick = function () { openImport(); };
+    var fileBtn = el.querySelector('#plg-file');
+    var fileInput = el.querySelector('#plg-file-input');
+    if (fileBtn && fileInput) fileBtn.onclick = function () { fileInput.click(); };
+    if (fileInput) fileInput.onchange = function (e) {
+      var f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        try { PluginBus.importText(String(reader.result || '')); App.refresh(); }
+        catch (err) { Toast.warn('导入失败：' + (err && err.message ? err.message : String(err))); }
+      };
+      reader.readAsText(f, 'utf-8');
+    };
+    el.querySelectorAll('.plg-toggle').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id');
+        var p = PluginBus.byStore().find(function (x) { return x.id === id; });
+        if (p) PluginBus.enable(id, !p.enabled);
+        Toast.show(p && p.enabled ? '已禁用' : '已启用', 'info', 1200);
+        App.refresh();
+      };
+    });
+    el.querySelectorAll('.plg-export').forEach(function (b) {
+      b.onclick = function () {
+        var txt = PluginBus.exportText(b.getAttribute('data-id'));
+        if (!txt) return;
+        try {
+          navigator.clipboard.writeText(txt).then(function () { Toast.success('插件源码已复制（可分享/备份）'); }, function () { fallback(txt); });
+        } catch (e) { fallback(txt); }
+      };
+    });
+    el.querySelectorAll('.plg-del').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id');
+        var p = PluginBus.byStore().find(function (x) { return x.id === id; });
+        Modal.confirm('卸载插件', '<p>确认卸载「' + (p ? U.esc(p.name) : id) + '」？<br><span class="muted-sm">卸载后其技能/动作/工具立即失效。可重新导入恢复。</span></p>', '卸载', function () {
+          PluginBus.remove(id);
+          Toast.success('已卸载');
+          App.refresh();
+        });
+      };
+    });
+  }
+
+  function fallback(txt) {
+    try { var ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); Toast.success('已复制'); }
+    catch (e) { Toast.warn('复制失败，请手动选择'); }
+  }
+
+  function openImport() {
+    Modal.open({
+      title: '📋 导入插件源码',
+      wide: true,
+      html: '<div class="form-col">'
+        + '<div class="muted-sm">粘贴插件 JS 源码（含 <code>PluginBus.register({...})</code> 调用）。导入即注册，可随时禁用/卸载。</div>'
+        + '<textarea id="plg-import-code" class="input" rows="10" style="font-family:var(--font-mono);font-size:12px" placeholder="PluginBus.register({&#10;  id: ' + "'my-plugin'" + ',&#10;  name: ' + "'我的插件'" + ',&#10;  skills: [{ trigger: ' + "'示例'" + ', prompt: ' + "'...'" + ' }]&#10;});"></textarea>'
+        + '<div id="plg-import-msg"></div></div>',
+      actions: [
+        { label: '取消' },
+        { label: '导入', kind: 'btn-primary', onClick: function (close) {
+          var code = document.getElementById('plg-import-code').value;
+          if (!code.trim()) { document.getElementById('plg-import-msg').innerHTML = '<div class="alert alert-danger">请先粘贴插件源码</div>'; return; }
+          try { PluginBus.importText(code); close(); App.refresh(); }
+          catch (e) { document.getElementById('plg-import-msg').innerHTML = '<div class="alert alert-danger">导入失败：' + U.esc(e.message || String(e)) + '</div>'; }
+        } }
+      ]
+    });
+  }
+
+  // 示例插件 2 个：① 教练新动作（标记复习完成）② 新工具页（倒计时仪式感）③ AI 技能
+  var SAMPLE_PLUGINS = [
+    'PluginBus.register({\n'
+    + '  id: \'review-habit\',\n  name: \'复盘习惯助手\',\n  version: \'1.0\',\n  author: \'示例\',\n'
+    + '  desc: \'教练识别「复盘」触发词 + 一键归档今日任务的动作\',\n'
+    + '  skills: [{ trigger: \'复盘\', title: \'晚间复盘引导\', prompt: \'引导用户做今晚复盘：先问今天的三个收获与一个失误，再结合实时数据给出明日一条改进建议，最后建议调用 markReview 动作归档。\' }],\n'
+    + '  actions: [{ type: \'markReview\', label: \'归档今日\', auto: false,\n'
+    + '    run: function (ctx) { ctx.Store.get().tasks.forEach(function (t) { if (!t.done) ctx.Store.update(function (st) { var x = st.tasks.find(function (y) { return y.id === t.id; }); if (x) x.done = true; }); }); ctx.Toast.show(\'今日任务已全部归档 ✅\', \'success\', 3000); return \'已归档今日全部任务\'; } }]\n'
+    + '});',
+    'PluginBus.register({\n'
+    + '  id: \'countdown-desk\',\n  name: \'倒计时桌面\',\n  version: \'1.0\',\n  author: \'示例\',\n'
+    + '  desc: \'一个插件工具页：大号倒计时 + 每日目标进度，展示插件 tools 能力\',\n'
+    + '  tools: [{ id: \'countdown-desk\', title: \'倒计时桌面\', icon: \'⏳\',\n'
+    + '    render: function (ctx) {\n'
+    + '      var s = ctx.Store.get();\n'
+    + '      var left = ctx.U.daysTo ? ctx.U.daysTo(s.settings.examDate) : 0;\n'
+    + '      var st = ctx.Store.todayTaskStats ? ctx.Store.todayTaskStats() : {};\n'
+    + '      var done = 0, total = 0; Object.keys(st).forEach(function (k) { done += st[k][0]; total += st[k][1]; });\n'
+    + '      var pct = total ? Math.round(done / total * 100) : 0;\n'
+    + '      return \'<div style="text-align:center;padding:20px 0"><div style="font-size:56px;font-weight:500;color:var(--danger)">\' + left + \'</div>\'\n'
+    + '        + \'<div class="muted-sm">距离考研还有 \' + ctx.U.esc(s.settings.examDate || \'\') + \' 天</div>\'\n'
+    + '        + \'<div style="margin:16px 0;font-size:15px">今日任务 \' + done + \'/\' + total + \'（\' + pct + \'%）</div>\'\n'
+    + '        + \'<div class="pbar" style="max-width:280px;margin:0 auto;height:8px"><div class="pbar-fill" style="width:\' + pct + \'%;background:var(--ok)"></div></div>\'\n'
+    + '        + \'<div class="muted-sm" style="margin-top:14px">这是插件工具页——由「倒计时桌面」插件渲染，说明 tools 能力已生效。</div></div>\';\n'
+    + '    } }]\n'
+    + '});'
+  ];
+
+  window.PluginCenterModule = { render: render };
+})();
+
+
 /* ===== js/app.js ===== */
 /* ============================================================
  * app.js — 应用主控
@@ -28377,6 +28802,7 @@ function bind(el, next) {
     ['polrecite', '政治背诵', ICONS.polrecite, PolReciteModule],
     ['redline', '红线禁令', ICONS.redline, RedlineModule],
     ['progress', '进度追踪', ICONS.progress, ProgressModule],
+    ['plugins', '插件中心', '🧩', PluginCenterModule],
     ['settings', '设置', ICONS.settings, SettingsModule]
   ];
   const ALL = MAIN_TABS.concat(TOOL_TABS);
@@ -28435,12 +28861,25 @@ function bind(el, next) {
   }
 
   function openTools() {
+    let extra = '';
+    try {
+      if (window.PluginBus) {
+        const pts = window.PluginBus.tools();
+        if (pts.length) {
+          extra = '<div class="muted-sm" style="margin:10px 0 4px;font-size:12px">🧩 插件工具</div><div class="tools-grid">'
+            + pts.map(t =>
+              '<button class="tool-cell" data-tab="' + t.id + '"><span class="tool-icon">' + (t.icon || '🧩') + '</span><span>' + U.esc(t.title) + '</span></button>'
+            ).join('') + '</div>';
+        }
+      }
+    } catch (e) { }
     Modal.open({
       title: '🧰 工具箱',
       html: '<div class="tools-grid">'
         + TOOL_TABS.map(t =>
           '<button class="tool-cell" data-tab="' + t[0] + '"><span class="tool-icon">' + t[2] + '</span><span>' + t[1] + '</span></button>'
-        ).join('') + '</div>',
+        ).join('') + '</div>'
+        + extra,
       actions: [{ label: '关闭' }]
     });
     document.querySelectorAll('.tool-cell').forEach(b => b.onclick = () => {
@@ -28449,11 +28888,33 @@ function bind(el, next) {
     });
   }
 
+  // 【插件】按 tabId 查插件工具（PluginBus.tools），找不到返回 null
+  function pluginTab(tabId) {
+    try {
+      if (!window.PluginBus) return null;
+      var ts = window.PluginBus.tools();
+      for (var i = 0; i < ts.length; i++) {
+        if (ts[i].id === tabId) {
+          return [tabId, ts[i].title, ts[i].icon || '🧩', {
+            render: function (el) {
+              var out = ts[i].render(window.PluginBus.ctxOf(ts[i].pid) || {});
+              el.innerHTML = '<div class="card"><div class="card-title-row"><span class="card-title">' + (ts[i].icon || '🧩') + ' ' + U.esc(ts[i].title) + '</span>'
+                + '<button class="btn btn-ghost btn-sm" onclick="App.go(\'__tools\')">← 工具</button></div>'
+                + '<div class="muted-sm" style="margin-bottom:8px">插件：' + U.esc(ts[i].pid) + '</div></div>'
+                + '<div class="plugin-tool-body">' + (typeof out === 'string' ? out : '') + '</div>';
+            }
+          }];
+        }
+      }
+    } catch (e) { }
+    return null;
+  }
+
   function render(animate) {
     renderStatusBar();
     renderNav();
     const view = document.getElementById('view');
-    const tab = ALL.find(t => t[0] === current);
+    const tab = ALL.find(t => t[0] === current) || pluginTab(current);
     if (!tab) { current = 'dashboard'; return render(animate); }
     tab[3].render(view);
     // 页面切换过渡：淡入+上移（原地 refresh 不播，避免打卡时闪动）
