@@ -2175,6 +2175,21 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .plugin-tool-body .card { background: var(--surface); }
 .plg-cap { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 
+/* ============================================================
+ * 插件全局面板（pluginbus.js v5）：右下角常驻浮窗
+ * ============================================================ */
+.plg-panel { position: fixed; right: 18px; bottom: 74px; z-index: 1200; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.16);
+  display: flex; flex-direction: column; overflow: hidden; max-width: 92vw; }
+.plg-panel-h { display: flex; align-items: center; gap: 4px; padding: 7px 10px;
+  background: var(--bg-muted); border-bottom: 1px solid var(--line); cursor: move; user-select: none; }
+.plg-panel-t { flex: 1; font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.plg-panel-btn { border: 1px solid var(--line); background: var(--surface); color: var(--text-secondary);
+  border-radius: 6px; width: 22px; height: 22px; line-height: 1; font-size: 13px; cursor: pointer; }
+.plg-panel-btn:hover { border-color: var(--text-primary); color: var(--text-primary); }
+.plg-panel-b { flex: 1; overflow: auto; padding: 10px; font-size: 13px; line-height: 1.7; }
+.plg-panel-folded { height: auto !important; }
+
 </style>
 </head>
 <body>
@@ -8646,9 +8661,47 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       refresh: function () { if (window.App) App.refresh(); },
       current: function () { return window.App ? App.current : ''; },
       openModal: function (opts) { if (window.Modal) Modal.open(opts); },
+      openPanel: function (id) { PluginBus.openPanel(id); },
+      closePanel: function (id) { PluginBus.closePanel(id); },
+      panelsOf: function (pid) { return PluginBus.panels().filter(function (p) { return p.pid === (pid || c.pid); }); },
       confirm: function (title, html, cb, danger) { if (window.Modal) Modal.confirm(title, html, danger ? '删除' : '确定', cb, danger); },
       closeModal: function () { if (window.Modal) Modal.close(); },
-      toast: function (msg, type, ms) { if (window.Toast) Toast.show(msg, type || 'info', ms || 2000); }
+      toast: function (msg, type, ms) { if (window.Toast) Toast.show(msg, type || 'info', ms || 2000); },
+      // ---- v5 文件能力：导出下载 / 选择读取 ----
+      download: function (filename, content, mime) {
+        try {
+          var blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url; a.download = filename || 'plugin-export.txt';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+        } catch (e) { if (window.Toast) Toast.show('下载失败：' + (e.message || e), 'warn', 2500); }
+      },
+      readFile: function (accept) {
+        return new Promise(function (resolve, reject) {
+          var inp = document.createElement('input');
+          inp.type = 'file';
+          if (accept) inp.accept = accept;
+          inp.style.display = 'none';
+          document.body.appendChild(inp);
+          inp.onchange = function () {
+            var f = inp.files && inp.files[0];
+            inp.remove();
+            if (!f) { reject(new Error('未选择文件')); return; }
+            var reader = new FileReader();
+            reader.onload = function () { resolve({ name: f.name, text: String(reader.result || ''), size: f.size }); };
+            reader.onerror = function () { reject(new Error('文件读取失败')); };
+            reader.readAsText(f, 'utf-8');
+          };
+          inp.click();
+        });
+      },
+      // ---- v5 工具页参数路由：跳转到插件工具页并携带参数 ----
+      goTool: function (toolId, params) {
+        PluginBus.goTool(toolId, params);
+      },
+      params: function () { return PluginBus.params(pid); }
     };
     // ---- ctx.ui 组件库（返回统一风格 HTML，供 render 使用） ----
     c.ui = {
@@ -8717,6 +8770,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       skills: Array.isArray(m.skills) ? m.skills.slice(0, 20) : [],
       actions: Array.isArray(m.actions) ? m.actions.slice(0, 20) : [],
       tools: Array.isArray(m.tools) ? m.tools.slice(0, 10) : [],
+      panels: Array.isArray(m.panels) ? m.panels.slice(0, 6) : [],
       hooks: m.hooks && typeof m.hooks === 'object' ? m.hooks : {},
       timers: Array.isArray(m.timers) ? m.timers.slice(0, 10) : [],
       shortcuts: Array.isArray(m.shortcuts) ? m.shortcuts.slice(0, 10) : [],
@@ -8725,6 +8779,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       services: m.services && typeof m.services === 'object' ? m.services : {},
       memory: String(m.memory || '').slice(0, 200),
       init: typeof m.init === 'function' ? m.init : null,
+      onEnable: typeof m.onEnable === 'function' ? m.onEnable : null,
+      onDisable: typeof m.onDisable === 'function' ? m.onDisable : null,
       enabled: true,
       createdAt: U.dkey ? U.dkey() : new Date().toISOString().slice(0, 10)
     };
@@ -8733,6 +8789,11 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (t && typeof t.render !== 'function' && typeof t.mount !== 'function') {
         throw new Error('工具 ' + (t && t.title || '?') + ' 必须有 render 或 mount 函数');
       }
+    });
+    rec.panels.forEach(function (p, i) {
+      if (!p || !p.id || !p.title) throw new Error('面板 #' + (i + 1) + ' 缺 id/title');
+      if (typeof p.render !== 'function') throw new Error('面板 ' + p.title + ' 必须有 render(ctx, box) 函数');
+      if (!/^[a-z0-9][a-z0-9\-_]{1,31}$/i.test(String(p.id))) throw new Error('面板 id 只能含字母数字-_');
     });
     rec.config.forEach(function (cf, i) {
       if (!cf || !cf.key || !cf.label) throw new Error('配置项 #' + (i + 1) + ' 缺 key/label');
@@ -8896,6 +8957,94 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       });
       return out;
     },
+    // 全局面板（插件常驻浮窗）：panels [{id,title,icon,render(ctx,box)}]
+    panels: function () {
+      var out = [];
+      this.list().forEach(function (m) {
+        (m.panels || []).forEach(function (p) {
+          if (p && p.id) out.push({ pid: m.id, id: p.id, title: p.title || p.id, icon: p.icon || '🪟', render: p.render, width: p.width || 300, height: p.height || 360 });
+        });
+      });
+      return out;
+    },
+    // 打开插件面板浮窗（右下角常驻，可拖拽/折叠/关闭；同 id 已开则切换关闭）
+    openPanel: function (panelId) {
+      var existing = document.getElementById('plg-panel-' + panelId);
+      if (existing) { PluginBus.closePanel(panelId); return; }
+      var pl = this.panels().filter(function (p) { return p.id === panelId; })[0];
+      if (!pl) { Toast.show('面板不存在或已禁用', 'warn', 1800); return; }
+      var panel = document.createElement('div');
+      panel.id = 'plg-panel-' + panelId;
+      panel.className = 'plg-panel';
+      panel.style.width = (pl.width || 300) + 'px';
+      panel.style.height = (pl.height || 360) + 'px';
+      panel.innerHTML = '<div class="plg-panel-h"><span class="plg-panel-t">' + (pl.icon || '🪟') + ' ' + U.esc(pl.title) + '</span>'
+        + '<button class="plg-panel-btn" data-pb="fold" title="折叠">—</button>'
+        + '<button class="plg-panel-btn" data-pb="close" title="关闭">×</button></div>'
+        + '<div class="plg-panel-b"></div>';
+      document.body.appendChild(panel);
+      var box = panel.querySelector('.plg-panel-b');
+      // 内容由插件 render(ctx, box) 渲染（可交互、可动态更新）
+      try {
+        var out = pl.render(ctxOf(pl.pid), box);
+        if (typeof out === 'string' && box.innerHTML === '') box.innerHTML = out;
+      } catch (e) { box.innerHTML = '<div class="alert alert-danger">面板渲染失败：' + U.esc(e.message || e) + '</div>'; }
+      // 按钮
+      var foldBtn = panel.querySelector('[data-pb="fold"]');
+      if (foldBtn) foldBtn.onclick = function () {
+        var b = panel.querySelector('.plg-panel-b');
+        var folded = panel.classList.toggle('plg-panel-folded');
+        if (b) b.style.display = folded ? 'none' : '';
+        foldBtn.textContent = folded ? '▢' : '—';
+      };
+      var closeBtn = panel.querySelector('[data-pb="close"]');
+      if (closeBtn) closeBtn.onclick = function () { PluginBus.closePanel(panelId); };
+      // 拖拽（命名监听 + mouseup 自移除，避免累积）
+      var h = panel.querySelector('.plg-panel-h');
+      var drag = null;
+      var onMove = function (e) {
+        if (!drag) return;
+        panel.style.left = Math.max(0, e.clientX - drag.dx) + 'px';
+        panel.style.top = Math.max(0, e.clientY - drag.dy) + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+      };
+      var onUp = function () { drag = null; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+      if (h) h.onmousedown = function (e) {
+        if (e.target && e.target.tagName === 'BUTTON') return;
+        drag = { dx: e.clientX - panel.offsetLeft, dy: e.clientY - panel.offsetTop };
+        e.preventDefault();
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      };
+      log(pl.pid, '面板「' + pl.title + '」已打开');
+    },
+    closePanel: function (panelId) {
+      var p = document.getElementById('plg-panel-' + panelId);
+      if (p && p.parentNode) p.parentNode.removeChild(p);
+    },
+    closeAllPanels: function () {
+      var self = this;
+      this.panels().forEach(function (p) { self.closePanel(p.id); });
+    },
+    openPanelsOf: function (pid) {
+      var self = this;
+      this.panels().filter(function (p) { return p.pid === pid; }).forEach(function (p) { self.openPanel(p.id); });
+    },
+    closePanelsOf: function (pid) {
+      var self = this;
+      this.panels().filter(function (p) { return p.pid === pid; }).forEach(function (p) { self.closePanel(p.id); });
+    },
+    // ---- v5 工具页参数路由：goTool(id, params) 跳转带参；ctx.params() 读取 ----
+    _params: {},
+    goTool: function (toolId, params) {
+      var tool = this.tools().filter(function (t) { return t.id === toolId; })[0];
+      if (!tool) { Toast.show('工具 ' + toolId + ' 不存在或已禁用', 'warn', 2000); return; }
+      this._params[tool.pid] = params || {};
+      if (window.App) App.go(toolId);
+    },
+    params: function (pid) { return PluginBus._params[pid] || {}; },
+    clearParams: function (pid) { delete PluginBus._params[pid]; },
     // 事件触发：hooks 支持 '*' 通配（监听全部事件）
     emit: function (event, payload) {
       var n = 0;
@@ -8908,6 +9057,31 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       return n;
     },
     fire: function (event, payload) { return PluginBus.emit(event, payload); },
+
+    // ---- Store 数据订阅（响应任意数据变化，含云同步 merge/replace）----
+    // 底层复用 U.emit('store:change') CustomEvent；本接口负责按插件登记/清理，卸载自动移除
+    _subs: {},
+    subscribe: function (pid, fn) {
+      if (typeof fn !== 'function') return function () {};
+      (PluginBus._subs[pid] = PluginBus._subs[pid] || []).push(fn);
+      return function () { PluginBus.unsubscribe(pid, fn); };
+    },
+    unsubscribe: function (pid, fn) {
+      var arr = PluginBus._subs[pid];
+      if (!arr) return;
+      var i = arr.indexOf(fn);
+      if (i >= 0) arr.splice(i, 1);
+      if (!arr.length) delete PluginBus._subs[pid];
+    },
+    unsubscribeAll: function (pid) { delete PluginBus._subs[pid]; },
+    _onStoreUpdate: function (detail) {
+      var self = this;
+      Object.keys(self._subs).forEach(function (pid) {
+        self._subs[pid].forEach(function (fn) {
+          try { fn(ctxOf(pid), detail || {}); } catch (e) { log(pid, '订阅回调错误：' + (e.message || e), 'error'); }
+        });
+      });
+    },
 
     // ---- 插件间通信：服务注册/调用 ----
     // 插件 A 注册服务：register({services: {calcScore: function(ctx, ...args){...}}})
@@ -9153,14 +9327,23 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       var r = registry[id];
       if (!r) return;
       if (on) {
-        try { scheduleTimers(r.manifest); if (r.manifest.init) r.manifest.init(ctxOf(id)); } catch (e) { log(id, '启用错误：' + (e.message || e), 'error'); }
+        try {
+          scheduleTimers(r.manifest);
+          if (r.manifest.onEnable) r.manifest.onEnable(ctxOf(id));
+          if (r.manifest.init) r.manifest.init(ctxOf(id));
+        } catch (e) { log(id, '启用错误：' + (e.message || e), 'error'); }
       } else {
         clearTimers(id);
+        PluginBus.unsubscribeAll(id);
+        try { if (r.manifest.onDisable) r.manifest.onDisable(ctxOf(id)); } catch (e) { log(id, '禁用错误：' + (e.message || e), 'error'); }
       }
     },
     remove: function (id) {
       Store.update(function (s) { s.plugins = (s.plugins || []).filter(function (x) { return x.id !== id; }); });
       clearTimers(id);
+      PluginBus.unsubscribeAll(id);
+      try { if (registry[id] && registry[id].manifest.onDisable) registry[id].manifest.onDisable(ctxOf(id)); } catch (e) {}
+      PluginBus.closePanelsOf(id);
       delete registry[id];
     },
     byStore: plugins,
@@ -9205,6 +9388,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   // 全局快捷键监听
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('keydown', function (e) { try { PluginBus.handleKey(e); } catch (err) {} }, true);
+    // Store 变化订阅入口（store.js 已广播 U.emit('store:change')，这里零侵入接入）
+    document.addEventListener('store:change', function (e) { try { PluginBus._onStoreUpdate(e && e.detail); } catch (err) {} });
   }
   if (window.Store && window.U) {
     if (document.readyState === 'loading') {
@@ -29171,10 +29356,12 @@ function bind(el, next) {
     var cards = list.length ? list.map(function (p) {
       var rm = runManifests[p.id] || {};
       var skillN = (rm.skills || []).length, actN = (rm.actions || []).length, toolN = (rm.tools || []).length, hookN = Object.keys(rm.hooks || {}).length;
+      var panelN = (rm.panels || []).length;
       var caps = [];
       if (skillN) caps.push('<span class="tag tag-mod">技能 ' + skillN + '</span>');
       if (actN) caps.push('<span class="tag" style="background:#2f54eb;color:#fff">动作 ' + actN + '</span>');
       if (toolN) caps.push('<span class="tag" style="background:#237804;color:#fff">工具 ' + toolN + '</span>');
+      if (panelN) caps.push('<span class="tag" style="background:#08979c;color:#fff">面板 ' + panelN + '</span>');
       if (hookN) caps.push('<span class="tag" style="background:#722ed1;color:#fff">钩子 ' + hookN + '</span>');
       if ((p.shortcuts || []).length) caps.push('<span class="tag" style="background:#d48806;color:#fff">快捷键 ' + p.shortcuts.length + '</span>');
       var cfgN = (rm.config || []).length;
@@ -29194,9 +29381,11 @@ function bind(el, next) {
         + (p.desc ? '<div class="muted-sm" style="margin-top:4px">' + U.esc(p.desc) + '</div>' : '')
         + skillList
         + '<div class="pr-actions">'
+        + (panelN ? '<button class="btn btn-sm btn-ghost plg-openpanel" data-id="' + p.id + '" title="打开该插件的全部面板">🪟 面板</button>' : '')
         + '<button class="btn btn-sm ' + (p.enabled ? 'btn-ghost' : 'btn-primary') + ' plg-toggle" data-id="' + p.id + '">' + (p.enabled ? '⏸ 禁用' : '▶ 启用') + '</button>'
         + (cfgN ? '<button class="btn btn-sm btn-ghost plg-config" data-id="' + p.id + '">⚙ 配置</button>' : '')
         + '<button class="btn btn-sm btn-ghost plg-log" data-id="' + p.id + '">🕵 日志</button>'
+        + '<button class="btn btn-sm btn-ghost plg-edit" data-id="' + p.id + '" title="编辑源码，保存即生效">✏ 编辑</button>'
         + '<button class="btn btn-sm btn-ghost plg-export" data-id="' + p.id + '">📤 导出</button>'
         + '<button class="btn btn-sm btn-ghost plg-del" data-id="' + p.id + '" style="color:var(--danger)">🗑 卸载</button>'
         + '</div></div>';
@@ -29330,6 +29519,14 @@ function bind(el, next) {
         Toast.show(p && p.enabled ? '已禁用' : '已启用', 'info', 1200);
         App.refresh();
       };
+    });
+    // 编辑源码（改即生效：importText 覆盖重注册）
+    el.querySelectorAll('.plg-edit').forEach(function (b) {
+      b.onclick = function () { openEditor(b.getAttribute('data-id')); };
+    });
+    // 打开面板（该插件全部面板）
+    el.querySelectorAll('.plg-openpanel').forEach(function (b) {
+      b.onclick = function () { PluginBus.openPanelsOf(b.getAttribute('data-id')); };
     });
     el.querySelectorAll('.plg-export').forEach(function (b) {
       b.onclick = function () {
@@ -29638,6 +29835,41 @@ function bind(el, next) {
     var entries = (Store.get().pluginLog || []).filter(function (l) { return l.pid === id; });
     Modal.open({ title: '🕵 日志：' + id, wide: true, dismissable: true, html: logHtml(entries, '该插件暂无运行日志'), actions: [{ label: '关闭' }] });
   }
+
+  // ---------- 源码编辑器（改即生效） ----------
+  function openEditor(id) {
+    var p = PluginBus.byStore().find(function (x) { return x.id === id; });
+    if (!p) { Toast.warn('插件不存在'); return; }
+    var src = p.source || '';
+    var isPack = !!p.isSkillPack;
+    var msgEl = 'ed-msg';
+    Modal.open({
+      title: '✏ 编辑插件：' + U.esc(p.name) + (isPack ? '（技能包，编辑后将转为普通插件）' : ''),
+      wide: true,
+      html: '<div class="form-col">'
+        + '<div class="muted-sm">直接改源码，保存即重注册生效。改坏了点「↩ 恢复」回到上一版。</div>'
+        + '<textarea id="plg-ed-code" class="input" rows="16" style="font-family:var(--font-mono);font-size:12px;white-space:pre;overflow:auto">' + U.esc(src) + '</textarea>'
+        + '<div id="' + msgEl + '"></div></div>',
+      actions: [
+        { label: '关闭' },
+        { label: '↩ 恢复', kind: 'btn-ghost', onClick: function () {
+          var ta = document.getElementById('plg-ed-code');
+          if (ta) ta.value = src;
+          document.getElementById(msgEl).innerHTML = '<div class="alert alert-info">已恢复为保存前的源码</div>';
+        } },
+        { label: '💾 保存生效', kind: 'btn-primary', onClick: function (close) {
+          var code = document.getElementById('plg-ed-code').value;
+          var msg = document.getElementById(msgEl);
+          if (!code || !code.trim()) { msg.innerHTML = '<div class="alert alert-danger">源码不能为空</div>'; return; }
+          try {
+            PluginBus.importText(code);
+            msg.innerHTML = '<div class="alert alert-ok">✓ 已保存并重新注册。此插件能力已热更新。</div>';
+            setTimeout(close, 600);
+          } catch (e) { msg.innerHTML = '<div class="alert alert-danger">语法/校验失败：' + U.esc(e.message || String(e)) + '</div>'; }
+        } }
+      ]
+    });
+  }
   function openLogAll() {
     var entries = (Store.get().pluginLog || []).slice(0, 60);
     Modal.open({ title: '🕵 全部插件日志（' + entries.length + '）', wide: true, dismissable: true, html: logHtml(entries, '暂无日志'), actions: [{ label: '关闭' }] });
@@ -29664,6 +29896,12 @@ function bind(el, next) {
       ['ctx.ai.chat(sys,usr)/json(sys,usr)/stream(sys,usr,onChunk)', 'AI 调用封装'],
       ['ctx.log(msg, level)', '写插件日志（插件中心可查）'],
       ['ctx.call(pid, svc, ...args)', '跨插件调用服务（等价 PluginBus.call）'],
+      ['panels: [{id,title,icon,render(ctx,box),width,height}]', '常驻浮窗面板（右下角可拖拽/折叠）。ctx.api.openPanel(id) 打开；插件中心卡片「🪟 面板」一键开'],
+      ['PluginBus.subscribe(pid, fn)', '订阅 Store 数据变化（含云同步 merge），fn(ctx,detail) 实时触发；返回退订函数，插件卸载自动清理'],
+      ['ctx.api.download(name, content, mime)', '导出文件（Blob+a.download）；ctx.api.readFile(accept) 返回 Promise<{name,text}> 选文件读取'],
+      ['ctx.api.goTool(toolId, params) / ctx.params()', '工具页带参跳转：A 工具跳到 B 工具并传参数，B 里 ctx.params() 读取'],
+      ['onEnable(ctx)/onDisable(ctx)', '生命周期钩子：启用/禁用/卸载时触发（可做订阅登记与清理）'],
+      ['mount(el, ctx) 返回 destroy 函数', '工具页挂载后可返回清理函数，离开页面自动调用（清计时器/事件）'],
       ['PluginBus.emit(event, payload)', '宿主触发事件（sprint 交卷后 examGraded 等已内置）']
     ];
     Modal.open({
@@ -29828,6 +30066,57 @@ function bind(el, next) {
         "      }).join('');",
         "      return '<div class=\'card\'><div class=\'card-title-sm\'>🥁 押题卷成绩走势（' + hist.length + ' 卷）</div>' + rows + '</div>';",
         "    } }]",
+        "});"
+      ])
+    },
+    {
+      id: 'daily-boost', name: '今日动力面板', version: '1.0', icon: '🚀',
+      desc: '右下角常驻面板：实时倒计时/今日任务/心情，数据一变自动刷新；一键导出今日快照（演示 panels + 订阅 + 文件能力）。',
+      tags: ['面板', '订阅', '文件'],
+      code: mkCode([
+        "PluginBus.register({",
+        "  id: 'daily-boost', name: '今日动力面板', version: '1.0', author: '内置',",
+        "  desc: '常驻面板：实时进度 + 数据变化自动刷新 + 导出快照',",
+        "  panels: [{ id: 'daily-boost', title: '今日动力', icon: '🚀', width: 320, height: 380,",
+        "    render: function (ctx, box) {",
+        "      var s = ctx.Store.get();",
+        "      var left = ctx.U.daysTo ? ctx.U.daysTo(s.settings.examDate) : 0;",
+        "      var st = ctx.Store.todayTaskStats ? ctx.Store.todayTaskStats() : {};",
+        "      var done = 0, total = 0; Object.keys(st).forEach(function (k) { done += st[k][0]; total += st[k][1]; });",
+        "      var pct = total ? Math.round(done / total * 100) : 0;",
+        "      var mood = (s.mental || []).filter(function (m) { return m.date === ctx.dkey(); })[0];",
+        "      var moodTxt = mood && mood.mood != null ? (mood.mood + '/10 ' + (mood.note || '')) : '今天还没记录心情';",
+        "      var moti = ['稳住，我们能赢', '今天多背一页，考场少慌一秒', '冲刺阶段，慢就是快', '一题一题来，分数一分一分攒'][Math.floor(Date.now() / 86400000) % 4];",
+        "      box.innerHTML = '';",
+        "      box.innerHTML = '<div style=\\'text-align:center\\'><div style=\\'font-size:44px;font-weight:600;color:var(--danger)\\'>' + left + '</div>'",
+        "        + '<div class=\\'muted-sm\\'>距考研还有 ' + left + ' 天</div>'",
+        "        + '<div style=\\'margin:10px 0 4px\\'>今日任务 <b>' + done + '/' + total + '</b>（' + pct + '%）</div>'",
+        "        + '<div class=\\'pbar\\' style=\\'height:8px;max-width:240px;margin:0 auto\\'><div class=\\'pbar-fill\\' style=\\'width:' + pct + '%;background:var(--ok)\\'></div></div>'",
+        "        + '<div class=\\'muted-sm\\' style=\\'margin:8px 0\\'>😊 ' + ctx.U.esc(moodTxt) + '</div>'",
+        "        + '<div style=\\'font-size:12.5px;color:var(--text-secondary);margin-bottom:10px\\'>💬 ' + moti + '</div>'",
+        "        + '<button class=\\'btn btn-sm btn-primary\\' data-g=\\'dashboard\\'>去作战台</button> '",
+        "        + '<button class=\\'btn btn-sm btn-ghost\\' data-g=\\'focus\\'>专注</button> '",
+        "        + '<button class=\\'btn btn-sm btn-ghost\\' data-dl=\\'1\\'>导出快照</button></div>';",
+        "      var go = box.querySelector('[data-g=dashboard]');",
+        "      if (go) go.onclick = function () { ctx.api.go('dashboard'); };",
+        "      var go2 = box.querySelector('[data-g=focus]');",
+        "      if (go2) go2.onclick = function () { ctx.api.go('focus'); };",
+        "      var dl = box.querySelector('[data-dl]');",
+        "      if (dl) dl.onclick = function () {",
+        "        var snap = { at: new Date().toISOString(), left: left, task: { done: done, total: total }, mood: mood || null };",
+        "        ctx.api.download('今日快照_' + ctx.dkey() + '.json', JSON.stringify(snap, null, 2), 'application/json');",
+        "        ctx.log('已导出今日数据快照');",
+        "      };",
+        "    } }],",
+        "  init: function (ctx) {",
+        "    var panelDef = ctx.PluginBus.panels().filter(function (p) { return p.pid === ctx.pid; })[0];",
+        "    ctx.unsub = ctx.PluginBus.subscribe(ctx.pid, function () {",
+        "      var p = document.getElementById('plg-panel-daily-boost');",
+        "      if (p && panelDef) { var box = p.querySelector('.plg-panel-b'); if (box) { try { panelDef.render(ctx, box); } catch (e) {} } }",
+        "    });",
+        "    ctx.log('动力面板已就绪（数据变化自动刷新）');",
+        "  },",
+        "  onDisable: function (ctx) { if (ctx.unsub) ctx.unsub(); ctx.log('动力面板已停止'); }",
         "});"
       ])
     }
@@ -30031,6 +30320,14 @@ function bind(el, next) {
   }
 
   // 【插件】按 tabId 查插件工具（PluginBus.tools），找不到返回 null
+  // 插件工具页 destroy 管理：mount 返回的清理函数在离开页面时调用
+  const pluginDestroyers = [];
+  function callPluginDestroyers() {
+    while (pluginDestroyers.length) {
+      const d = pluginDestroyers.pop();
+      try { if (typeof d === 'function') d(); } catch (e) { }
+    }
+  }
   function pluginTab(tabId) {
     try {
       if (!window.PluginBus) return null;
@@ -30045,10 +30342,15 @@ function bind(el, next) {
                 + '<button class="btn btn-ghost btn-sm" onclick="App.go(\'__tools\')">← 工具</button></div>'
                 + '<div class="muted-sm" style="margin-bottom:8px">插件：' + U.esc(tool.pid) + '</div></div>'
                 + '<div class="plugin-tool-body">' + (typeof tool.render === 'function' ? (tool.render(ctx) || '') : '') + '</div>';
-              // mount 模式：完整挂载，可交互（事件绑定/动态更新）
+              // mount 模式：完整挂载，可交互（事件绑定/动态更新）；返回 destroy 离开时清理
               if (typeof tool.mount === 'function') {
                 var host = el.querySelector('.plugin-tool-body');
-                if (host) { try { tool.mount(host, ctx); } catch (e) { host.innerHTML = '<div class="alert alert-danger">插件渲染失败：' + U.esc(e.message || e) + '</div>'; } }
+                if (host) {
+                  try {
+                    var ret = tool.mount(host, ctx);
+                    if (typeof ret === 'function') pluginDestroyers.push(ret);
+                  } catch (e) { host.innerHTML = '<div class="alert alert-danger">插件渲染失败：' + U.esc(e.message || e) + '</div>'; }
+                }
               }
             }
           }];
@@ -30098,6 +30400,8 @@ function bind(el, next) {
       if (view && current) {
         tabScrollCache[current] = { v: view.scrollTop, w: window.scrollY || window.pageYOffset || 0 };
       }
+      // 离开插件工具页时调用 mount 返回的 destroy 清理函数
+      callPluginDestroyers();
       current = tab; render(true);
       // 恢复目标页滚动位置（首次进入仍回顶部）
       var cached = tabScrollCache[tab];
