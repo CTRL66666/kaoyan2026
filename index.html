@@ -26833,6 +26833,7 @@ function bind(el, next) {
       + '定时提醒 [[ACTION:{"type":"addReminder","text":"提醒内容","hours":2}]]（hours 几小时后，或用 "time":"20:00" 今天/明天该时刻）。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
       + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
+      + '\n【服从性·最高优先级】用户说“用XX/给我/帮我/去/直接”等明确指令时＝命令：立即照做，不要顶嘴、不要反问“你确定吗/要不要我”、不要先长篇解释理由；最多用一句简短确认（如“好，用XX”）然后直接执行或输出结果。'
       + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。'
       + (function () {
         // 【插件】注入插件注册的 AI 技能触发词清单：教练识别后调插件动作或直接引用技能上下文
@@ -26846,17 +26847,50 @@ function bind(el, next) {
               + mem.map(function (m) { return '· ' + m.text.slice(0, 180); }).join('\n');
           }
           if (sk.length) {
-            // 轻量注入：技能名 + 摘要 + 适用时机（教练按用户请求自主判断是否适用，不硬匹配触发词）
-            out += '\n【已安装 AI 技能包（用户请求符合下面任一技能的「适用场景」时，按该技能的方法作答；可先问一句"要我用 XX 技能吗"再执行）】\n'
+            // 技能调用硬协议：点名=命令（禁止反问），匹配=自主采用，执行=简短确认
+            out += '\n【AI 技能包调用协议（用户装了以下技能，必须遵守）】\n'
+              + '① 用户点名技能（说「用XX」「按XX来」「XX一下」，或输入 /XX）＝ 明确命令：立即执行该技能，用它的方法完成请求，禁止反问"要我用吗"、禁止推脱、禁止先讲道理。\n'
+              + '② 用户请求符合某技能「适用场景」但未点名：直接按该技能的方法作答（你的姿态就是该技能的专家），无需询问。\n'
+              + '③ 执行技能时语气：干脆、简短（如"好，用XX技能"+ 直接输出结果），不要长篇解释过程，不要复述技能规则。\n'
+              + '技能清单（「名」：摘要 · 适用场景）：\n'
               + sk.map(function (s) {
                 var head = '·「' + s.trigger + '」' + (s.summary && s.summary !== s.trigger ? '：' + s.summary : '');
-                if (s.when) head += '（适用：' + s.when.slice(0, 80) + (s.when.length > 80 ? '…' : '') + '）';
-                return head.slice(0, 200);
+                if (s.when) head += ' · ' + s.when.slice(0, 80) + (s.when.length > 80 ? '…' : '');
+                return head.slice(0, 240);
               }).join('\n');
           }
           return out;
         } catch (e) { return ''; }
       })();
+  }
+
+  // ---------- 技能匹配（运行时加载用） ----------
+  // ① 点名：用户输入含技能触发词 → 命中；② 场景匹配：用户输入命中技能「适用场景/摘要」的中文双字 → 命中
+  function matchSkill(userText) {
+    try {
+      if (!userText || !window.PluginBus) return null;
+      var sk = window.PluginBus.skills();
+      if (!sk.length) return null;
+      var txt = String(userText);
+      // ① 点名优先：含「技能名」或「/技能名」
+      for (var i = 0; i < sk.length; i++) {
+        if (txt.indexOf(sk[i].trigger) >= 0) return sk[i];
+      }
+      // ② 场景匹配：when/summary 的中文双字（bigram）与用户输入相交即采用
+      var stop = { 用户: 1, 需要: 1, 适用: 1, 场景: 1, 时候: 1, 可以: 1, 进行: 1, 对于: 1, 如果: 1, 或者: 1, 以及: 1, 使用: 1 };
+      for (var j = 0; j < sk.length; j++) {
+        var w = ((sk[j].when || '') + ' ' + (sk[j].summary || ''));
+        var grams = [];
+        for (var k = 0; k + 1 < w.length; k++) {
+          var g = w.slice(k, k + 2);
+          if (/^[\u4e00-\u9fa5]{2}$/.test(g) && !stop[g] && grams.indexOf(g) < 0) grams.push(g);
+        }
+        for (var m = 0; m < grams.length; m++) {
+          if (txt.indexOf(grams[m]) >= 0) return sk[j];
+        }
+      }
+      return null;
+    } catch (e) { return null; }
   }
 
   // ---------- 历史持久化（保留最近7天，每天≤60条） ----------
@@ -27583,7 +27617,13 @@ function bind(el, next) {
     var convoText = sysMsgs.slice(0, -1).map(function (m) {
       return (m.role === 'user' ? '考生' : '教练') + '：' + m.content;
     }).join('\n');
-    var userPayload = (convoText ? '【近期对话】\n' + convoText + '\n\n' : '') + '考生：' + (img ? '（发来一张题目图片）' : '') + text;
+    // 【技能运行时加载】用户点名（含「XX技能」/「/XX」/技能名）或请求匹配技能适用场景时，
+    // 把该技能完整指令（SKILL.md 全文 + 参考）注入当次请求——教练真正"按技能方法"执行，而非泛泛而谈
+    var skillHit = matchSkill(text);
+    var skillBlock = skillHit
+      ? '【技能指令·你必须按此方法处理当前请求】\n' + (skillHit.prompt || '') + '\n\n'
+      : '';
+    var userPayload = (convoText ? '【近期对话】\n' + convoText + '\n\n' : '') + skillBlock + '考生：' + (img ? '（发来一张题目图片）' : '') + text;
 
     AI.chatStream(systemPrompt(), userPayload, function (full) {
       bubble.innerHTML = renderContent(full || '') + '<span class="ai-cursor"></span>';
@@ -27654,6 +27694,7 @@ function bind(el, next) {
     superviseCheck: superviseCheck,
     parseActions: parseActions,
     actionLabel: actionLabel,
+    matchSkill: matchSkill,
     actionTypes: function () { return Object.keys(ACTIONS); },
     get isOpen() { return isOpen; }
   };
