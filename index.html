@@ -2197,6 +2197,10 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .cp-dl { border: none; background: none; color: var(--text-muted); font-size: 11px; cursor: pointer; padding: 2px 4px; }
 .cp-dl:hover { color: var(--text-primary); text-decoration: underline; }
 
+/* 插件解耦装饰：页面挂载槽（pluginbus.js v6） */
+.pg-slot { display: block; }
+.pg-slot:empty { display: none; }
+
 </style>
 </head>
 <body>
@@ -8795,6 +8799,9 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       tools: Array.isArray(m.tools) ? m.tools.slice(0, 10) : [],
       panels: Array.isArray(m.panels) ? m.panels.slice(0, 6) : [],
       hooks: m.hooks && typeof m.hooks === 'object' ? m.hooks : {},
+      // v6 解耦装饰：css 全局样式注入（改外观）；enhancers 页面渲染后注入（改布局/能力）
+      css: String(m.css || '').slice(0, 20000),
+      enhancers: Array.isArray(m.enhancers) ? m.enhancers.slice(0, 12) : [],
       timers: Array.isArray(m.timers) ? m.timers.slice(0, 10) : [],
       shortcuts: Array.isArray(m.shortcuts) ? m.shortcuts.slice(0, 10) : [],
       config: Array.isArray(m.config) ? m.config.slice(0, 12) : [],
@@ -8899,8 +8906,52 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       try {
         scheduleTimers(rec);
         if (rec.init) rec.init(ctxOf(rec.id));
+        if (rec.css) PluginBus._injectCss(rec.id, rec.css);   // 装饰：样式注入（注册即生效）
       } catch (e) { log(rec.id, '初始化错误：' + (e.message || e), 'error'); }
       return rec;
+    },
+
+    // ---- v6 解耦装饰：CSS 注入（改外观）/ 页面渲染后注入（改布局·能力） ----
+    _cssTags: {},
+    _injectCss: function (pid, css) {
+      if (typeof document === 'undefined' || !css) return;
+      PluginBus._removeCss(pid);
+      var st = document.createElement('style');
+      st.id = 'plg-css-' + pid;
+      st.textContent = css;
+      document.head.appendChild(st);
+      PluginBus._cssTags[pid] = st;
+    },
+    _removeCss: function (pid) {
+      var st = PluginBus._cssTags[pid] || document.getElementById('plg-css-' + pid);
+      if (st && st.parentNode) st.parentNode.removeChild(st);
+      delete PluginBus._cssTags[pid];
+    },
+    // 宿主在每页渲染完成后调用：enhancers [{tab:'dashboard|all', slot:'top|bottom', html:str 或 fn(ctx,el), selector?:'css 选择器'}]
+    _onPageRendered: function (el, tab) {
+      if (!el) return;
+      var self = this;
+      this.list().forEach(function (m) {
+        (m.enhancers || []).forEach(function (en) {
+          if (!en || !en.html) return;
+          if (en.tab && en.tab !== 'all' && en.tab !== tab) return;
+          try {
+            var html = typeof en.html === 'function' ? (en.html(ctxOf(m.id), el) || '') : String(en.html);
+            if (!html) return;
+            if (en.selector) {
+              // 精确选择器注入（beforeend）：作用于模块内部已知容器
+              var target = el.querySelector(en.selector);
+              if (target) target.insertAdjacentHTML('beforeend', html);
+            } else {
+              // 通用挂载槽注入：top/bottom（App.render 已为每页预置 data-pg-slot）
+              var slot = en.slot === 'top'
+                ? el.querySelector('div[data-pg-slot="top"]')
+                : el.querySelector('div[data-pg-slot="bottom"]');
+              if (slot) slot.insertAdjacentHTML('beforeend', html);
+            }
+          } catch (e) { log(m.id, '页面装饰错误：' + (e.message || e), 'error'); }
+        });
+      });
     },
 
     list: function () {
@@ -9352,12 +9403,14 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (on) {
         try {
           scheduleTimers(r.manifest);
+          if (r.manifest.css) PluginBus._injectCss(id, r.manifest.css);   // 装饰恢复
           if (r.manifest.onEnable) r.manifest.onEnable(ctxOf(id));
           if (r.manifest.init) r.manifest.init(ctxOf(id));
         } catch (e) { log(id, '启用错误：' + (e.message || e), 'error'); }
       } else {
         clearTimers(id);
         PluginBus.unsubscribeAll(id);
+        PluginBus._removeCss(id);                                          // 装饰移除
         try { if (r.manifest.onDisable) r.manifest.onDisable(ctxOf(id)); } catch (e) { log(id, '禁用错误：' + (e.message || e), 'error'); }
       }
     },
@@ -9365,6 +9418,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       Store.update(function (s) { s.plugins = (s.plugins || []).filter(function (x) { return x.id !== id; }); });
       clearTimers(id);
       PluginBus.unsubscribeAll(id);
+      PluginBus._removeCss(id);
       try { if (registry[id] && registry[id].manifest.onDisable) registry[id].manifest.onDisable(ctxOf(id)); } catch (e) {}
       PluginBus.closePanelsOf(id);
       delete registry[id];
@@ -29580,6 +29634,8 @@ function bind(el, next) {
       if (actN) caps.push('<span class="tag" style="background:#2f54eb;color:#fff">动作 ' + actN + '</span>');
       if (toolN) caps.push('<span class="tag" style="background:#237804;color:#fff">工具 ' + toolN + '</span>');
       if (panelN) caps.push('<span class="tag" style="background:#08979c;color:#fff">面板 ' + panelN + '</span>');
+      if ((rm.enhancers || []).length) caps.push('<span class="tag" style="background:#d46b08;color:#fff">装饰 ' + rm.enhancers.length + '</span>');
+      if (rm.css) caps.push('<span class="tag" style="background:#a8071a;color:#fff">样式</span>');
       if (hookN) caps.push('<span class="tag" style="background:#722ed1;color:#fff">钩子 ' + hookN + '</span>');
       if ((p.shortcuts || []).length) caps.push('<span class="tag" style="background:#d48806;color:#fff">快捷键 ' + p.shortcuts.length + '</span>');
       var cfgN = (rm.config || []).length;
@@ -30120,6 +30176,8 @@ function bind(el, next) {
       ['ctx.api.goTool(toolId, params) / ctx.params()', '工具页带参跳转：A 工具跳到 B 工具并传参数，B 里 ctx.params() 读取'],
       ['onEnable(ctx)/onDisable(ctx)', '生命周期钩子：启用/禁用/卸载时触发（可做订阅登记与清理）'],
       ['mount(el, ctx) 返回 destroy 函数', '工具页挂载后可返回清理函数，离开页面自动调用（清计时器/事件）'],
+      ['css: \'全局样式\'', '解耦装饰：样式注入 <style>（改外观，如圆角/主题色/隐藏元素）；启用注入、禁用/卸载自动移除，不动核心代码'],
+      ['enhancers: [{tab,slot,html}]', '解耦装饰：页面渲染后向挂载槽注入内容（改布局/能力）——tab=页面id 或 all，slot=top/bottom，html=字符串或 fn(ctx,el)；selector 可选（精确注入模块内已知容器）'],
       ['PluginBus.emit(event, payload)', '宿主触发事件（sprint 交卷后 examGraded 等已内置）']
     ];
     Modal.open({
@@ -30283,6 +30341,34 @@ function bind(el, next) {
         "          + '<span>' + (i + 1) + '. ' + h.at + '</span><span><b>' + h.pct + '%</b> (' + h.score + '/' + h.total + ')</span></div>';",
         "      }).join('');",
         "      return '<div class=\'card\'><div class=\'card-title-sm\'>🥁 押题卷成绩走势（' + hist.length + ' 卷）</div>' + rows + '</div>';",
+        "    } }]",
+        "});"
+      ])
+    },
+    {
+      id: 'page-decor', name: '作战台装饰卡', version: '1.0', icon: '🎨',
+      desc: '解耦装饰演示：往作战台顶部注入一张「今日状态卡」+ 全局微调按钮圆角样式（css）。卸载即恢复原状。',
+      tags: ['装饰', '样式'],
+      code: mkCode([
+        "PluginBus.register({",
+        "  id: 'page-decor', name: '作战台装饰卡', version: '1.0', author: '内置',",
+        "  desc: '往作战台顶部注入今日状态卡 + 全局按钮圆角微调（卸载即恢复）',",
+        "  css: '.btn { border-radius: 6px !important; } .card { border-radius: 10px !important; } .pg-slot .pg-decor-card { margin-bottom: 10px; }',",
+        "  enhancers: [{",
+        "    tab: 'dashboard', slot: 'top',",
+        "    html: function (ctx) {",
+        "      var s = ctx.Store.get();",
+        "      var st = ctx.Store.todayTaskStats ? ctx.Store.todayTaskStats() : {};",
+        "      var done = 0, total = 0; Object.keys(st).forEach(function (k) { done += st[k][0]; total += st[k][1]; });",
+        "      var left = ctx.U.daysTo ? ctx.U.daysTo(s.settings.examDate) : 0;",
+        "      var pct = total ? Math.round(done / total * 100) : 0;",
+        "      return '<div class=\\'card pg-decor-card\\' style=\\'border-left:3px solid var(--blue);background:var(--bg-muted)\\'>'",
+        "        + '<div class=\\'card-title-sm\\'>🎨 装饰卡（插件注入）</div>'",
+        "        + '<div style=\\'display:flex;gap:14px;flex-wrap:wrap\\'>'",
+        "        + '<span>距考研 <b style=\\'color:var(--danger)\\'>' + left + '</b> 天</span>'",
+        "        + '<span>今日任务 <b>' + done + '/' + total + '</b>（' + pct + '%）</span>'",
+        "        + '</div>'",
+        "        + '<div class=\\'muted-sm\\' style=\\'font-size:11.5px;margin-top:4px\\'>本卡片由「作战台装饰卡」插件注入——卸载后自动消失，不影响任何内置模块。</div></div>';",
         "    } }]",
         "});"
       ])
@@ -30585,6 +30671,16 @@ function bind(el, next) {
     const tab = ALL.find(t => t[0] === current) || pluginTab(current);
     if (!tab) { current = 'dashboard'; return render(animate); }
     tab[3].render(view);
+    // 【插件装饰】页面挂载槽（top/bottom）+ 渲染完成通知——插件可注入布局/外观/能力，卸载即恢复
+    if (window.PluginBus) {
+      if (!view.querySelector('div[data-pg-slot="top"]')) {
+        view.insertAdjacentHTML('afterbegin', '<div data-pg-slot="top" class="pg-slot"></div>');
+      }
+      if (!view.querySelector('div[data-pg-slot="bottom"]')) {
+        view.insertAdjacentHTML('beforeend', '<div data-pg-slot="bottom" class="pg-slot"></div>');
+      }
+      try { window.PluginBus._onPageRendered(view, current); } catch (e) { }
+    }
     // 页面切换过渡：淡入+上移（原地 refresh 不播，避免打卡时闪动）
     if (animate) {
       view.classList.remove('view-enter');
