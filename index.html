@@ -8439,6 +8439,170 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 })();
 
 
+/* ===== js/core/zipkit.js ===== */
+/* ============================================================
+ * zipkit.js — 标准 AI skill 技能包解析（zip + SKILL.md）
+ * 目标：让用户拖入一个标准 skill 技能包 zip（SKILL.md + references/ + scripts/ + assets/），
+ *      解析成插件系统可注册的技能。
+ * 能力：
+ *   1. parseZip(ArrayBuffer) → {entries: {name, data:Uint8Array}}  零依赖 ZIP 解析
+ *      （EOCD → 中央目录 → local header；store=直接拷贝，deflate=浏览器原生 DecompressionStream）
+ *   2. parseSkillMd(text) → {name, description, whenToUse, body, refs}  SKILL.md frontmatter 解析
+ *   3. normalizeSkillPack(entries) → 标准技能包结构（SKILL.md 必须，references 收集）
+ * 兼容：浏览器（DecompressionStream 原生）+ Node（Node18+ 也有）
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  // ---------- 二进制工具 ----------
+  function readU16(buf, off) { return (buf[off]) | (buf[off + 1] << 8); }
+  function readU32(buf, off) { return (buf[off]) | (buf[off + 1] << 8) | (buf[off + 2] << 16) | ((buf[off + 3] << 24) >>> 0); }
+
+  // deflate-raw 解压（浏览器/Node 原生流式）
+  async function inflateRaw(data) {
+    var ds = new DecompressionStream('deflate-raw');
+    var stream = new Blob([data]).stream().pipeThrough(ds);
+    var buf = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  // 从 ArrayBuffer 解析 zip（只读，不支持加密/压缩分卷；store + deflate 均可）
+  async function parseZip(ab) {
+    var u8 = new Uint8Array(ab);
+    var len = u8.length;
+    if (len < 22) throw new Error('不是有效的 zip 文件（太小）');
+    // 找 EOCD（0x06054b50）：从尾部 22+65535 字节内倒查
+    var eocd = -1;
+    var max = Math.max(0, len - 22 - 65535);
+    for (var i = len - 22; i >= max; i--) {
+      if (readU32(u8, i) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('不是有效的 zip 文件（未找到目录尾）');
+    var entryCount = readU16(u8, eocd + 10);
+    var cdSize = readU32(u8, eocd + 12);
+    var cdOff = readU32(u8, eocd + 16);
+    if (cdOff > len) throw new Error('zip 目录偏移越界');
+
+    // 遍历中央目录条目
+    var entries = [];
+    var p = cdOff;
+    for (var n = 0; n < entryCount && p + 46 <= len; n++) {
+      if (readU32(u8, p) !== 0x02014b50) break; // 中央目录条目签名
+      var flags = readU16(u8, p + 8);
+      var method = readU16(u8, p + 10);
+      var compSize = readU32(u8, p + 20);
+      var uncompSize = readU32(u8, p + 24);
+      var nameLen = readU16(u8, p + 28);
+      var extraLen = readU16(u8, p + 30);
+      var commentLen = readU16(u8, p + 32);
+      var localOff = readU32(u8, p + 42);
+      var name = '';
+      for (var j = 0; j < nameLen; j++) name += String.fromCharCode(u8[p + 46 + j]);
+      // UTF-8 位（bit 11）或按 UTF-8 尝试解码
+      if (flags & 0x800) {
+        try { name = new TextDecoder('utf-8').decode(u8.subarray(p + 46, p + 46 + nameLen)); } catch (e) {}
+      } else {
+        try {
+          var dec = new TextDecoder('utf-8');
+          var s = dec.decode(u8.subarray(p + 46, p + 46 + nameLen));
+          if (!/[\uFFFD]/.test(s)) name = s;
+        } catch (e) {}
+      }
+      entries.push({ name: name, method: method, compSize: compSize, uncompSize: uncompSize, flags: flags, localOff: localOff });
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+    if (!entries.length) throw new Error('zip 内没有文件条目');
+
+    // 逐个读 local header + 数据
+    var out = [];
+    for (var k = 0; k < entries.length; k++) {
+      var en = entries[k];
+      if (en.name.slice(-1) === '/' || en.name.slice(-1) === '\\') continue; // 目录项跳过
+      var lp = en.localOff;
+      if (lp + 30 > len || readU32(u8, lp) !== 0x04034b50) continue; // local header 签名
+      var lnLen = readU16(u8, lp + 26);
+      var leLen = readU16(u8, lp + 28);
+      var dataStart = lp + 30 + lnLen + leLen;
+      if (dataStart + en.compSize > len) continue;
+      var raw = u8.subarray(dataStart, dataStart + en.compSize);
+      var data;
+      if (en.method === 0) {
+        data = raw; // store：直接拷贝
+      } else if (en.method === 8) {
+        try { data = await inflateRaw(raw); } catch (e) { continue; } // deflate：解压
+      } else {
+        continue; // 其他压缩方法不支持
+      }
+      out.push({ name: en.name, data: data });
+    }
+    return out;
+  }
+
+  // SKILL.md frontmatter 解析（宽松 YAML 子集）
+  // 支持：---\nname: xxx\ndescription: xxx\nwhen_to_use: xxx\n---\n正文
+  function parseSkillMd(text) {
+    if (!text || typeof text !== 'string') return null;
+    var s = text.replace(/^\uFEFF/, '');
+    var meta = { name: '', description: '', whenToUse: '', body: s };
+    var m = s.match(/^\s*---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
+    if (m) {
+      var fm = m[1];
+      // 宽松解析 key: value 行（支持 : 后空格、引号包裹）
+      var lineRe = /^\s*([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(.*)$/;
+      fm.split(/\r?\n/).forEach(function (line) {
+        var lm = line.match(lineRe);
+        if (!lm) return;
+        var key = lm[1].toLowerCase().replace(/-/g, '');
+        var val = lm[2].trim().replace(/^["']|["']$/g, '');
+        if (!val) return;
+        if (key === 'name' && !meta.name) meta.name = val;
+        else if (key === 'description' && !meta.description) meta.description = val;
+        else if (key === 'whentouse' || key === 'when' || key === 'when_to_use') { if (!meta.whenToUse) meta.whenToUse = val; }
+        else if (key === 'summary' && !meta.description) meta.description = val;
+      });
+      meta.body = s.slice(m[0].length).trim();
+    }
+    return meta;
+  }
+
+  // 技能包规范化：entries（parseZip 输出）→ {id,name,version,desc,skillMd,refs}
+  // SKILL.md 必须在根目录；references/ 下的 .md 收集为 refs（供技能执行时引用）
+  function normalizeSkillPack(entries) {
+    var skillMd = null, refs = [], files = [];
+    (entries || []).forEach(function (en) {
+      var n = en.name.replace(/\\/g, '/');
+      if (/^SKILL\.md$/i.test(n)) { skillMd = parseSkillMd(new TextDecoder('utf-8').decode(en.data)); return; }
+      if (/^references\//i.test(n) && /\.md$/i.test(n)) {
+        refs.push({ path: n, text: new TextDecoder('utf-8').decode(en.data) });
+        return;
+      }
+      // 其余文件（scripts/assets 等）只登记元信息，不读全文（避免撑爆）
+      files.push({ path: n, size: en.data.length });
+    });
+    if (!skillMd) throw new Error('技能包缺少 SKILL.md（根目录必须有一个 SKILL.md）');
+    var name = skillMd.name || 'skill-pack';
+    return {
+      id: name,   // id 保留原名（含中文），由 importSkillPack 做 slug 化+合法性兜底
+      name: name,
+      description: skillMd.description || ('AI 技能包：' + name),
+      whenToUse: skillMd.whenToUse || '',
+      skillMd: skillMd.body || '',
+      refs: refs,
+      files: files
+    };
+  }
+
+  window.ZipKit = {
+    parseZip: parseZip,
+    parseSkillMd: parseSkillMd,
+    normalizeSkillPack: normalizeSkillPack
+  };
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { parseZip: parseZip, parseSkillMd: parseSkillMd, normalizeSkillPack: normalizeSkillPack };
+  }
+})();
+
+
 /* ===== js/core/pluginbus.js ===== */
 /* ============================================================
  * pluginbus.js — 插件能力总线 v2（开源工具，插件 = 你自己的代码，全量权限）
@@ -8703,7 +8867,13 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       var out = [];
       this.list().forEach(function (m) {
         (m.skills || []).forEach(function (s) {
-          if (s && s.trigger && s.prompt) out.push({ pid: m.id, trigger: s.trigger, title: s.title || s.trigger, prompt: s.prompt });
+          if (s && s.trigger && s.prompt) {
+            out.push({
+              pid: m.id, trigger: s.trigger, title: s.title || s.trigger, prompt: s.prompt,
+              summary: s.summary || '', when: s.when || '',   // 技能包轻量摘要（教练自主识别用）
+              refs: s.refs || []                               // 技能包参考文档
+            });
+          }
         });
       });
       return out;
@@ -8868,6 +9038,82 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       var p = plugins().find(function (x) { return x.id === id; });
       if (!p) return null;
       return '/*\n * ' + p.name + ' v' + p.version + (p.author ? ' by ' + p.author : '') + '\n * ' + (p.desc || '') + '\n */\n' + (p.source || '');
+    },
+
+    // ---- 标准 AI skill 技能包导入（zip / 单 SKILL.md）----
+    // pack 结构来自 ZipKit.normalizeSkillPack：{id,name,description,whenToUse,skillMd,refs,files}
+    importSkillPack: function (pack, silent) {
+      if (!pack || !pack.skillMd) throw new Error('技能包缺少指令内容');
+      // id 必须合法（字母数字-_）：中文技能名转 slug，冲突时加后缀
+      var base = String(pack.id || pack.name || 'skill-pack').toLowerCase()
+        .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-+|-+$/g, '');
+      var latin = base.replace(/[\u4e00-\u9fa5]+/g, function (cn) {
+        // 中文段 → 拼音首字母哈希（无拼音库：用稳定哈希生成短 id）
+        var h = 0; for (var i = 0; i < cn.length; i++) h = (h * 31 + cn.charCodeAt(i)) >>> 0;
+        return 's' + h.toString(36).slice(0, 4);
+      });
+      var pid = latin.replace(/[^a-z0-9\-_]/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || ('skill-' + Date.now().toString(36));
+      if (!/^[a-z0-9][a-z0-9\-_]{1,31}$/i.test(pid)) pid = 'skill-' + Date.now().toString(36);
+      var refsNote = pack.refs.length
+        ? '\n\n【参考文档（遇到相关问题时查阅）】\n' + pack.refs.map(function (r, i) {
+            return '[' + (i + 1) + '] ' + r.path + '：' + r.text.slice(0, 300) + (r.text.length > 300 ? '…' : '');
+          }).join('\n')
+        : '';
+      var whenNote = pack.whenToUse ? '\n适用时机：' + pack.whenToUse : '';
+      // 合成插件：skill 的 prompt = SKILL.md 全文（+refs 摘要）；summary/when 供教练轻量识别
+      var synthetic = {
+        id: pid,
+        name: pack.name || pid,
+        version: pack.version || '1.0',
+        desc: pack.description || 'AI 技能包',
+        author: pack.author || 'skill-pack',
+        skills: [{
+          trigger: pack.name || pid,
+          title: pack.name || pid,
+          summary: pack.description || pack.name || pid,
+          when: pack.whenToUse || '',
+          refs: pack.refs || [],
+          prompt: pack.skillMd + whenNote + refsNote
+        }]
+      };
+      // 存 Store（source 存标准化 JSON，随云同步；能力函数活运行期）
+      Store.update(function (s) {
+        s.plugins = s.plugins || [];
+        var i = s.plugins.findIndex(function (p) { return p.id === pid; });
+        var entry = {
+          id: pid, name: pack.name || pid, version: pack.version || '1.0',
+          desc: pack.description || 'AI 技能包', author: 'skill-pack',
+          source: '/* skill-pack: ' + (pack.name || pid) + ' */\nPluginBus.register(' + JSON.stringify(synthetic) + ');',
+          enabled: true, createdAt: U.dkey ? U.dkey() : new Date().toISOString().slice(0, 10),
+          isSkillPack: true, skillMeta: { whenToUse: pack.whenToUse, refCount: (pack.refs || []).length }
+        };
+        if (i >= 0) s.plugins[i] = entry; else s.plugins.push(entry);
+      });
+      // 运行期注册（合成 skills 里函数无需执行——纯数据 prompt）
+      var rec = normalize(synthetic);
+      registry[pid] = { manifest: rec };
+      if (!silent) Toast.show('技能包「' + (pack.name || pid) + '」已导入（' + (pack.refs.length ? pack.refs.length + ' 份参考' : '无参考') + '）', 'success', 3000);
+      return rec;
+    },
+    // 从 zip ArrayBuffer 导入：解压 → 解析 SKILL.md → 注册
+    importZip: function (ab, silent) {
+      if (!window.ZipKit) throw new Error('技能包解析器未加载');
+      return ZipKit.parseZip(ab).then(function (entries) {
+        var pack = ZipKit.normalizeSkillPack(entries);
+        return PluginBus.importSkillPack(pack, silent);
+      });
+    },
+    // 从单个 SKILL.md 文本导入（无 zip 包装）
+    importSkillMdText: function (text, silent) {
+      if (!window.ZipKit) throw new Error('技能包解析器未加载');
+      var meta = ZipKit.parseSkillMd(text);
+      if (!meta) throw new Error('无法解析 SKILL.md');
+      var name = meta.name || 'skill-pack';
+      var pack = {
+        id: name, name: name, description: meta.description, whenToUse: meta.whenToUse,
+        skillMd: meta.body, refs: [], files: []
+      };
+      return PluginBus.importSkillPack(pack, silent);
     },
 
     // ---- 启停/删除 ----
@@ -26383,8 +26629,13 @@ function bind(el, next) {
               + mem.map(function (m) { return '· ' + m.text.slice(0, 180); }).join('\n');
           }
           if (sk.length) {
-            out += '\n【已安装插件技能（用户说对应触发词时按技能要求作答，可在回复中直接调用同名插件动作）】\n'
-              + sk.map(function (s) { return '·「' + s.trigger + '」→ ' + (s.title || s.trigger) + '：' + s.prompt.slice(0, 120) + (s.prompt.length > 120 ? '…' : ''); }).join('\n');
+            // 轻量注入：技能名 + 摘要 + 适用时机（教练按用户请求自主判断是否适用，不硬匹配触发词）
+            out += '\n【已安装 AI 技能包（用户请求符合下面任一技能的「适用场景」时，按该技能的方法作答；可先问一句"要我用 XX 技能吗"再执行）】\n'
+              + sk.map(function (s) {
+                var head = '·「' + s.trigger + '」' + (s.summary && s.summary !== s.trigger ? '：' + s.summary : '');
+                if (s.when) head += '（适用：' + s.when.slice(0, 80) + (s.when.length > 80 ? '…' : '') + '）';
+                return head.slice(0, 200);
+              }).join('\n');
           }
           return out;
         } catch (e) { return ''; }
@@ -28901,7 +29152,9 @@ function bind(el, next) {
           }).join(' ') + '</div>'
         : '';
       return '<div class="card" style="margin:8px 0">'
-        + '<div class="pr-top"><div class="pr-topic">🧩 ' + U.esc(p.name) + ' <span class="muted-sm" style="font-weight:400">v' + U.esc(p.version || '1.0') + '</span></div>'
+        + '<div class="pr-top"><div class="pr-topic">🧩 ' + U.esc(p.name) + ' <span class="muted-sm" style="font-weight:400">v' + U.esc(p.version || '1.0') + '</span>'
+        + (p.isSkillPack ? ' <span class="tag" style="background:#722ed1;color:#fff">技能包</span>' : '')
+        + '</div>'
         + '<span class="tag ' + (p.enabled ? 'tag-ok' : '') + '">' + (p.enabled ? '已启用' : '已禁用') + '</span></div>'
         + '<div class="pr-meta" style="flex-wrap:wrap">' + caps
         + (p.author ? '<span class="muted-sm">by ' + U.esc(p.author) + '</span>' : '')
@@ -28939,7 +29192,7 @@ function bind(el, next) {
       + '<button class="btn btn-primary btn-sm" id="plg-paste">📋 粘贴导入</button></div>'
       + '<div class="muted-sm">插件 = 一个 JS 模块文件，内部调用 <code>PluginBus.register({...})</code>。开源工具、全量权限：技能 / 动作 / 工具页 / 钩子 / 定时 / 快捷键 / 配置 / 数据自由 / 插件间通信。</div>'
       + '<div class="plg-stats">' + stats + '</div>'
-      + '<input type="file" id="plg-file-input" accept=".js,.txt,text/javascript" style="display:none">'
+      + '<input type="file" id="plg-file-input" accept=".js,.txt,.md,.zip,text/javascript,application/zip,text/markdown" style="display:none">'
       + skillCenter
       + '<div id="plg-zone" style="margin-top:8px">' + cards + '</div></div>';
 
@@ -29006,9 +29259,27 @@ function bind(el, next) {
       var f = e.target.files && e.target.files[0];
       e.target.value = '';
       if (!f) return;
+      var lower = (f.name || '').toLowerCase();
+      if (lower.slice(-4) === '.zip') {
+        // 标准 AI skill 技能包（zip）
+        var fr2 = new FileReader();
+        fr2.onload = function () {
+          PluginBus.importZip(fr2.result).then(function () { App.refresh(); })
+            .catch(function (err) { Toast.warn('技能包导入失败：' + (err && err.message ? err.message : String(err))); });
+        };
+        fr2.readAsArrayBuffer(f);
+        return;
+      }
       var reader = new FileReader();
       reader.onload = function () {
-        try { PluginBus.importText(String(reader.result || '')); App.refresh(); }
+        var txt = String(reader.result || '');
+        // SKILL.md 单文件 → 技能包；否则 JS 插件
+        if (lower.slice(-3) === '.md' || /^\s*---/.test(txt) && txt.indexOf('name:') >= 0) {
+          try { PluginBus.importSkillMdText(txt); App.refresh(); }
+          catch (err) { Toast.warn('SKILL.md 导入失败：' + (err && err.message ? err.message : String(err))); }
+          return;
+        }
+        try { PluginBus.importText(txt); App.refresh(); }
         catch (err) { Toast.warn('导入失败：' + (err && err.message ? err.message : String(err))); }
       };
       reader.readAsText(f, 'utf-8');
@@ -29051,19 +29322,26 @@ function bind(el, next) {
 
   function openImport() {
     Modal.open({
-      title: '📋 导入插件源码',
+      title: '📋 导入插件 / AI 技能包',
       wide: true,
       html: '<div class="form-col">'
-        + '<div class="muted-sm">粘贴插件 JS 源码（含 <code>PluginBus.register({...})</code> 调用）。导入即注册，可随时禁用/卸载。</div>'
-        + '<textarea id="plg-import-code" class="input" rows="10" style="font-family:var(--font-mono);font-size:12px" placeholder="PluginBus.register({&#10;  id: ' + "'my-plugin'" + ',&#10;  name: ' + "'我的插件'" + ',&#10;  skills: [{ trigger: ' + "'示例'" + ', prompt: ' + "'...'" + ' }]&#10;});"></textarea>'
+        + '<div class="muted-sm">支持三种：<b>① JS 插件源码</b>（含 <code>PluginBus.register({...})</code>）；<b>② 标准 AI skill 技能包 zip</b>（含 SKILL.md，用「📂 导入文件」选 .zip）；<b>③ 单个 SKILL.md 文本</b>（带 frontmatter，粘贴后自动识别）。</div>'
+        + '<textarea id="plg-import-code" class="input" rows="10" style="font-family:var(--font-mono);font-size:12px" placeholder="PluginBus.register({...})&#10;或：&#10;---&#10;name: 英语精读&#10;description: 精读方法论&#10;when_to_use: 用户需要精读文章时&#10;---&#10;技能指令正文…"></textarea>'
         + '<div id="plg-import-msg"></div></div>',
       actions: [
         { label: '取消' },
         { label: '导入', kind: 'btn-primary', onClick: function (close) {
           var code = document.getElementById('plg-import-code').value;
-          if (!code.trim()) { document.getElementById('plg-import-msg').innerHTML = '<div class="alert alert-danger">请先粘贴插件源码</div>'; return; }
-          try { PluginBus.importText(code); close(); App.refresh(); }
-          catch (e) { document.getElementById('plg-import-msg').innerHTML = '<div class="alert alert-danger">导入失败：' + U.esc(e.message || String(e)) + '</div>'; }
+          if (!code.trim()) { document.getElementById('plg-import-msg').innerHTML = '<div class="alert alert-danger">请先粘贴内容</div>'; return; }
+          try {
+            // 自动识别：SKILL.md 格式（frontmatter）→ 技能包；否则 JS 插件
+            if (/^\s*---\s*\r?\n/.test(code) && code.indexOf('name:') >= 0) {
+              PluginBus.importSkillMdText(code);
+            } else {
+              PluginBus.importText(code);
+            }
+            close(); App.refresh();
+          } catch (e) { document.getElementById('plg-import-msg').innerHTML = '<div class="alert alert-danger">导入失败：' + U.esc(e.message || String(e)) + '</div>'; }
         } }
       ]
     });
