@@ -3948,8 +3948,10 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     'dailyQuizHistory', 'mistakeDrills', 'playbooks'];
   const COLL_LABEL = { quizBank: '题库', mistakePhotos: '错题照片', essays: '作文', vocab: '单词本', mistakes: '文本错题', dailyQuizHistory: '每日一题历史', mistakeDrills: '错题重练', playbooks: '解题方法卡' };
   // 重量级对象字段（不含 id 的对象/大块缓存，不适合数组 op-log；从 core 剥离后以独立文件存于 bulk Gist，哈希比对+全量替换）
-  const HEAVY_FIELDS = ['copilotChats', 'majorData', 'deepReview', 'conceptAI'];
-  const HEAVY_LABEL = { copilotChats: 'AI对话', majorData: '专业数据', deepReview: '深度复盘', conceptAI: '概念图谱AI' };
+  const HEAVY_FIELDS = ['copilotChats', 'majorData', 'deepReview', 'conceptAI',
+    'plugins', 'pluginData', 'pluginConfig', 'pluginLog'];   // 插件数据集（独立专用，不混入 core 核心块）
+  const HEAVY_LABEL = { copilotChats: 'AI对话', majorData: '专业数据', deepReview: '深度复盘', conceptAI: '概念图谱AI',
+    plugins: '插件源码', pluginData: '插件数据', pluginConfig: '插件配置', pluginLog: '插件日志' };
   // v6 追加同步（事件溯源）：每个变更批次写一个【新文件】 op-<ts>-<dev>-<rand>.json 到核心 Gist，
   // 绝不重写巨型 <c>.ops.json / <c>.json；照片等大数据仅在「新增」那一次进入 op 文件，永不重传。
   const OP_FILE_RE = /^op-\d+-[A-Za-z0-9_-]+\.json$/;                 // v6 op 文件名
@@ -4157,6 +4159,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   function coreOf(full) {
     const core = Object.assign({}, full);
     BULK_COLLS.forEach(c => { delete core[c]; });
+    HEAVY_FIELDS.forEach(h => { delete core[h]; });   // 重量级字段（含插件数据集）也不入核心
     return core;
   }
   function collHashOf(full, c) { return contentHash(JSON.stringify(full[c] || [])); }
@@ -5331,6 +5334,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     refreshCloudStatsIn,
     cleanupOrphanGists,   // 自助清理孤儿 Gist（设置页调用，结果经 hooks 回调，不再硬绑云面板）
     genOps,               // 只读辅助：大数据集合 diff（add/del/upd），供单测验证优化正确性
+    coreOf,               // 只读辅助：核心对象（剔除大集合+重量级字段），供单测验证插件数据独立
     // 同步操作（供设置模块调用）
     doSync: () => pull(true, undefined, true).then(push),
     doPull: () => pull(true, undefined, true),
@@ -5341,7 +5345,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   };
   // 仅供单测使用（Node 环境），浏览器中 module 未定义，不影响
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { genOps: genOps, applyOps: applyOps, collHashLive: collHashLive, mergeOpFiles: mergeOpFiles, genOpFileName: genOpFileName };
+    module.exports = { genOps: genOps, applyOps: applyOps, collHashLive: collHashLive, mergeOpFiles: mergeOpFiles, genOpFileName: genOpFileName, coreOf: coreOf, liveCoreJson: liveCoreJson };
   }
 })();
 
