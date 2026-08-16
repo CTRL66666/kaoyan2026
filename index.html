@@ -9116,6 +9116,34 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       return PluginBus.importSkillPack(pack, silent);
     },
 
+    // ---- 分享码（压缩源码，可粘贴传播） ----
+    // 格式：PBCODE1:<base64url(utf8源码)>（加版本前缀便于识别/升级）
+    exportShareCode: function (id) {
+      var p = plugins().find(function (x) { return x.id === id; });
+      if (!p || !p.source) return null;
+      try {
+        var bytes = new TextEncoder().encode(p.source);
+        var bin = '';
+        bytes.forEach(function (b) { bin += String.fromCharCode(b); });
+        var b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        return 'PBCODE1:' + b64;
+      } catch (e) { return null; }
+    },
+    importShareCode: function (code, silent) {
+      if (!code || typeof code !== 'string') throw new Error('无效分享码');
+      var m = code.match(/^PBCODE1:([A-Za-z0-9\-_]+)$/);
+      if (!m) throw new Error('不是有效的插件分享码（应以 PBCODE1: 开头）');
+      try {
+        var b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4) b64 += '=';
+        var bin = atob(b64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var src = new TextDecoder('utf-8').decode(bytes);
+        return PluginBus.importText(src, silent);
+      } catch (e) { throw new Error('分享码解析失败：' + (e.message || e)); }
+    },
+
     // ---- 启停/删除 ----
     enable: function (id, on) {
       Store.update(function (s) {
@@ -14124,6 +14152,8 @@ function bind(el, next) {
         : ('「' + topic.name + '」只 ' + score + '分' + (judge.errorType && judge.errorType !== 'none' ? '，卡在' + judge.errorType : '') + '。先去错题本把这题吃透。');
       Copilot.pushAssistant(qmsg);
     }
+    // 【插件】AI 测验完成钩子（v4）
+    try { if (window.PluginBus) PluginBus.emit('quizDone', { topicId, topicName: topic.name, score, verdict: judge.verdict, errorType: judge.errorType }); } catch (e) { }
 
     if (judge.errorType === 'sign') {
       setTimeout(() => {
@@ -23813,6 +23843,8 @@ function bind(el, next) {
       if (text) { lastGradeText = text; lastGradeResult = r; lastGradeType = tk; }
       lastEssayId = rec.id;
       Toast.show(rec.score >= 0 ? '批改完成：' + rec.score + '/' + rec.max + ' ' + rec.band : '无法辨认字迹', rec.score >= 0 ? 'success' : 'warn', 4000);
+      // 【插件】作文批改钩子（v4）
+      try { if (window.PluginBus) PluginBus.emit('essayGraded', { score: rec.score, max: rec.max, type: tk }); } catch (e) { }
       App.refresh();
       // App.refresh 会重建 DOM，延迟到下一帧再把结果渲染进结果区并绑定红笔批改入口
       if (text) setTimeout(function () {
@@ -29186,6 +29218,8 @@ function bind(el, next) {
     el.innerHTML =
       '<div class="card"><div class="card-title-row"><span class="card-title">🧩 插件中心</span>'
       + '<button class="btn btn-ghost btn-sm" id="plg-market">🛒 市场</button>'
+      + '<button class="btn btn-ghost btn-sm" id="plg-wizard">🧰 生成器</button>'
+      + '<button class="btn btn-ghost btn-sm" id="plg-history">🕘 技能历史</button>'
       + '<button class="btn btn-ghost btn-sm" id="plg-doc">📖 API 文档</button>'
       + '<button class="btn btn-ghost btn-sm" id="plg-logall">🕵 日志</button>'
       + '<button class="btn btn-ghost btn-sm" id="plg-file">📂 导入文件</button>'
@@ -29202,6 +29236,10 @@ function bind(el, next) {
   function bind(el) {
     var market = el.querySelector('#plg-market');
     if (market) market.onclick = openMarket;
+    var wizard = el.querySelector('#plg-wizard');
+    if (wizard) wizard.onclick = openWizard;
+    var hist = el.querySelector('#plg-history');
+    if (hist) hist.onclick = openSkillHistory;
     var doc = el.querySelector('#plg-doc');
     if (doc) doc.onclick = openDoc;
     var logall = el.querySelector('#plg-logall');
@@ -29295,11 +29333,29 @@ function bind(el, next) {
     });
     el.querySelectorAll('.plg-export').forEach(function (b) {
       b.onclick = function () {
-        var txt = PluginBus.exportText(b.getAttribute('data-id'));
-        if (!txt) return;
-        try {
-          navigator.clipboard.writeText(txt).then(function () { Toast.success('插件源码已复制（可分享/备份）'); }, function () { fallback(txt); });
-        } catch (e) { fallback(txt); }
+        var id = b.getAttribute('data-id');
+        var p = PluginBus.byStore().find(function (x) { return x.id === id; });
+        var name = p ? p.name : id;
+        var code = PluginBus.exportShareCode(id);
+        var src = PluginBus.exportText(id);
+        var codeBlock = code
+          ? '<div class="card" style="margin:8px 0;background:var(--bg-muted)"><div class="card-title-sm">📤 分享码（复制发给别人，对方粘贴导入即装）</div>'
+            + '<textarea id="plg-share-code" class="input" rows="3" readonly style="font-family:var(--font-mono);font-size:11px">' + U.esc(code) + '</textarea>'
+            + '<div class="btn-row" style="margin-top:6px"><button class="btn btn-sm btn-primary" id="plg-share-copy">📋 复制分享码</button></div></div>'
+          : '';
+        Modal.open({
+          title: '📤 导出插件：' + U.esc(name),
+          wide: true, dismissable: true,
+          html: '<div class="muted-sm">对方在插件中心「📋 粘贴导入」输入分享码即可安装（需同样支持插件系统）。</div>'
+            + codeBlock
+            + (src ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px;opacity:.8">查看完整源码（可备份）</summary><pre class="input" style="font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto;font-family:var(--font-mono)">' + U.esc(src) + '</pre></details>' : ''),
+          actions: [{ label: '关闭' }]
+        });
+        var copyBtn = document.getElementById('plg-share-copy');
+        if (copyBtn) copyBtn.onclick = function () {
+          var el2 = document.getElementById('plg-share-code');
+          if (el2 && el2.value) { try { navigator.clipboard.writeText(el2.value).then(function () { Toast.success('分享码已复制'); }, function () { fallback(el2.value); }); } catch (e) { fallback(el2.value); } }
+        };
       };
     });
     el.querySelectorAll('.plg-del').forEach(function (b) {
@@ -29325,7 +29381,7 @@ function bind(el, next) {
       title: '📋 导入插件 / AI 技能包',
       wide: true,
       html: '<div class="form-col">'
-        + '<div class="muted-sm">支持三种：<b>① JS 插件源码</b>（含 <code>PluginBus.register({...})</code>）；<b>② 标准 AI skill 技能包 zip</b>（含 SKILL.md，用「📂 导入文件」选 .zip）；<b>③ 单个 SKILL.md 文本</b>（带 frontmatter，粘贴后自动识别）。</div>'
+        + '<div class="muted-sm">支持四种：<b>① JS 插件源码</b>（<code>PluginBus.register({...})</code>）；<b>② 分享码</b>（<code>PBCODE1:</code> 开头，别人导出的）；<b>③ 标准 AI skill 技能包 zip</b>（📂 选 .zip）；<b>④ 单个 SKILL.md</b>（自动识别）。</div>'
         + '<textarea id="plg-import-code" class="input" rows="10" style="font-family:var(--font-mono);font-size:12px" placeholder="PluginBus.register({...})&#10;或：&#10;---&#10;name: 英语精读&#10;description: 精读方法论&#10;when_to_use: 用户需要精读文章时&#10;---&#10;技能指令正文…"></textarea>'
         + '<div id="plg-import-msg"></div></div>',
       actions: [
@@ -29334,8 +29390,10 @@ function bind(el, next) {
           var code = document.getElementById('plg-import-code').value;
           if (!code.trim()) { document.getElementById('plg-import-msg').innerHTML = '<div class="alert alert-danger">请先粘贴内容</div>'; return; }
           try {
-            // 自动识别：SKILL.md 格式（frontmatter）→ 技能包；否则 JS 插件
-            if (/^\s*---\s*\r?\n/.test(code) && code.indexOf('name:') >= 0) {
+            // 自动识别：分享码 → 技能包（frontmatter）→ JS 插件
+            if (/^PBCODE1:/.test(code.trim())) {
+              PluginBus.importShareCode(code.trim());
+            } else if (/^\s*---\s*\r?\n/.test(code) && code.indexOf('name:') >= 0) {
               PluginBus.importSkillMdText(code);
             } else {
               PluginBus.importText(code);
@@ -29345,6 +29403,148 @@ function bind(el, next) {
         } }
       ]
     });
+  }
+
+  // ---------- 插件模板生成器（引导式，零门槛建插件） ----------
+  function openWizard() {
+    var caps = [
+      ['skill', '🧠 AI 技能', '定义触发词 + 指令 prompt，教练可识别并执行'],
+      ['action', '⚡ 教练动作', '教练可调用的动作（加任务/跳页等）'],
+      ['tool', '🧩 工具页', '在工具箱出现的自定义页面'],
+      ['hook', '🔗 事件钩子', '监听 taskToggled/vocabGraded 等全站事件'],
+      ['timer', '⏰ 定时任务', '每天固定时刻 / 每 N 分钟触发'],
+      ['shortcut', '⌨️ 快捷键', '全局快捷键（如 ctrl+shift+x）'],
+      ['config', '⚙ 配置项', '插件中心可编辑的配置表单']
+    ];
+    var capHtml = caps.map(function (c) {
+      return '<label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer"><input type="checkbox" class="plg-wiz-cap" data-cap="' + c[0] + '"> <b>' + c[1] + '</b> <span class="muted-sm" style="font-size:11px">' + c[2] + '</span></label>';
+    }).join('');
+    Modal.open({
+      title: '🧰 插件生成器（引导式创建）',
+      wide: true,
+      html: '<div class="form-col">'
+        + '<div class="muted-sm">填基本信息和勾选能力，自动生成完整插件源码（可预览后再导入）。</div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+        + '<label class="fld" style="flex:1;min-width:130px"><span>插件 ID（英文）*</span><input id="plg-wiz-id" class="input" placeholder="my-plugin" value="my-plugin"></label>'
+        + '<label class="fld" style="flex:1;min-width:130px"><span>名称 *</span><input id="plg-wiz-name" class="input" placeholder="我的插件"></label></div>'
+        + '<label class="fld fld-full"><span>描述</span><input id="plg-wiz-desc" class="input" placeholder="一句话说明这个插件做什么"></label>'
+        + '<div class="card" style="background:var(--bg-muted)"><div class="card-title-sm">勾选能力（可多选）</div>' + capHtml + '</div>'
+        + '<div id="plg-wiz-extra"></div>'
+        + '<div id="plg-wiz-msg"></div>'
+        + '<div class="btn-row" style="margin-top:6px">'
+        + '<button class="btn btn-primary" id="plg-wiz-gen">⚙ 生成源码</button>'
+        + '<button class="btn btn-ghost" id="plg-wiz-preview">👁 预览</button></div>'
+        + '<pre id="plg-wiz-out" class="input" style="font-size:11px;white-space:pre-wrap;display:none;max-height:240px;overflow:auto;font-family:var(--font-mono)"></pre>'
+        + '</div>',
+      actions: [{ label: '关闭' }, { label: '导入生成结果', kind: 'btn-primary', onClick: function (close) {
+        var code = document.getElementById('plg-wiz-out');
+        if (!code || !code.value) { document.getElementById('plg-wiz-msg').innerHTML = '<div class="alert alert-warn">请先点「生成源码」</div>'; return; }
+        try { PluginBus.importText(code.value); close(); App.refresh(); Toast.success('插件已创建并导入'); }
+        catch (e) { document.getElementById('plg-wiz-msg').innerHTML = '<div class="alert alert-danger">导入失败：' + U.esc(e.message || e) + '</div>'; }
+      } }]
+    });
+    // 能力勾选 → 动态补充对应字段
+    var capSel = {};
+    document.querySelectorAll('.plg-wiz-cap').forEach(function (cb) {
+      cb.onchange = function () { capSel[cb.getAttribute('data-cap')] = cb.checked; renderWizardExtra(); };
+    });
+    function renderWizardExtra() {
+      var extra = document.getElementById('plg-wiz-extra');
+      if (!extra) return;
+      var h = '';
+      if (capSel.skill) {
+        h += '<div class="card" style="margin-top:8px;background:var(--bg-muted)"><div class="card-title-sm">🧠 AI 技能</div>'
+          + '<label class="fld fld-full"><span>触发词 *</span><input id="plg-wiz-sk-trigger" class="input" placeholder="如：精读"></label>'
+          + '<label class="fld fld-full"><span>指令 prompt *（AI 按此执行）</span><textarea id="plg-wiz-sk-prompt" class="input" rows="3" placeholder="如：当用户需要精读英语文章时，按以下步骤……"></textarea></label></div>';
+      }
+      if (capSel.action) {
+        h += '<div class="card" style="margin-top:8px;background:var(--bg-muted)"><div class="card-title-sm">⚡ 教练动作</div>'
+          + '<label class="fld fld-full"><span>动作类型（英文，教练输出用）</span><input id="plg-wiz-act-type" class="input" placeholder="如：myAction"></label>'
+          + '<label class="fld fld-full"><span>动作标签</span><input id="plg-wiz-act-label" class="input" placeholder="如：执行我的动作"></label></div>';
+      }
+      if (capSel.hook) {
+        h += '<div class="card" style="margin-top:8px;background:var(--bg-muted)"><div class="card-title-sm">🔗 事件钩子</div>'
+          + '<label class="fld fld-full"><span>监听事件（可选：taskToggled/vocabGraded/polRecited/mistakeAdded/moodRecorded/focusDone/examGraded）</span><input id="plg-wiz-hk-event" class="input" placeholder="如：taskToggled"></label>'
+          + '<label class="fld fld-full"><span>钩子动作描述</span><input id="plg-wiz-hk-act" class="input" placeholder="如：任务打卡时提示"></label></div>';
+      }
+      if (capSel.timer) {
+        h += '<div class="card" style="margin-top:8px;background:var(--bg-muted)"><div class="card-title-sm">⏰ 定时任务</div>'
+          + '<label class="fld fld-full"><span>触发方式（at=每日时刻 / every=每N分钟 / once=一次）</span><input id="plg-wiz-tm-spec" class="input" placeholder="如：at:20:00 或 every:60min"></label>'
+          + '<label class="fld fld-full"><span>定时做什么</span><input id="plg-wiz-tm-act" class="input" placeholder="如：提醒复习"></label></div>';
+      }
+      if (capSel.shortcut) {
+        h += '<div class="card" style="margin-top:8px;background:var(--bg-muted)"><div class="card-title-sm">⌨️ 快捷键</div>'
+          + '<label class="fld fld-full"><span>按键（组合键，如 ctrl+shift+k）</span><input id="plg-wiz-sc-key" class="input" placeholder="如：ctrl+shift+k"></label>'
+          + '<label class="fld fld-full"><span>快捷键动作</span><input id="plg-wiz-sc-act" class="input" placeholder="如：打开专注页"></label></div>';
+      }
+      extra.innerHTML = h;
+    }
+    document.getElementById('plg-wiz-gen').onclick = function () {
+      var id = (document.getElementById('plg-wiz-id').value || '').trim();
+      var name = (document.getElementById('plg-wiz-name').value || '').trim();
+      if (!id || !/^[a-z0-9][a-z0-9\-_]{1,31}$/i.test(id)) { document.getElementById('plg-wiz-msg').innerHTML = '<div class="alert alert-danger">插件 ID 必填且只能含字母数字-_</div>'; return; }
+      if (!name) { document.getElementById('plg-wiz-msg').innerHTML = '<div class="alert alert-danger">请填名称</div>'; return; }
+      var desc = (document.getElementById('plg-wiz-desc').value || '').trim();
+      var L = [];
+      L.push('PluginBus.register({');
+      L.push("  id: '" + id + "', name: '" + name + "', version: '1.0', desc: '" + (desc || 'AI 生成插件') + "',");
+      var parts = [];
+      if (capSel.skill) {
+        var tr = (document.getElementById('plg-wiz-sk-trigger').value || '').trim();
+        var pr = (document.getElementById('plg-wiz-sk-prompt').value || '').trim();
+        if (tr && pr) {
+          parts.push("  skills: [{ trigger: '" + tr + "', title: '" + tr + "', prompt: '" + pr.replace(/'/g, "\\'") + "' }]");
+        }
+      }
+      if (capSel.action) {
+        var at = (document.getElementById('plg-wiz-act-type').value || '').trim();
+        var al = (document.getElementById('plg-wiz-act-label').value || '').trim();
+        if (at) {
+          parts.push("  actions: [{ type: '" + at + "', label: '" + (al || at) + "', auto: false,\n    run: function (ctx) { ctx.api.toast('" + name + " 动作已执行'); return '" + (al || at) + " 已执行'; } }]");
+        }
+      }
+      if (capSel.hook) {
+        var ev = (document.getElementById('plg-wiz-hk-event').value || '').trim();
+        var ha = (document.getElementById('plg-wiz-hk-act').value || '').trim();
+        if (ev) {
+          parts.push("  hooks: { '" + ev + "': function (ctx, p) { ctx.log('钩子触发：' + " + (ev ? "JSON.stringify(p || {})" : "'ok'") + "); " + (ha ? "ctx.api.toast('" + ha.replace(/'/g, "\\'") + "');" : '') + " } }");
+        }
+      }
+      if (capSel.timer) {
+        var tm = (document.getElementById('plg-wiz-tm-spec').value || '').trim();
+        var ta = (document.getElementById('plg-wiz-tm-act').value || '').trim();
+        if (tm) {
+          var tmKey = tm.indexOf(':') > 0 ? 'at' : (tm.indexOf('min') > 0 ? 'every' : 'at');
+          parts.push("  timers: [{ " + tmKey + ": '" + tm.replace(tmKey + ':', '') + "', label: '" + (ta || '定时任务') + "', run: function (ctx) { ctx.api.toast('⏰ " + (ta || '定时任务').replace(/'/g, "\\'") + "'); } }]");
+        }
+      }
+      if (capSel.shortcut) {
+        var sc = (document.getElementById('plg-wiz-sc-key').value || '').trim();
+        var sa = (document.getElementById('plg-wiz-sc-act').value || '').trim();
+        if (sc) {
+          parts.push("  shortcuts: [{ key: '" + sc + "', label: '" + (sa || '快捷键') + "', run: function (ctx) { ctx.api.toast('⌨️ " + (sa || '快捷键').replace(/'/g, "\\'") + "'); } }]");
+        }
+      }
+      if (!parts.length) { document.getElementById('plg-wiz-msg').innerHTML = '<div class="alert alert-warn">请至少勾选并填写一项能力</div>'; return; }
+      L.push(parts.join(',\n'));
+      L.push('});');
+      var out = document.getElementById('plg-wiz-out');
+      out.value = L.join('\n');
+      out.style.display = '';
+      document.getElementById('plg-wiz-msg').innerHTML = '<div class="alert alert-ok">✓ 源码已生成，点「预览」查看或直接「导入生成结果」</div>';
+    };
+    document.getElementById('plg-wiz-preview').onclick = function () {
+      var out = document.getElementById('plg-wiz-out');
+      if (!out.value) { document.getElementById('plg-wiz-msg').innerHTML = '<div class="alert alert-warn">请先点「生成源码」</div>'; return; }
+      Modal.open({ title: '👁 插件源码预览', wide: true, dismissable: true, html: '<pre style="font-size:11px;white-space:pre-wrap;font-family:var(--font-mono)">' + U.esc(out.value) + '</pre>', actions: [{ label: '关闭' }] });
+    };
+  }
+
+  // ---------- 技能执行历史 ----------
+  function openSkillHistory() {
+    var log = (Store.get().pluginLog || []).filter(function (l) { return l.msg && l.msg.indexOf('技能') >= 0; }).slice(0, 30);
+    if (!log.length) { Toast.warn('还没有技能执行记录'); return; }
+    Modal.open({ title: '🕘 技能执行历史（' + log.length + '）', wide: true, dismissable: true, html: logHtml(log, '暂无记录'), actions: [{ label: '关闭' }] });
   }
 
   // ---------- 插件市场（内置一键装） ----------
