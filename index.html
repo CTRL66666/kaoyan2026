@@ -8486,12 +8486,28 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     c.ui = {
       card: function (inner, title) { return '<div class="card">' + (title ? '<div class="card-title-sm">' + U.esc(title) + '</div>' : '') + inner + '</div>'; },
       btn: function (label, cls, attrs) { return '<button class="btn ' + (cls || 'btn-ghost') + '" ' + (attrs || '') + '>' + label + '</button>'; },
+      btnRow: function (btnsHtml) { return '<div class="btn-row">' + btnsHtml + '</div>'; },
       tag: function (label, cls) { return '<span class="tag ' + (cls || '') + '">' + U.esc(label) + '</span>'; },
+      badge: function (label, cls) { return '<span class="tag ' + (cls || '') + '" style="font-size:11px;opacity:.9">' + U.esc(label) + '</span>'; },
+      alert: function (text, kind) { return '<div class="alert alert-' + (kind || 'info') + '">' + U.esc(text) + '</div>'; },
       stat: function (n, label) { return '<div class="stat"><div class="stat-num">' + n + '</div><div class="stat-label">' + U.esc(label) + '</div></div>'; },
       statRow: function (cells) { return '<div class="stat-row">' + cells.join('') + '</div>'; },
       progress: function (pct, cls) { return '<div class="pbar"><div class="pbar-fill" style="width:' + U.clamp(Math.round(+pct || 0), 0, 100) + '%;background:' + (cls || 'var(--ok)') + '"></div></div>'; },
       empty: function (text) { return '<div class="card empty-hint">' + U.esc(text) + '</div>'; },
-      section: function (title, body) { return '<div class="pm-ai-section"><b>' + U.esc(title) + '：</b><div class="pm-ai-body">' + body + '</div></div>'; }
+      section: function (title, body) { return '<div class="pm-ai-section"><b>' + U.esc(title) + '：</b><div class="pm-ai-body">' + body + '</div></div>'; },
+      list: function (itemsHtml) { return '<div>' + (itemsHtml || []).map(function (h) { return '<div style="padding:5px 0;border-bottom:1px solid var(--border)">' + h + '</div>'; }).join('') + '</div>'; },
+      tabs: function (tabs, active) {
+        return '<div class="tab-row">' + tabs.map(function (t) {
+          return '<button class="tab' + (t[0] === active ? ' tab-on' : '') + '">' + U.esc(t[1]) + '</button>';
+        }).join('') + '</div>';
+      },
+      input: function (id, placeholder, value) { return '<input id="' + U.esc(id) + '" class="input" placeholder="' + U.esc(placeholder || '') + '" value="' + U.esc(value != null ? value : '') + '">'; },
+      textarea: function (id, placeholder, rows) { return '<textarea id="' + U.esc(id) + '" class="input" rows="' + (rows || 3) + '" placeholder="' + U.esc(placeholder || '') + '"></textarea>'; },
+      select: function (id, options, val) {
+        return '<select id="' + U.esc(id) + '" class="input">' + (options || []).map(function (o) {
+          return '<option value="' + U.esc(o) + '"' + (String(o) === String(val) ? ' selected' : '') + '>' + U.esc(o) + '</option>';
+        }).join('') + '</select>';
+      }
     };
     // ---- ctx.ai 封装（chat 纯文本 / json 结构化 / stream 流式） ----
     c.ai = {
@@ -8513,6 +8529,10 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     c.data = function (k, v) { return PluginBus.data(pid, k, v); };
     c.config = function (k, v) { return PluginBus.config(pid, k, v); };
     c.log = function (msg, level) { PluginBus.log(pid, msg, level); };
+    c.call = function (targetPid, serviceName) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      return PluginBus.call.apply(PluginBus, [targetPid, serviceName].concat(args));
+    };
     return c;
   }
 
@@ -8533,6 +8553,9 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       timers: Array.isArray(m.timers) ? m.timers.slice(0, 10) : [],
       shortcuts: Array.isArray(m.shortcuts) ? m.shortcuts.slice(0, 10) : [],
       config: Array.isArray(m.config) ? m.config.slice(0, 12) : [],
+      depends: Array.isArray(m.depends) ? m.depends.slice(0, 8) : [],
+      services: m.services && typeof m.services === 'object' ? m.services : {},
+      memory: String(m.memory || '').slice(0, 200),
       init: typeof m.init === 'function' ? m.init : null,
       enabled: true,
       createdAt: U.dkey ? U.dkey() : new Date().toISOString().slice(0, 10)
@@ -8712,25 +8735,82 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     },
     fire: function (event, payload) { return PluginBus.emit(event, payload); },
 
+    // ---- 插件间通信：服务注册/调用 ----
+    // 插件 A 注册服务：register({services: {calcScore: function(ctx, ...args){...}}})
+    // 插件 B 调用：PluginBus.call('A', 'calcScore', arg1, arg2)
+    call: function (targetPid, serviceName) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      var rec = enabledRec(targetPid);
+      if (!rec) throw new Error('插件「' + targetPid + '」未启用或不存在');
+      var fn = rec.services && rec.services[serviceName];
+      if (typeof fn !== 'function') throw new Error('插件「' + targetPid + '」未提供服务 ' + serviceName);
+      return fn(ctxOf(targetPid), args);
+    },
+    // ctx 便捷：call 另一个插件的服务
+    callService: function (targetPid, serviceName) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      return PluginBus.call.apply(PluginBus, [targetPid, serviceName].concat(args));
+    },
+    // AI 记忆注入（插件声明 memory → 教练系统提示词附带）
+    memories: function () {
+      var out = [];
+      this.list().forEach(function (m) {
+        if (m.memory) out.push({ pid: m.id, text: m.memory });
+      });
+      return out;
+    },
+
     // ---- 技能执行：流式输出到 Modal（技能中心 / 快捷命令共用） ----
+    // input 会替换 prompt 中的 {input} 占位符；技能可声明 postActions 提供结果后快捷按钮
     runSkill: function (skill, input, opts) {
       if (!skill) return Promise.reject(new Error('技能不存在'));
       if (!(window.AI && AI.configured())) return Promise.reject(new Error('未配置 AI'));
       var title = '🧠 ' + (skill.title || skill.trigger);
-      var modalHtml = '<div class="pm-ai-body" id="pbskill-out"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w70"></div></div>';
+      var finalPrompt = String(skill.prompt || '').replace(/\{input\}/g, String(input || ''));
+      var modalHtml = '<div class="pm-ai-body" id="pbskill-out"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w70"></div></div>'
+        + '<div id="pbskill-actions"></div>';
       var done = false;
       Modal.open({ title: title, wide: true, html: modalHtml, actions: [{ label: '关闭' }] });
       var out = function (txt) {
         var el = document.getElementById('pbskill-out');
         if (el) el.innerHTML = U.esc(txt || '').replace(/\n/g, '<br>') + '<span class="ai-cursor"></span>';
       };
-      return AI.chatStream('你是考研AI助手。按技能要求执行。', (input ? '【技能输入】' + input + '\n\n' : '') + skill.prompt, function (txt) {
+      return AI.chatStream('你是考研AI助手。按技能要求执行。', (input ? '【技能输入】' + input + '\n\n' : '') + finalPrompt, function (txt) {
         if (!done) out(txt);
       }, null, { noThink: true, timeout: 120000 }).then(function (full) {
         done = true;
         var el = document.getElementById('pbskill-out');
         if (el) { try { el.innerHTML = Tex.renderInline(full || '').replace(/\n/g, '<br>'); } catch (e) { el.textContent = full || ''; } }
-        log(skill.pid, '技能「' + skill.trigger + '」执行完成');
+        // 结果后快捷按钮：技能声明的 postActions 或默认「执行同名插件动作」
+        var actEl = document.getElementById('pbskill-actions');
+        if (actEl && opts && opts.postActions && opts.postActions.length) {
+          var btns = opts.postActions.map(function (pa, i) {
+            return '<button class="btn btn-sm ' + (i === 0 ? 'btn-primary' : 'btn-ghost') + ' pbskill-post" data-kind="' + (pa.kind || 'action') + '" data-target="' + U.esc(pa.target || '') + '" data-label="' + U.esc(pa.label || '执行') + '" data-arg="' + U.esc(pa.arg || '') + '">' + U.esc(pa.label || '执行') + '</button>';
+          }).join('');
+          actEl.innerHTML = '<div class="btn-row" style="justify-content:center;margin-top:10px">' + btns + '</div>';
+          actEl.querySelectorAll('.pbskill-post').forEach(function (b) {
+            b.onclick = function () {
+              var kind = b.getAttribute('data-kind');
+              var target = b.getAttribute('data-target');
+              var label = b.getAttribute('data-label');
+              if (kind === 'goto' && target) { Modal.close(); App.go(target); Toast.show(label + '…', 'info', 1200); }
+              else if (kind === 'action' && target && window.PluginBus) {
+                // 触发插件动作（模拟 AI 输出动作）
+                try {
+                  var act = { type: target, label: label };
+                  if (b.getAttribute('data-arg')) { try { act = JSON.parse(b.getAttribute('data-arg')); } catch (e2) {} }
+                  var found = PluginBus.actions().filter(function (a) { return a.type === target; })[0];
+                  if (found && typeof found.run === 'function') {
+                    var msg = found.run(ctxOf(found.pid) || {}, act) || '';
+                    if (msg) Toast.show(msg, 'success', 2500);
+                    Modal.close();
+                  } else Toast.warn('未找到动作：' + target);
+                } catch (e3) { Toast.warn('动作执行失败'); }
+              }
+            };
+          });
+        }
+        log(skill.pid, '技能「' + skill.trigger + '」执行完成' + (input ? '（输入：' + String(input).slice(0, 20) + '）' : ''));
         return full;
       }).catch(function (e) {
         done = true;
@@ -8762,13 +8842,18 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (err) throw new Error('插件执行失败：' + (err.message || String(err)));
       if (!last) throw new Error('插件未调用 PluginBus.register');
       var rec = normalize(last);
+      // 【v3】依赖校验：缺失的依赖插件报错（可先装依赖）
+      (rec.depends || []).forEach(function (dep) {
+        var has = plugins().some(function (p) { return p.id === dep; });
+        if (!has) throw new Error('依赖插件「' + dep + '」未安装。请先安装它再导入本插件。');
+      });
       Store.update(function (s) {
         s.plugins = s.plugins || [];
         var i = s.plugins.findIndex(function (p) { return p.id === rec.id; });
         var entry = {
           id: rec.id, name: rec.name, version: rec.version, desc: rec.desc, author: rec.author,
           source: code, enabled: true, createdAt: rec.createdAt,
-          config: rec.config, shortcuts: rec.shortcuts
+          config: rec.config, shortcuts: rec.shortcuts, depends: rec.depends, memory: rec.memory
         };
         if (i >= 0) s.plugins[i] = entry; else s.plugins.push(entry);
       });
@@ -10389,6 +10474,8 @@ function bind(el, next) {
       } catch (e) {}
       if (subject === 'math') foolproofMathModal();
     }
+    // 【插件】任务打卡钩子（v3）
+    try { if (window.PluginBus) PluginBus.emit('taskToggled', { id: id, done: !!done, subject: subject, todayCount: count }); } catch (e) { }
     App.refresh();
   }
 
@@ -11597,6 +11684,8 @@ function bind(el, next) {
           reviewPlan: { start: U.dkey(), done: {} }   // 手动记录即承诺复习：自动上艾宾浩斯曲线
         });
       });
+      // 【插件】错题录入钩子（v3）
+      try { if (window.PluginBus) PluginBus.emit('mistakeAdded', { type: type, desc: desc.slice(0, 60), subject: el.querySelector('#ms-subj').value }); } catch (e) { }
       Toast.success('已记录。同类错误再犯时，系统会加重干预。');
       // 符号错误即时提醒
       if (type === 'sign') Toast.warn('⚠️ 今日符号错误已达 ' + Store.mistakeCountToday('sign') + ' 次，下次数学打卡将触发防呆提醒');
@@ -20387,6 +20476,8 @@ function bind(el, next) {
         const i = s.mental.findIndex(m => m.date === U.dkey());
         if (i >= 0) s.mental[i] = rec; else s.mental.push(rec);
       });
+      // 【插件】心情记录钩子（v3）
+      try { if (window.PluginBus) PluginBus.emit('moodRecorded', { date: rec.date, mood: rec.mood, fatigue: rec.fatigue, jumpy: rec.jumpy, hwUrge: rec.hwUrge }); } catch (e) { }
       if (urge) {
         Modal.open({
           title: '🔧 冲动拦截',
@@ -21314,15 +21405,19 @@ function bind(el, next) {
 
   // 对外评级（作战台等可复用）：写库 + 复习日志（wasNew 标记用于每日新词额度统计）
   function grade(id, q) {
+    var cardBefore = null;
     Store.update(function (s) {
       var c = (s.vocab || []).find(function (x) { return x.id === id; });
       if (!c) return;
+      cardBefore = { word: c.word, phase: c.phase };
       var wasNew = c.phase === 'learn' && !c.lastReview;
       schedule(c, q);
       s.vocabLog = s.vocabLog || [];
       s.vocabLog.push({ date: today(), id: id, q: q, wasNew: wasNew ? 1 : 0 });
       if (s.vocabLog.length > 500) s.vocabLog = s.vocabLog.slice(-500);
     });
+    // 【插件】单词复习钩子（v3）
+    if (cardBefore) { try { if (window.PluginBus) PluginBus.emit('vocabGraded', { id: id, word: cardBefore.word, q: q, phase: cardBefore.phase }); } catch (e) { } }
   }
 
   // 今日已引入的新词数（首次评分的新词去重计数）——每日新词额度的消耗口径
@@ -26277,9 +26372,17 @@ function bind(el, next) {
         try {
           if (!window.PluginBus) return '';
           var sk = window.PluginBus.skills();
-          if (!sk.length) return '';
-          return '\n【已安装插件技能（用户说对应触发词时按技能要求作答，可在回复中直接调用同名插件动作）】\n'
-            + sk.map(function (s) { return '·「' + s.trigger + '」→ ' + (s.title || s.trigger) + '：' + s.prompt.slice(0, 120) + (s.prompt.length > 120 ? '…' : ''); }).join('\n');
+          var mem = window.PluginBus.memories ? window.PluginBus.memories() : [];
+          var out = '';
+          if (mem.length) {
+            out += '\n【插件补充信息（用户装了这些插件，回答时可参考）】\n'
+              + mem.map(function (m) { return '· ' + m.text.slice(0, 180); }).join('\n');
+          }
+          if (sk.length) {
+            out += '\n【已安装插件技能（用户说对应触发词时按技能要求作答，可在回复中直接调用同名插件动作）】\n'
+              + sk.map(function (s) { return '·「' + s.trigger + '」→ ' + (s.title || s.trigger) + '：' + s.prompt.slice(0, 120) + (s.prompt.length > 120 ? '…' : ''); }).join('\n');
+          }
+          return out;
         } catch (e) { return ''; }
       })();
   }
@@ -26876,6 +26979,8 @@ function bind(el, next) {
       if (full && full.trim()) {
         pushHistory('assistant', full);
         renderMessages();
+        // 【插件】教练对话完成钩子（v3）
+        try { if (window.PluginBus) PluginBus.emit('copilotReplied', { reply: full.slice(0, 300) }); } catch (e) { }
       } else {
         row.remove();
       }
@@ -27118,6 +27223,7 @@ function bind(el, next) {
   function masteredCount() { return list().filter(function (p) { return (p.box || 1) >= 4; }).length; }
   // Leitner 评级（被作战台到期复习复用）；同时记录复习日志与易错次数
   function grade(id, known) {
+    var boxAfter = 0;
     Store.update(function (s) {
       const it = (s.polRecite || []).find(function (x) { return x.id === id; });
       if (!it) return;
@@ -27126,10 +27232,13 @@ function bind(el, next) {
       it.due = g.due;
       it.lastReview = U.dkey();
       if (!known) it.wrongCount = (it.wrongCount || 0) + 1;
+      boxAfter = it.box;
       s.polReciteLog = s.polReciteLog || [];
       s.polReciteLog.push({ date: U.dkey(), ok: known ? 1 : 0, id: id });
       if (s.polReciteLog.length > 400) s.polReciteLog = s.polReciteLog.slice(-400);
     });
+    // 【插件】政治背诵钩子（v3）
+    try { if (window.PluginBus) PluginBus.emit('polRecited', { id: id, known: !!known, box: boxAfter }); } catch (e) { }
   }
   function addItem(data) {
     Store.update(function (s) {
@@ -28757,17 +28866,33 @@ function bind(el, next) {
 
   function render(el) {
     var list = (window.PluginBus ? PluginBus.byStore() : []);
+    // 能力计数从运行期 registry 读（Store 只存源码，函数活运行期）
+    var runManifests = {};
+    try { (window.PluginBus ? PluginBus.list() : []).forEach(function (m) { runManifests[m.id] = m; }); } catch (e) { }
+    var stat = function (n, label) { return '<div class="stat"><div class="stat-num">' + n + '</div><div class="stat-label">' + label + '</div></div>'; };
+    var totalSkills = 0, totalActs = 0, totalTools = 0, enabledN = 0;
+    list.forEach(function (p) {
+      var rm = runManifests[p.id];
+      totalSkills += (rm && rm.skills || []).length;
+      totalActs += (rm && rm.actions || []).length;
+      totalTools += (rm && rm.tools || []).length;
+      if (p.enabled !== false) enabledN++;
+    });
+    var stats = '<div class="stat-row" style="margin:8px 0">'
+      + stat(list.length, '已装插件') + stat(enabledN, '启用中')
+      + stat(totalSkills, 'AI 技能') + stat(totalActs, '教练动作') + stat(totalTools, '工具页') + '</div>';
     var cards = list.length ? list.map(function (p) {
-      var skillN = (p.skills || []).length, actN = (p.actions || []).length, toolN = (p.tools || []).length, hookN = Object.keys(p.hooks || {}).length;
+      var rm = runManifests[p.id] || {};
+      var skillN = (rm.skills || []).length, actN = (rm.actions || []).length, toolN = (rm.tools || []).length, hookN = Object.keys(rm.hooks || {}).length;
       var caps = [];
       if (skillN) caps.push('<span class="tag tag-mod">技能 ' + skillN + '</span>');
       if (actN) caps.push('<span class="tag" style="background:#2f54eb;color:#fff">动作 ' + actN + '</span>');
       if (toolN) caps.push('<span class="tag" style="background:#237804;color:#fff">工具 ' + toolN + '</span>');
       if (hookN) caps.push('<span class="tag" style="background:#722ed1;color:#fff">钩子 ' + hookN + '</span>');
       if ((p.shortcuts || []).length) caps.push('<span class="tag" style="background:#d48806;color:#fff">快捷键 ' + p.shortcuts.length + '</span>');
-      var cfgN = (p.config || []).length;
-      var skillList = (p.skills || []).length
-        ? '<div class="muted-sm" style="margin-top:4px;font-size:12px">技能：' + (p.skills || []).map(function (s) {
+      var cfgN = (rm.config || []).length;
+      var skillList = (rm.skills || []).length
+        ? '<div class="muted-sm" style="margin-top:4px;font-size:12px">技能：' + (rm.skills || []).map(function (s) {
             return '<button class="btn btn-ghost btn-sm plg-runskill" data-id="' + p.id + '" data-trigger="' + U.esc(s.trigger || '') + '" style="font-size:11px;margin:2px">🧠 ' + U.esc(s.trigger || '') + '</button>';
           }).join(' ') + '</div>'
         : '';
@@ -28804,10 +28929,12 @@ function bind(el, next) {
     el.innerHTML =
       '<div class="card"><div class="card-title-row"><span class="card-title">🧩 插件中心</span>'
       + '<button class="btn btn-ghost btn-sm" id="plg-market">🛒 市场</button>'
-      + '<button class="btn btn-ghost btn-sm" id="plg-logall">🕵 全部日志</button>'
+      + '<button class="btn btn-ghost btn-sm" id="plg-doc">📖 API 文档</button>'
+      + '<button class="btn btn-ghost btn-sm" id="plg-logall">🕵 日志</button>'
       + '<button class="btn btn-ghost btn-sm" id="plg-file">📂 导入文件</button>'
       + '<button class="btn btn-primary btn-sm" id="plg-paste">📋 粘贴导入</button></div>'
-      + '<div class="muted-sm">插件 = 一个 JS 模块文件，内部调用 <code>PluginBus.register({...})</code>，可注册 <b>AI 技能</b>（一键执行/快捷命令）、<b>教练动作</b>、<b>新工具页</b>、<b>事件钩子</b>、<b>定时任务</b>、<b>快捷键</b>、<b>配置项</b>。开源工具、全量权限。</div>'
+      + '<div class="muted-sm">插件 = 一个 JS 模块文件，内部调用 <code>PluginBus.register({...})</code>。开源工具、全量权限：技能 / 动作 / 工具页 / 钩子 / 定时 / 快捷键 / 配置 / 数据自由 / 插件间通信。</div>'
+      + '<div class="plg-stats">' + stats + '</div>'
       + '<input type="file" id="plg-file-input" accept=".js,.txt,text/javascript" style="display:none">'
       + skillCenter
       + '<div id="plg-zone" style="margin-top:8px">' + cards + '</div></div>';
@@ -28818,6 +28945,8 @@ function bind(el, next) {
   function bind(el) {
     var market = el.querySelector('#plg-market');
     if (market) market.onclick = openMarket;
+    var doc = el.querySelector('#plg-doc');
+    if (doc) doc.onclick = openDoc;
     var logall = el.querySelector('#plg-logall');
     if (logall) logall.onclick = openLogAll;
     var sample = el.querySelector('#plg-sample');
@@ -28828,14 +28957,34 @@ function bind(el, next) {
     };
     var paste = el.querySelector('#plg-paste');
     if (paste) paste.onclick = function () { openImport(); };
-    // 技能一键执行（卡片内 + 顶部技能中心）
+    // 技能一键执行（卡片内 + 顶部技能中心）；技能 prompt 含 {input} 时先弹输入框
     var runSkill = function (btn) {
       var id = btn.getAttribute('data-id');
       var trigger = btn.getAttribute('data-trigger');
       var skill = null;
       (PluginBus.skills() || []).forEach(function (s) { if (s.pid === id && s.trigger === trigger) skill = s; });
       if (!skill) { Toast.warn('技能未找到'); return; }
-      PluginBus.runSkill(skill, '').catch(function () {});
+      var needsInput = (skill.prompt || '').indexOf('{input}') >= 0;
+      if (needsInput) {
+        Modal.open({
+          title: '🧠 ' + (skill.title || skill.trigger),
+          html: '<div class="form-col">'
+            + '<div class="muted-sm">这个技能需要输入参数：</div>'
+            + '<input id="pbskill-input" class="input" placeholder="输入内容…">'
+            + '<div id="pbskill-msg"></div></div>',
+          actions: [
+            { label: '取消' },
+            { label: '执行', kind: 'btn-primary', onClick: function (close) {
+              var inp = document.getElementById('pbskill-input').value.trim();
+              if (!inp) { document.getElementById('pbskill-msg').innerHTML = '<div class="alert alert-danger">请输入内容</div>'; return; }
+              close();
+              PluginBus.runSkill(skill, inp, { postActions: skill.postActions }).catch(function () {});
+            } }
+          ]
+        });
+      } else {
+        PluginBus.runSkill(skill, '', { postActions: skill.postActions }).catch(function () {});
+      }
     };
     el.querySelectorAll('.plg-runskill, .plg-skill-run').forEach(function (b) { b.onclick = function () { runSkill(b); }; });
     // 配置面板
@@ -29010,6 +29159,41 @@ function bind(el, next) {
   function openLogAll() {
     var entries = (Store.get().pluginLog || []).slice(0, 60);
     Modal.open({ title: '🕵 全部插件日志（' + entries.length + '）', wide: true, dismissable: true, html: logHtml(entries, '暂无日志'), actions: [{ label: '关闭' }] });
+  }
+
+  // ---------- API 文档（插件开发参考） ----------
+  function openDoc() {
+    var docs = [
+      ['PluginBus.register({...})', '插件入口。能力字段：id/name/version/desc/author, skills[], actions[], tools[], hooks{}, timers[], shortcuts[], config[], depends[], services{}, memory, init(ctx)'],
+      ['skills: [{trigger,title,prompt}]', 'AI 技能。trigger=触发词（教练 /xx 命令与技能中心都用它）；prompt 含 {input} 时执行前会弹输入框'],
+      ['actions: [{type,label,auto,run(ctx,a)}]', '教练动作。auto=true 自动执行；run 返回提示文案；可配 undo(ctx,a) 撤销'],
+      ['tools: [{id,title,icon,render(ctx)|mount(el,ctx)}]', '工具页。render 返回 HTML 字符串；mount 可交互（事件绑定/动态更新）'],
+      ['hooks: {eventName: fn(ctx,payload)}', "事件钩子。内置事件：taskToggled/vocabGraded/polRecited/mistakeAdded/moodRecorded/focusDone/examGraded/copilotReplied；'*' 通配监听全部"],
+      ['timers: [{at|every|once, run(ctx)}]', "定时任务。at:'20:00' 每日时刻 / every:'30min' 间隔 / once:'5min' 单次"],
+      ['shortcuts: [{key,label,run(ctx)}]', "全局快捷键。key 如 'ctrl+shift+p'（ctrl/alt/shift/meta 组合）"],
+      ['config: [{key,label,type,default,options}]', '配置项。type: text/number/select/bool；插件中心自动渲染表单；ctx.config(key) 读取'],
+      ['depends: [\'plugin-id\']', '依赖声明。导入时校验依赖插件已安装'],
+      ['services: {name: fn(ctx,args)}', '插件间通信。其他插件用 ctx.call(pid, name, ...args) 调用'],
+      ['memory: \'一句话\'', 'AI 记忆注入。内容会附进教练系统提示词'],
+      ['ctx.data(key, val)', '数据自由命名空间（本插件专属，随云同步）。ctx.data(key) 读 / ctx.data(key,null) 删'],
+      ['ctx.config(key, val)', '配置读写（与 manifest.config 联动，默认值自动应用）'],
+      ['ctx.api.go(tab)/refresh()/openModal(opts)/confirm(t,h,cb)', '页面/弹窗便捷操作'],
+      ['ctx.ui.card/btn/tag/stat/progress/empty/section', '统一风格 UI 组件（返回 HTML）'],
+      ['ctx.ai.chat(sys,usr)/json(sys,usr)/stream(sys,usr,onChunk)', 'AI 调用封装'],
+      ['ctx.log(msg, level)', '写插件日志（插件中心可查）'],
+      ['ctx.call(pid, svc, ...args)', '跨插件调用服务（等价 PluginBus.call）'],
+      ['PluginBus.emit(event, payload)', '宿主触发事件（sprint 交卷后 examGraded 等已内置）']
+    ];
+    Modal.open({
+      title: '📖 插件 API 文档', wide: true, dismissable: true,
+      html: '<div class="muted-sm" style="margin-bottom:6px">插件开发快速参考（完整示例见市场插件的源码）。</div>'
+        + docs.map(function (d) {
+          return '<div style="padding:6px 0;border-bottom:1px solid var(--border)">'
+            + '<div style="font-family:var(--font-mono);font-size:12.5px;color:#2f54eb">' + U.esc(d[0]) + '</div>'
+            + '<div class="muted-sm" style="font-size:12.5px">' + U.esc(d[1]) + '</div></div>';
+        }).join(''),
+      actions: [{ label: '关闭' }]
+    });
   }
 
   // 示例插件（载入示例用）：2 个经典
