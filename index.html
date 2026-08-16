@@ -8581,20 +8581,36 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   }
 
   // 技能包规范化：entries（parseZip 输出）→ {id,name,version,desc,skillMd,refs}
-  // SKILL.md 必须在根目录；references/ 下的 .md 收集为 refs（供技能执行时引用）
+  // SKILL.md 任意层级查找（优先根目录，其次最浅子目录——兼容 skill-name/SKILL.md 社区结构）；
+  // skill 根目录内的其他 .md 收集为 refs（供技能执行时引用）
   function normalizeSkillPack(entries) {
-    var skillMd = null, refs = [], files = [];
-    (entries || []).forEach(function (en) {
-      var n = en.name.replace(/\\/g, '/');
-      if (/^SKILL\.md$/i.test(n)) { skillMd = parseSkillMd(new TextDecoder('utf-8').decode(en.data)); return; }
-      if (/^references\//i.test(n) && /\.md$/i.test(n)) {
-        refs.push({ path: n, text: new TextDecoder('utf-8').decode(en.data) });
-        return;
-      }
-      // 其余文件（scripts/assets 等）只登记元信息，不读全文（避免撑爆）
-      files.push({ path: n, size: en.data.length });
+    var list = (entries || []).map(function (en) {
+      return { name: String(en.name || '').replace(/\\/g, '/'), data: en.data };
     });
-    if (!skillMd) throw new Error('技能包缺少 SKILL.md（根目录必须有一个 SKILL.md）');
+    // 找 SKILL.md（最浅路径优先 = 根目录或最外层 skill 目录）
+    var skillEntry = null;
+    list.forEach(function (en) {
+      if (/SKILL\.md$/i.test(en.name)) {
+        var depth = (en.name.match(/\//g) || []).length;
+        var cur = skillEntry ? (skillEntry.name.match(/\//g) || []).length : 1e9;
+        if (depth <= cur) skillEntry = en;
+      }
+    });
+    if (!skillEntry) throw new Error('技能包缺少 SKILL.md');
+    var skillMd = parseSkillMd(new TextDecoder('utf-8').decode(skillEntry.data));
+    var baseDir = skillEntry.name.split('/').slice(0, -1).join('/'); // skill 根目录（空=zip 根）
+    var refs = [], files = [];
+    list.forEach(function (en) {
+      if (en.name === skillEntry.name) return;
+      var inSkill = !baseDir || en.name.indexOf(baseDir + '/') === 0;
+      if (!inSkill) { files.push({ path: en.name, size: en.data.length }); return; } // 包外文件只登记
+      var rel = baseDir ? en.name.slice(baseDir.length + 1) : en.name;
+      if (/\.md$/i.test(rel) && !/^SKILL\.md$/i.test(rel) && rel.indexOf('/SKILL.md') < 0) {
+        refs.push({ path: en.name, text: new TextDecoder('utf-8').decode(en.data) });
+      } else if (!/\.md$/i.test(rel)) {
+        files.push({ path: en.name, size: en.data.length });
+      }
+    });
     var name = skillMd.name || 'skill-pack';
     return {
       id: name,   // id 保留原名（含中文），由 importSkillPack 做 slug 化+合法性兜底
@@ -26878,6 +26894,7 @@ function bind(el, next) {
       }
       // ② 场景匹配：when/summary 的中文双字（bigram）与用户输入相交即采用
       var stop = { 用户: 1, 需要: 1, 适用: 1, 场景: 1, 时候: 1, 可以: 1, 进行: 1, 对于: 1, 如果: 1, 或者: 1, 以及: 1, 使用: 1 };
+      var txtLow = txt.toLowerCase();
       for (var j = 0; j < sk.length; j++) {
         var w = ((sk[j].when || '') + ' ' + (sk[j].summary || ''));
         var grams = [];
@@ -26887,6 +26904,14 @@ function bind(el, next) {
         }
         for (var m = 0; m < grams.length; m++) {
           if (txt.indexOf(grams[m]) >= 0) return sk[j];
+        }
+        // 英文单词（忽略大小写；滤停用词）——支持英文 SKILL.md 的技能包
+        var enStop = { skill: 1, use: 1, user: 1, when: 1, for: 1, the: 1, and: 1, to: 1, of: 1, with: 1, that: 1, this: 1, you: 1, your: 1, is: 1, are: 1, or: 1, in: 1, on: 1, a: 1, an: 1, helps: 1, help: 1, needs: 1 };
+        var enWords = (w.match(/[a-zA-Z]{2,}/g) || []).filter(function (x) {
+          return !enStop[x.toLowerCase()];
+        });
+        for (var e2 = 0; e2 < enWords.length; e2++) {
+          if (txtLow.indexOf(enWords[e2].toLowerCase()) >= 0) return sk[j];
         }
       }
       return null;
