@@ -2160,6 +2160,14 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .mn-k { flex: 0 0 66px; font-weight: 600; color: var(--accent); }
 .mn-row b { color: var(--text-primary); }
 
+/* ============================================================
+ * 政治背诵强化（polrecite.js）：遗漏沉淀/排序加权/打印清单
+ * ============================================================ */
+.pr-gap { border: 1px dashed var(--line); border-left: 3px solid #722ed1; border-radius: var(--r-btn); padding: 6px 10px; margin-top: 8px; background: var(--surface); }
+.pr-gap-h { font-size: 12.5px; font-weight: 600; color: #722ed1; margin-bottom: 4px; }
+.pr-gap-row { font-size: 12.5px; line-height: 1.7; color: var(--text-secondary); }
+.pr-gap-row b { color: var(--danger); }
+
 </style>
 </head>
 <body>
@@ -26622,9 +26630,15 @@ function bind(el, next) {
   function hasAI() { return window.AI && AI.configured(); }
   function list() { return Store.get().polRecite || []; }
   function getOne(id) { return list().find(function (x) { return x.id === id; }); }
+  // 【④】待背排序加权：必背 > 熟悉 > 了解，易错次数多的优先（对齐押题引擎"薄弱优先"思想）
+  function reciteSortKey(p) {
+    const prio = { '必背': 0, '熟悉': 1, '了解': 2 };
+    return ((prio[p.priority] != null ? prio[p.priority] : 1) * 100) - Math.min(99, (p.wrongCount || 0));
+  }
   function dueItems() {
     // box 未满（盒5）且 due<=今日 才算到期待背（includeMastered:false = 满盒即毕业）
-    return list().filter(function (p) { return Spaced.isDue(p, { includeMastered: false }); });
+    return list().filter(function (p) { return Spaced.isDue(p, { includeMastered: false }); })
+      .sort(function (a, b) { return reciteSortKey(a) - reciteSortKey(b); });
   }
   function masteredCount() { return list().filter(function (p) { return (p.box || 1) >= 4; }).length; }
   // Leitner 评级（被作战台到期复习复用）；同时记录复习日志与易错次数
@@ -26715,9 +26729,12 @@ function bind(el, next) {
     const prioCls = p.priority === '必背' ? 'tag-prio' : (p.priority === '了解' ? 'tag-low' : '');
     const prio = p.priority ? '<span class="tag ' + prioCls + '">' + U.esc(p.priority) + '</span>' : '';
     const wrong = (p.wrongCount || 0) > 0 ? '<span class="tag tag-warn">错' + p.wrongCount + '</span>' : '';
+    // 【③】上次遗漏沉淀标签：遗漏要点/错词（卡片即显示，待巩固）
+    const gapN = (p.wrongPoints || []).length + (p.wrongKw || []).length;
+    const gapTag = gapN ? '<span class="tag" style="background:#722ed1;color:#fff">遗漏' + gapN + '</span>' : '';
     return '<div class="card pr-card" data-id="' + p.id + '">'
       + '<div class="pr-top"><div class="pr-topic">' + U.esc(p.topic || '（未命名大题）') + '</div>' + status + '</div>'
-      + '<div class="pr-meta"><span class="tag">' + U.esc(p.source || '自定义') + '</span>' + subj + yr + prio + wrong
+      + '<div class="pr-meta"><span class="tag">' + U.esc(p.source || '自定义') + '</span>' + subj + yr + prio + wrong + gapTag
       + '<span class="box-wrap" title="Leitner盒（越高越牢）">' + dots + '</span>'
       + (box < 5 ? '<span class="muted-sm" style="margin-left:auto">下次：' + U.esc(p.due || U.dkey()) + '</span>' : '') + '</div>'
       + (p.card ? '<div class="pr-card-line">🔑 ' + U.esc(p.card) + '</div>' : '')
@@ -26772,6 +26789,7 @@ function bind(el, next) {
       + (due.length ? '<button class="btn btn-primary btn-sm" id="pr-review">🔁 背一道待背</button>' : '')
       + '<button class="btn btn-ghost btn-sm" id="pr-batch">📥 批量</button>'
       + '<button class="btn btn-ghost btn-sm" id="pr-sample">✨ 载入示例</button>'
+      + '<button class="btn btn-ghost btn-sm" id="pr-print" title="打印/下载背诵清单（含答案页，可离线打印）">🖨 打印</button>'
       + '<button class="btn btn-ghost btn-sm" id="pr-add">＋ 添加</button></div>'
       + boxBarHtml()
       + '<div class="pr-filter"><select id="pr-srcf" class="input input-sm">' + srcOpts + '</select>'
@@ -26802,6 +26820,7 @@ function bind(el, next) {
     const sample = el.querySelector('#pr-sample'); if (sample) sample.onclick = loadExamples;
     const drill = el.querySelector('#pr-drill'); if (drill) drill.onclick = function () { startDrill(5); };
     const tts = el.querySelector('#pr-tts'); if (tts) tts.onclick = speakDue;
+    const prt = el.querySelector('#pr-print'); if (prt) prt.onclick = openPrintList;
     const srcf = el.querySelector('#pr-srcf'); if (srcf) srcf.onchange = function () { render(el); };
     const subjf = el.querySelector('#pr-subjf'); if (subjf) subjf.onchange = function () { render(el); };
     const priof = el.querySelector('#pr-priof'); if (priof) priof.onchange = function () { render(el); };
@@ -26924,12 +26943,23 @@ function bind(el, next) {
       const inputs = document.querySelectorAll('.st-blank');
       const total = inputs.length;
       if (!total) { Toast.warn('要点里没有出现这些关键词，无法挖空'); return; }
-      let ok = 0;
+      let ok = 0; const badKws = [];
       inputs.forEach(function (inp) {
         const correct = fuzzyMatch(inp.value, inp.getAttribute('data-kw'));
         if (correct) { ok++; inp.classList.add('st-ok'); }
-        else { inp.classList.add('st-bad'); inp.value = inp.getAttribute('data-kw'); inp.classList.add('st-reveal'); }
+        else { badKws.push(inp.getAttribute('data-kw')); inp.classList.add('st-bad'); inp.value = inp.getAttribute('data-kw'); inp.classList.add('st-reveal'); }
       });
+      // 【③】填错的关键词沉淀进 wrongKw（去重，上限 8），下次挖空/卡片优先显示
+      if (badKws.length) {
+        Store.update(function (s) {
+          const t = (s.polRecite || []).find(function (x) { return x.id === id; });
+          if (t) {
+            const cur = (t.wrongKw || []).slice();
+            badKws.forEach(function (k) { if (k && cur.indexOf(k) < 0) cur.push(k); });
+            t.wrongKw = cur.slice(-8);
+          }
+        });
+      }
       const known = ok === total, failed = ok === 0;
       if (known) grade(id, true);
       else if (failed) grade(id, false);
@@ -26961,10 +26991,18 @@ function bind(el, next) {
     document.getElementById('fl-speak').onclick = function () { speak((it.topic || '') + '。' + (it.points || []).join('。'), 1); };
     document.getElementById('fl-show').onclick = function () {
       const hintHtml = it.hint ? '<div class="pr-hint">💡 ' + U.esc(it.hint) + '</div>' : '';
+      // 【③】上次遗漏要点/错词沉淀展示（优先复习）
+      const wp = (it.wrongPoints || []), wk = (it.wrongKw || []);
+      const gapHtml = (wp.length || wk.length)
+        ? '<div class="pr-gap"><div class="pr-gap-h">🎯 上次遗漏（优先巩固）</div>'
+          + (wp.length ? '<div class="pr-gap-row">📄 ' + wp.map(U.esc).join('；') + '</div>' : '')
+          + (wk.length ? '<div class="pr-gap-row">🔑 ' + wk.map(function (k) { return '<b>' + U.esc(k) + '</b>'; }).join('、') + '</div>' : '')
+          + '</div>'
+        : '';
       const back = '<div class="flip-back"><div class="muted-sm">答案要点</div>'
         + it.points.map(function (p) { return '<div class="flip-pt">' + U.esc(p) + '</div>'; }).join('')
         + (it.card ? '<div class="flip-card">🔑 ' + U.esc(it.card) + '</div>' : '')
-        + hintHtml
+        + hintHtml + gapHtml
         + '<div class="flip-grade"><button class="btn btn-sm btn-primary" id="fl-yes">😎 记住了</button>'
         + '<button class="btn btn-sm btn-ghost" id="fl-no">🤔 没记住</button>'
         + '<button class="btn btn-sm btn-ghost" id="fl-speak2">🔊 朗读</button>'
@@ -26976,21 +27014,24 @@ function bind(el, next) {
       document.getElementById('fl-hint').onclick = function () { genHint(id); };
     };
   }
-  // ---------- AI 生成记忆口诀（已有条目） ----------
+  // ---------- AI 生成记忆口诀（已有条目，浮窗流式） ----------
   function genCard(id) {
     const it = getOne(id);
     if (!it) return;
     if (!hasAI()) { Toast.warn('未配置 AI，无法生成口诀'); return; }
+    const float = window.Components && Components.aiFloat ? Components.aiFloat('🔑 生成记忆口诀') : null;
+    if (float) float.status('⏳ 正在为「' + (it.topic || '').slice(0, 20) + '」生成口诀…');
     const prompt = '为这道考研政治大题生成一句好记的背诵口诀（顺口溜/谐音/数字串联均可），10-25字。只输出JSON对象：{"card":"一句口诀"}。'
       + '考点：' + (it.topic || '') + '；要点：' + it.points.join('；');
-    Toast.show('🤖 生成口诀中…', 'info');
-    AI.chatJSON('你是考研政治记忆口诀大师，只输出JSON对象。', prompt).then(function (r) {
+    AI.chatStream('你是考研政治记忆口诀大师，只输出JSON对象。', prompt, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 90000 }).then(function (full) {
+      const r = AI.extractRobustJSON(full);
       const card = (r && r.card) ? String(r.card).trim() : '';
       if (!card) throw new Error('未返回口诀');
       patchItem(id, { card: card });
+      if (float) float.done();
       Toast.success('口诀已生成：' + card.slice(0, 30));
       App.refresh();
-    }).catch(function (e) { Toast.warn('生成失败：' + e.message); });
+    }).catch(function (e) { if (float) float.fail(e.message || '生成失败'); Toast.warn('生成失败：' + (e && e.message ? e.message : String(e))); });
   }
   // ---------- 进度可视化 ----------
   function boxCounts() {
@@ -27094,12 +27135,21 @@ function bind(el, next) {
     const it = getOne(id);
     if (!it) return;
     const kws = (it.keywords && it.keywords.length) ? it.keywords : [];
+    // 【③】上次遗漏沉淀：默写前先展示，提醒优先补
+    const wp = (it.wrongPoints || []), wk = (it.wrongKw || []);
+    const gapHtml = (wp.length || wk.length)
+      ? '<div class="pr-gap" style="margin:8px 0"><div class="pr-gap-h">🎯 上次遗漏（先默写这些）</div>'
+        + (wp.length ? '<div class="pr-gap-row">📄 ' + wp.map(U.esc).join('；') + '</div>' : '')
+        + (wk.length ? '<div class="pr-gap-row">🔑 ' + wk.map(function (k) { return '<b>' + U.esc(k) + '</b>'; }).join('、') + '</div>' : '')
+        + '</div>'
+      : '';
     const hintTxt = hasAI()
       ? '遮住答案，凭记忆写出要点；提交后由 AI 按语义对比评分（失败回退关键词命中）。'
       : '遮住答案，凭记忆写出要点；提交后按关键词命中率评分。';
     Modal.open({
       title: '✍️ 默写：' + U.esc(it.topic),
       html: '<div class="muted-sm">' + hintTxt + '</div>'
+        + gapHtml
         + '<textarea id="wr-text" class="input" rows="6" placeholder="在此默背要点…"></textarea>'
         + '<div id="wr-msg"></div>'
         + '<button class="btn btn-primary" id="wr-submit" style="margin-top:10px">对照评分</button>',
@@ -27139,29 +27189,45 @@ function bind(el, next) {
     Toast.success('默写完成：' + hit + '/' + total);
     setTimeout(function () { Modal.close(); App.refresh(); }, 1300);
   }
-  // AI 语义评分：把用户默写与标准要点做语义对比，只输出 {score,hit,miss,comment}；失败回退关键词评分
+  // AI 语义评分（浮窗流式）：把用户默写与标准要点做语义对比，输出 {score,hit,miss,comment}；失败回退关键词评分
   function aiScoreWrite(id, text, box, it, kws) {
     const btn = document.getElementById('wr-submit');
     if (btn) { btn.disabled = true; btn.textContent = '🤖 AI 评分中…'; }
+    const float = window.Components && Components.aiFloat ? Components.aiFloat('✍️ 默写语义评分') : null;
+    if (float) float.status('⏳ 正在对比要点与你的默写…');
     const sys = '你是考研政治阅卷专家，按语义对比评分，只输出JSON对象，不要任何多余文字。';
     const user = '考点：' + (it.topic || '') + '\n标准答案要点：\n' + (it.points || []).map(function (p, i) { return (i + 1) + '. ' + p; }).join('\n')
       + '\n考生默写：\n' + (text || '（未作答）').slice(0, 1200)
       + '\n请按语义对比评分（要点命中程度 + 表述完整度），只输出JSON：{"score":0到100的整数,"hit":["命中的要点"],"miss":["遗漏的要点"],"comment":"简评30字内"}。';
-    AI.chatJSON(sys, user, null, { cache: false }).then(function (r) {
+    AI.chatStream(sys, user, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 120000 }).then(function (full) {
+      const r = AI.extractRobustJSON(full);
       const score = U.clamp(Math.round(Number(r.score)), 0, 100);
       const hit = Array.isArray(r.hit) ? r.hit.map(String).filter(Boolean) : [];
       const miss = Array.isArray(r.miss) ? r.miss.map(String).filter(Boolean) : [];
       const comment = r.comment ? String(r.comment) : '';
       const known = score >= 60;
       grade(id, known);
+      // 【③】遗漏要点沉淀：miss 追加进 wrongPoints（去重，上限 8），卡片/默写页显示
+      if (miss.length) {
+        Store.update(function (s) {
+          const t = (s.polRecite || []).find(function (x) { return x.id === id; });
+          if (t) {
+            const cur = (t.wrongPoints || []).slice();
+            miss.forEach(function (m) { const mm = String(m || '').trim(); if (mm && cur.indexOf(mm) < 0) cur.push(mm); });
+            t.wrongPoints = cur.slice(-8);
+          }
+        });
+      }
       const cls = score >= 80 ? 'alert-ok' : (score >= 60 ? 'alert-warn' : 'alert-danger');
       box.innerHTML = '<div class="pr-write-ai"><div class="alert ' + cls + '">AI 语义评分：' + score + ' 分' + (known ? '，已记牢一层 🎉' : '，已重置第 1 盒') + '</div>'
         + (hit.length ? '<div class="muted-sm"><b>命中要点：</b>' + hit.map(U.esc).join('、') + '</div>' : '')
-        + (miss.length ? '<div class="muted-sm"><b>遗漏要点：</b>' + miss.map(U.esc).join('、') + '</div>' : '')
+        + (miss.length ? '<div class="muted-sm"><b>遗漏要点：</b>' + miss.map(U.esc).join('、') + '<span style="color:var(--danger)">（已沉淀，下次优先复习）</span></div>' : '')
         + (comment ? '<div class="muted-sm"><b>简评：</b>' + U.esc(comment) + '</div>' : '') + '</div>';
+      if (float) float.done();
       Toast.success('AI 评分完成：' + score + ' 分');
-      setTimeout(function () { Modal.close(); App.refresh(); }, 1800);
+      setTimeout(function () { Modal.close(); App.refresh(); }, 2200);
     }).catch(function (e) {
+      if (float) float.fail((e && e.message) || '评分失败');
       Toast.warn('AI 评分失败，回退关键词评分');
       if (btn) { btn.disabled = false; btn.textContent = '对照评分'; }
       keywordScoreWrite(id, text, box, it, kws);
@@ -27224,6 +27290,83 @@ function bind(el, next) {
     }).join(' ');
     speak(text, 1);
     Toast.show('🔊 朗读 ' + Math.min(5, items.length) + ' 道待背', 'info');
+  }
+  // ---------- 打印背诵清单（三模式：题目+答案 / 挖空自测 / 仅题目） ----------
+  function printListHtml(mode) {
+    const all = list().slice();
+    const prioRank = { '必背': 0, '熟悉': 1, '了解': 2 };
+    all.sort(function (a, b) {
+      const pa = prioRank[a.priority] != null ? prioRank[a.priority] : 1;
+      const pb = prioRank[b.priority] != null ? prioRank[b.priority] : 1;
+      if (pa !== pb) return pa - pb;
+      return ((b.wrongCount || 0) - (a.wrongCount || 0)) || (a.topic || '').localeCompare(b.topic || '', 'zh');
+    });
+    const rows = all.map(function (p, i) {
+      const ansHtml = mode === 'onlyQ'
+        ? ''
+        : '<div style="margin:6px 0 12px;color:#333">' + (p.points || []).map(function (pt, j) {
+            if (mode === 'blank') return '<div style="margin:2px 0">' + (j + 1) + '. ' + blanked(pt, p.keywords || []) + '</div>';
+            return '<div style="margin:2px 0">' + (j + 1) + '. ' + U.esc(pt) + '</div>';
+          }).join('') + '</div>';
+      const meta = [p.source, p.subject, p.priority, p.year].filter(Boolean).map(U.esc).join(' · ');
+      return '<div style="margin-bottom:12px;page-break-inside:avoid"><div style="font-weight:600">' + (i + 1) + '. ' + U.esc(p.topic || '（未命名大题）')
+        + (meta ? ' <span style="font-weight:400;color:#666;font-size:12px">' + meta + '</span>' : '')
+        + (p.wrongCount ? ' <span style="color:#c00;font-size:12px">（易错' + p.wrongCount + '次）</span>' : '')
+        + '</div>' + ansHtml + '</div>';
+    }).join('');
+    const modeName = mode === 'blank' ? '挖空自测版' : (mode === 'onlyQ' ? '仅题目版' : '题目+答案版');
+    const html = '<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>政治背诵清单（' + modeName + '）</title>'
+      + '<style>body{font-family:SimSun,serif;max-width:720px;margin:24px auto;padding:0 20px;color:#111;line-height:1.8}'
+      + 'h1{font-size:18px;text-align:center}.meta{text-align:center;color:#555;font-size:13px;margin:6px 0 14px}'
+      + 'input.st-blank{border:none;border-bottom:1px solid #333;outline:none;font-size:15px;padding:0 4px;background:transparent;color:transparent;caret-color:#333}'
+      + 'input.st-blank::selection{background:transparent}'
+      + '</style></head><body>'
+      + '<h1>政治背诵清单</h1>'
+      + '<div class="meta">共 ' + all.length + ' 道 · ' + modeName + ' · 打印时间 ' + new Date().toLocaleDateString() + '</div>'
+      + '<div style="border-bottom:1px solid #999;margin-bottom:14px;padding-bottom:6px">姓名：______　自评：______</div>'
+      + rows
+      + '</bo' + 'dy></ht' + 'ml>';
+    return { html: html, name: '政治背诵清单_' + modeName + '_' + U.dkey() + '.html' };
+  }
+  function openPrintList() {
+    const all = list();
+    if (!all.length) { Toast.warn('还没有大题，先录入或载入示例'); return; }
+    Modal.open({
+      title: '🖨 打印 / 下载背诵清单',
+      html: '<div class="form-col">'
+        + '<div class="muted-sm">选择打印模式：<b>题目+答案</b> 完整对照背诵；<b>挖空自测版</b> 关键词挖空默写（有答案页的题才挖）；<b>仅题目版</b> 纯题目当答题纸。排序：必背 > 熟悉 > 了解，易错次数多的靠前。</div>'
+        + '<label class="fld fld-full"><span>打印模式</span><select id="pr-print-mode" class="input">'
+        + '<option value="full">📖 题目 + 答案（对照背诵）</option>'
+        + '<option value="blank">✏️ 挖空自测版（默写关键词）</option>'
+        + '<option value="onlyQ">📄 仅题目版（当答题纸）</option></select></label>'
+        + '<div class="btn-row" style="margin-top:8px">'
+        + '<button class="btn btn-primary" id="pr-print-go">🖨 打印</button>'
+        + '<button class="btn btn-ghost" id="pr-print-dl">⬇️ 下载 HTML</button></div>'
+        + '<div class="muted-sm" style="margin-top:6px">打印：新窗口打开并唤起打印对话框（可另存为 PDF）。下载：保存独立 HTML 文件，可离线打开再打印。</div>'
+        + '</div>',
+      actions: [{ label: '关闭' }]
+    });
+    document.getElementById('pr-print-go').onclick = function () {
+      const mode = document.getElementById('pr-print-mode').value;
+      const w = window.open('', '_blank');
+      if (!w) { Toast.warn('浏览器拦截了新窗口，请允许弹窗后重试'); return; }
+      const doc = printListHtml(mode);
+      w.document.write(doc.html); w.document.close();
+      setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 350);
+    };
+    document.getElementById('pr-print-dl').onclick = function () {
+      const mode = document.getElementById('pr-print-mode').value;
+      const doc = printListHtml(mode);
+      try {
+        const blob = new Blob([doc.html], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = doc.name;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+        Toast.success('已下载：' + doc.name);
+      } catch (e) { Toast.warn('下载失败：' + ((e && e.message) || String(e))); }
+    };
   }
   // ---------- 载入示例（不自动播种，按需一键） ----------
   function loadExamples() {
@@ -27338,14 +27481,16 @@ function bind(el, next) {
       } }]
     });
   }
-  // ---------- AI 易混点 / 答题模板 ----------
+  // ---------- AI 易混点 / 答题模板（浮窗流式） ----------
   function genHint(id) {
     const it = getOne(id);
     if (!it) return;
     if (!hasAI()) { Toast.warn('未配置 AI，无法生成提示'); return; }
-    Toast.show('🤖 生成易混/模板提示中…', 'info');
+    const float = window.Components && Components.aiFloat ? Components.aiFloat('💡 生成易混/模板提示') : null;
+    if (float) float.status('⏳ 分析易混点与答题模板…');
     const prompt = '你是考研政治辅导专家。针对这道分析题，给出：①1-2个易混易错点（概念混淆、审题陷阱）；②一句答题模板（破题思路，如"是什么-为什么-怎么做"）。只输出JSON对象：{"hint":"易混点与模板，80字内"}。考点：' + (it.topic || '') + '；要点：' + (it.points || []).join('；');
-    AI.chatJSON('你是考研政治辅导专家，只输出JSON对象。', prompt).then(function (r) {
+    AI.chatStream('你是考研政治辅导专家，只输出JSON对象。', prompt, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 90000 }).then(function (full) {
+      const r = AI.extractRobustJSON(full);
       const hint = (r && r.hint) ? String(r.hint).trim() : '';
       if (!hint) throw new Error('未返回提示');
       patchItem(id, { hint: hint });
@@ -27356,16 +27501,18 @@ function bind(el, next) {
         el.textContent = U.icon('bulb') + ' ' + hint;
         box.querySelector('.flip-back').appendChild(el);
       }
+      if (float) float.done();
       Toast.success('提示已生成');
       App.refresh();
-    }).catch(function (e) { Toast.warn('生成失败：' + e.message); });
+    }).catch(function (e) { if (float) float.fail(e.message || '生成失败'); Toast.warn('生成失败：' + (e && e.message ? e.message : String(e))); });
   }
   // ---------- 抽背组卷（单弹窗连续翻面） ----------
   function startDrill(n) {
     let pool = dueItems();
     if (!pool.length) pool = list().slice();
     if (!pool.length) { Toast.warn('还没有大题，先录入或载入示例'); return; }
-    pool = pool.slice().sort(function () { return Math.random() - 0.5; });
+    // 【④】抽背按 优先级+易错 加权排序（不纯随机）：先把最该背的抽出来
+    pool = pool.slice().sort(function (a, b) { return reciteSortKey(a) - reciteSortKey(b); });
     const picks = pool.slice(0, Math.min(n, pool.length));
     let idx = 0;
     Modal.open({ title: '🎲 抽背（' + picks.length + ' 道）', html: '<div id="drill-box"></div>', actions: [{ label: '退出' }] });
@@ -27834,6 +27981,7 @@ function bind(el, next) {
     const srcOpts = '<option value="">全部来源</option>' + SOURCES.map(function (x) { return '<option value="' + x + '">' + x + '</option>'; }).join('');
     const header = '<div class="card"><div class="card-title-row"><span class="card-title">🔘 选择题练习</span>'
       + '<button class="btn btn-primary btn-sm" id="pr-ch-drill">🎲 开始刷题</button>'
+      + (wrong.length ? '<button class="btn btn-ghost btn-sm" id="pr-ch-redo" title="只刷做错过的题，直到过关">🔁 重刷错题(' + wrong + ')</button>' : '')
       + '<button class="btn btn-ghost btn-sm" id="pr-ch-ai">🤖 AI 批量出题</button>'
       + '<button class="btn btn-ghost btn-sm" id="pr-ch-add">＋ 添加</button></div>'
       + '<div class="pr-filter"><select id="pr-ch-subjf" class="input input-sm">' + subjOpts + '</select>'
@@ -27848,6 +27996,7 @@ function bind(el, next) {
   }
   function bindChoice(el) {
     const drill = el.querySelector('#pr-ch-drill'); if (drill) drill.onclick = function () { startChoiceDrill(5); };
+    const redo = el.querySelector('#pr-ch-redo'); if (redo) redo.onclick = function () { startChoiceDrill(5, { wrongOnly: true }); };
     const ai = el.querySelector('#pr-ch-ai'); if (ai) ai.onclick = openChoiceGen;
     const add = el.querySelector('#pr-ch-add'); if (add) add.onclick = openChoiceAdd;
     const subjf = el.querySelector('#pr-ch-subjf'); if (subjf) subjf.onchange = function () { render(el); };
@@ -28055,14 +28204,18 @@ function bind(el, next) {
   }
   // 保留旧函数名引用（防止其他入口调用报错）；实际入口已改为 openChoiceGen
   function genChoiceAI() { openChoiceGen(); }
-  // 选择题连续刷题（单弹窗逐题，参照 startDrill）
-  function startChoiceDrill(n) {
+  // 选择题连续刷题（单弹窗逐题，参照 startDrill）；opts.wrongOnly 只刷做错过的题
+  function startChoiceDrill(n, opts) {
     let pool = dueChoice();
     if (!pool.length) pool = choiceList().slice();
     if (!pool.length) { Toast.warn('还没有选择题，先添加或让 AI 出题'); return; }
+    if (opts && opts.wrongOnly) {
+      pool = choiceList().filter(function (q) { return (q.wrongCount || 0) > 0; });
+      if (!pool.length) { Toast.warn('没有错题，继续加油 🎉'); return; }
+    }
     pool = pool.slice().sort(function () { return Math.random() - 0.5; });
     const picks = pool.slice(0, Math.min(n, pool.length));
-    Modal.open({ title: '🎲 选择题刷题（' + picks.length + ' 题）', html: '<div id="ch-drill-box"></div>', actions: [{ label: '退出' }] });
+    Modal.open({ title: '🎲 选择题刷题（' + picks.length + ' 题）' + (opts && opts.wrongOnly ? '· 错题重刷' : ''), html: '<div id="ch-drill-box"></div>', actions: [{ label: '退出' }] });
     function show(i) {
       if (i >= picks.length) { const b = document.getElementById('ch-drill-box'); if (b) b.innerHTML = '<div class="alert alert-ok">🎉 刷题完成，共 ' + picks.length + ' 题</div>'; Toast.success('刷题完成'); return; }
       const q = getChoice(picks[i].id);
@@ -28114,7 +28267,7 @@ function bind(el, next) {
     }
     show(0);
   }
-  window.PolReciteModule = { render: render, grade: grade, openReview: openFlip, openSelfTest: openSelfTest, openWrite: openWrite, startDrill: startDrill, isChoiceMulti: isChoiceMulti, choiceAnswer: choiceAnswer, choicePickedRight: choicePickedRight, sanitizeChoice: sanitizeChoice };
+  window.PolReciteModule = { render: render, grade: grade, openReview: openFlip, openSelfTest: openSelfTest, openWrite: openWrite, startDrill: startDrill, isChoiceMulti: isChoiceMulti, choiceAnswer: choiceAnswer, choicePickedRight: choicePickedRight, sanitizeChoice: sanitizeChoice, reciteSortKey: reciteSortKey, printListHtml: printListHtml };
 })();
 
 /* ===== js/app.js ===== */
