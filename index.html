@@ -26790,6 +26790,7 @@ function bind(el, next) {
   var userMsgSinceReflect = 0;
   var hasGreeted = false;
   var pendingImage = null;   // 待发送图片 dataUrl（不持久化，随下条消息发出）
+  var pendingAttach = null;  // 待发送附件 {name, text, pdf?}（不持久化，随下条消息发出）
   var GREET_KEY = 'kaoyan2026_copilot_greet'; // 主动开场按天一次（本地标记，不进云同步）
 
   // ---------- 上下文快照（注入系统提示词，让 AI 看得见你的当下） ----------
@@ -26850,6 +26851,7 @@ function bind(el, next) {
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
       + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
       + '\n【服从性·最高优先级】用户说“用XX/给我/帮我/去/直接”等明确指令时＝命令：立即照做，不要顶嘴、不要反问“你确定吗/要不要我”、不要先长篇解释理由；最多用一句简短确认（如“好，用XX”）然后直接执行或输出结果。'
+      + '\n【附件】用户可能附加文件（txt/md/json/pdf），文件内容会以【附件：文件名】形式出现在消息中：必须基于附件内容作答；PDF 的文字是本地提取的（公式/排版可能变形），按文字理解即可，不要假装看到格式。'
       + '\n红线：发现“二战/摆烂/明天再学”等言论立即制止。用简体中文。'
       + (function () {
         // 【插件】注入插件注册的 AI 技能触发词清单：教练识别后调插件动作或直接引用技能上下文
@@ -27363,9 +27365,12 @@ function bind(el, next) {
       + '<div class="cp-msgs" id="cp-msgs"></div>'
       + '<div class="cp-quick" id="cp-quick"></div>'
       + '<div class="cp-imgbar" id="cp-imgbar"><img id="cp-img-thumb" alt="待发送图片"><span class="muted-sm" style="flex:1">已附图，随下一条消息发送</span><button class="cp-img-del" id="cp-img-del" aria-label="移除图片">×</button></div>'
+      + '<div class="cp-imgbar" id="cp-docbar"><span class="muted-sm" style="flex:1" id="cp-doc-name">📎 已附加文档，随下一条消息发送</span><button class="cp-img-del" id="cp-doc-del" aria-label="移除文档">×</button></div>'
       + '<div class="cp-input">'
       + '<button class="cp-attach" id="cp-attach" title="拍题/传图问 AI">' + U.icon('snap') + '</button>'
+      + '<button class="cp-attach" id="cp-attach-file" title="附加文件（txt/md/json/pdf）">📎</button>'
       + '<input type="file" id="cp-file" accept="image/*" style="display:none">'
+      + '<input type="file" id="cp-file-doc" accept=".txt,.md,.json,.pdf,text/plain,application/pdf" style="display:none">'
       + '<textarea id="cp-text" rows="1" placeholder="和教练聊聊…（Enter 发送）"></textarea>'
       + '<button id="cp-send" class="btn btn-primary">发送</button>'
       + '</div>';
@@ -27388,6 +27393,18 @@ function bind(el, next) {
     document.getElementById('cp-img-del').onclick = function () {
       pendingImage = null;
       document.getElementById('cp-imgbar').classList.remove('cp-has');
+    };
+    // 【附件】📎 文件：txt/md/json 直读文本；pdf 本地提取文字（pdf.js CDN 懒加载，离线降级提示）
+    document.getElementById('cp-attach-file').onclick = function () { document.getElementById('cp-file-doc').click(); };
+    document.getElementById('cp-file-doc').onchange = function (e) {
+      var f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      attachDocFile(f);
+    };
+    document.getElementById('cp-doc-del').onclick = function () {
+      pendingAttach = null;
+      document.getElementById('cp-docbar').classList.remove('cp-has');
     };
     var ta = document.getElementById('cp-text');
     ta.onkeydown = function (e) {
@@ -27611,10 +27628,106 @@ function bind(el, next) {
   function doSend() {
     var ta = document.getElementById('cp-text');
     var text = ta.value.trim();
-    if (!text) return;
+    if (!text && !pendingAttach) return;
     ta.value = '';
     ta.style.height = 'auto';
     sendText(text);
+  }
+
+  // ---------- 附件处理：txt/md/json 直读；pdf 本地提取文字 ----------
+  function attachDocFile(f) {
+    var name = f.name || 'attachment';
+    var bar = document.getElementById('cp-docbar');
+    var nameEl = document.getElementById('cp-doc-name');
+    if (!/\.pdf$/i.test(name)) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        pendingAttach = { name: name, text: String(reader.result || '').slice(0, 30000) };
+        if (nameEl) nameEl.textContent = '📎 ' + name + '（' + Math.round((reader.result || '').length / 1024) + ' KB）';
+        if (bar) bar.classList.add('cp-has');
+        Toast.show('已附加：' + name, 'success', 1800);
+      };
+      reader.onerror = function () { Toast.show('文件读取失败', 'warn'); };
+      reader.readAsText(f, 'utf-8');
+    } else {
+      extractPdfText(f).then(function (txt) {
+        if (!txt || !txt.trim()) {
+          Toast.show('PDF 未提取到文字（可能是扫描件/图片版），可截图发我', 'warn', 4000);
+          return;
+        }
+        pendingAttach = { name: name, text: txt.slice(0, 30000), pdf: true };
+        if (nameEl) nameEl.textContent = '📎 ' + name + '（PDF 已提取 ' + txt.length + ' 字）';
+        if (bar) bar.classList.add('cp-has');
+        Toast.show('PDF 文字已提取 ' + txt.length + ' 字', 'success', 2500);
+      }).catch(function (err) {
+        Toast.show('PDF 解析失败：' + (err && err.message || err) + '。可把文字复制粘贴，或截图发我', 'warn', 5000);
+      });
+    }
+  }
+
+  // pdf.js CDN 懒加载（联网加载一次，失败降级提示——与 Mermaid 懒加载同模式）
+  var pdfjsPromise = null;
+  function ensurePdfjs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfjsPromise) return pdfjsPromise;
+    pdfjsPromise = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      s.onload = function () {
+        try {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          resolve(window.pdfjsLib);
+        } catch (e) { reject(e); }
+      };
+      s.onerror = function () { pdfjsPromise = null; reject(new Error('pdf.js 加载失败（需联网一次）')); };
+      document.head.appendChild(s);
+    });
+    return pdfjsPromise;
+  }
+  function extractPdfText(f) {
+    return ensurePdfjs().then(function (pdfjs) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          pdfjs.getDocument({ data: reader.result }).promise.then(function (doc) {
+            var texts = [];
+            var pages = Math.min(doc.numPages, 30);
+            var chain = Promise.resolve();
+            for (var i = 1; i <= pages; i++) {
+              (function (pg) {
+                chain = chain.then(function () {
+                  return doc.getPage(pg).then(function (page) {
+                    return page.getTextContent().then(function (tc) {
+                      var lines = [], lastY = null;
+                      tc.items.forEach(function (it) {
+                        if (it.str) {
+                          if (lastY != null && Math.abs(it.transform[5] - lastY) > 3) lines.push('\n');
+                          lines.push(it.str);
+                          lastY = it.transform[5];
+                        }
+                      });
+                      texts.push('\n===== 第 ' + pg + ' 页 =====\n' + lines.join(''));
+                    });
+                  });
+                });
+              })(i);
+            }
+            chain.then(function () { resolve(texts.join('\n')); }).catch(reject);
+          }).catch(reject);
+        };
+        reader.onerror = function () { reject(new Error('PDF 文件读取失败')); };
+        reader.readAsArrayBuffer(f);
+      });
+    });
+  }
+
+  // 组装 user 消息（附件注入：纯函数，便于单测）
+  function composeUserPayload(convoText, skillBlock, attach, img, text) {
+    var attachBlock = attach && attach.text
+      ? '【附件：' + attach.name + '（文件内容已附上，基于它回答）】\n' + attach.text.slice(0, 8000) + '\n\n'
+      : '';
+    return (convoText ? '【近期对话】\n' + convoText + '\n\n' : '') + skillBlock + attachBlock
+      + '考生：' + (img ? '（发来一张题目图片）' : '') + text;
   }
 
   function sendText(text) {
@@ -27626,7 +27739,12 @@ function bind(el, next) {
       pendingImage = null;
       document.getElementById('cp-imgbar').classList.remove('cp-has');
     }
-    pushHistory('user', (img ? '[图片] ' : '') + text);
+    var attach = pendingAttach;
+    if (attach) {
+      pendingAttach = null;
+      document.getElementById('cp-docbar').classList.remove('cp-has');
+    }
+    pushHistory('user', (img ? '[图片] ' : '') + (attach ? '[附件:' + attach.name + '] ' : '') + text);
     userMsgSinceReflect++;
     renderMessages();
 
@@ -27648,7 +27766,7 @@ function bind(el, next) {
     var skillBlock = skillHit
       ? '【技能指令·你必须按此方法处理当前请求】\n' + (skillHit.prompt || '') + '\n\n'
       : '';
-    var userPayload = (convoText ? '【近期对话】\n' + convoText + '\n\n' : '') + skillBlock + '考生：' + (img ? '（发来一张题目图片）' : '') + text;
+    var userPayload = composeUserPayload(convoText, skillBlock, attach, img, text);
 
     AI.chatStream(systemPrompt(), userPayload, function (full) {
       bubble.innerHTML = renderContent(full || '') + '<span class="ai-cursor"></span>';
@@ -27720,6 +27838,7 @@ function bind(el, next) {
     parseActions: parseActions,
     actionLabel: actionLabel,
     matchSkill: matchSkill,
+    composeUserPayload: composeUserPayload,
     actionTypes: function () { return Object.keys(ACTIONS); },
     get isOpen() { return isOpen; }
   };
