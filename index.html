@@ -2190,6 +2190,13 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .plg-panel-b { flex: 1; overflow: auto; padding: 10px; font-size: 13px; line-height: 1.7; }
 .plg-panel-folded { height: auto !important; }
 
+/* 教练技能加载标记 + AI 回复导出 */
+.cp-skill-tag { display: inline-block; font-size: 11px; color: var(--blue); border: 1px solid var(--blue);
+  border-radius: 20px; padding: 1px 8px; margin-bottom: 5px; background: var(--surface); }
+.cp-dlbar { margin-top: 2px; }
+.cp-dl { border: none; background: none; color: var(--text-muted); font-size: 11px; cursor: pointer; padding: 2px 4px; }
+.cp-dl:hover { color: var(--text-primary); text-decoration: underline; }
+
 </style>
 </head>
 <body>
@@ -26883,13 +26890,14 @@ function bind(el, next) {
   }
 
   // ---------- 技能匹配（运行时加载用） ----------
-  // ① 点名：用户输入含技能触发词 → 命中；② 场景匹配：用户输入命中技能「适用场景/摘要」的中文双字 → 命中
-  function matchSkill(userText) {
+  // ① 点名：用户输入/附件名含技能触发词 → 命中；② 场景匹配：命中技能「适用场景/摘要」的中文双字或英文单词 → 命中
+  function matchSkill(userText, attachName) {
     try {
-      if (!userText || !window.PluginBus) return null;
+      if (!window.PluginBus) return null;
       var sk = window.PluginBus.skills();
       if (!sk.length) return null;
-      var txt = String(userText);
+      var txt = String(userText || '');
+      if (attachName) txt += ' ' + String(attachName);   // 附件名参与匹配（如 math-lecture-pdf.pdf 含 lecture/pdf）
       // ① 点名优先：含「技能名」或「/技能名」
       for (var i = 0; i < sk.length; i++) {
         if (txt.indexOf(sk[i].trigger) >= 0) return sk[i];
@@ -27464,16 +27472,22 @@ function bind(el, next) {
         + '</div>';
       return;
     }
-    box.innerHTML = msgs.map(function (m) {
+    var lastAiIdx = -1;
+    msgs.forEach(function (m, i) { if (m.role === 'assistant') lastAiIdx = i; });
+    box.innerHTML = msgs.map(function (m, mi) {
       if (m.role === 'user') {
         var hasImg = m.content.indexOf('[图片] ') === 0;
         var txt = hasImg ? m.content.slice(5) : m.content;
         return '<div class="cp-row cp-user"><div class="cp-bubble">' + (hasImg ? '<span class="cp-img-ph">' + U.icon('snap') + ' 图片</span>' : '') + U.esc(txt) + '</div></div>';
       }
       var acts = parseActions(m.content);
+      // 仅最新一条 AI 回复显示「存为文件」按钮（讲义生成后一键落盘）
+      var dlBtn = (mi === lastAiIdx)
+        ? '<div class="cp-dlbar"><button class="cp-dl" data-mi="' + mi + '" title="把这条回复存为 Markdown 文件（可打印/转 PDF）">⬇️ 存为 Markdown</button></div>'
+        : '';
       return '<div class="cp-row cp-ai"><div class="cp-bubble">' + renderContent(m.content)
         + (acts.length ? '<div class="cp-actions">' + acts.map(function (a, i) { return '<button class="cp-act" data-ai="' + i + '">' + U.esc(actionLabel(a)) + '</button>'; }).join('') + '</div>' : '')
-        + '</div></div>';
+        + '</div>' + dlBtn + '</div>';
     }).join('');
     // 绑定历史动作按钮
     var rows = box.querySelectorAll('.cp-row.cp-ai');
@@ -27484,6 +27498,22 @@ function bind(el, next) {
       row.querySelectorAll('.cp-act').forEach(function (b) {
         b.onclick = function () { executeAction(acts[+b.getAttribute('data-ai')], b); };
       });
+    });
+    // 【导出】最新 AI 回复 → 存为 Markdown 文件（讲义落盘：可打印/转 PDF）
+    box.querySelectorAll('.cp-dl').forEach(function (b) {
+      b.onclick = function () {
+        var m = msgs[+b.getAttribute('data-mi')];
+        if (!m || !m.content) return;
+        var clean = String(m.content).replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').trim();
+        var blob = new Blob([clean], { type: 'text/markdown;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = '讲义_' + U.dkey() + '.md';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+        Toast.show('已保存为 Markdown（可打印/转 PDF）', 'success', 2500);
+      };
     });
     box.scrollTop = box.scrollHeight;
   }
@@ -27749,20 +27779,23 @@ function bind(el, next) {
     renderMessages();
 
     var box = document.getElementById('cp-msgs');
+    // 【技能运行时加载】在创建气泡前匹配（附件名也参与：用户发 math-lecture-pdf.pdf + 说"做讲义"，
+    // 文件名里的 lecture/pdf 也能命中技能）
+    var skillHit = matchSkill(text, attach ? attach.name : '');
     var row = document.createElement('div');
     row.className = 'cp-row cp-ai';
-    row.innerHTML = '<div class="cp-bubble"><span class="cp-thinking">思考中</span><span class="ai-cursor"></span></div>';
+    row.innerHTML = '<div class="cp-bubble">'
+      + (skillHit ? '<div class="cp-skill-tag">🧠 已加载技能：' + U.esc(skillHit.title || skillHit.trigger) + '</div>' : '')
+      + '<span class="cp-thinking">思考中</span><span class="ai-cursor"></span></div>';
     box.appendChild(row);
     box.scrollTop = box.scrollHeight;
     var bubble = row.querySelector('.cp-bubble');
+    if (skillHit) Toast.show('🧠 已加载技能：「' + (skillHit.title || skillHit.trigger) + '」', 'info', 2500);
 
     var sysMsgs = history().slice(-12); // 近12条作为对话上下文
     var convoText = sysMsgs.slice(0, -1).map(function (m) {
       return (m.role === 'user' ? '考生' : '教练') + '：' + m.content;
     }).join('\n');
-    // 【技能运行时加载】用户点名（含「XX技能」/「/XX」/技能名）或请求匹配技能适用场景时，
-    // 把该技能完整指令（SKILL.md 全文 + 参考）注入当次请求——教练真正"按技能方法"执行，而非泛泛而谈
-    var skillHit = matchSkill(text);
     var skillBlock = skillHit
       ? '【技能指令·你必须按此方法处理当前请求】\n' + (skillHit.prompt || '') + '\n\n'
       : '';
