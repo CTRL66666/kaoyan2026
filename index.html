@@ -26933,6 +26933,7 @@ function bind(el, next) {
       + '定时提醒 [[ACTION:{"type":"addReminder","text":"提醒内容","hours":2}]]（hours 几小时后，或用 "time":"20:00" 今天/明天该时刻）。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
       + '\n【多步任务流】用户请求需要「3 个及以上连续操作」时（如“安排今晚复习”“帮我走完一轮单词+错题+复盘”），不要逐条给动作，改为输出一个计划：[[FLOW:{"title":"计划名","steps":[{"type":"动作","参数"...},...]}]]，steps 每项就是上面动作协议里的一个动作对象（type 用上面定义的：addTask/planDay/toggleTask/goto/addReminder/startQuiz 等，最多 8 步）。输出 FLOW 时正文只写一句话说明计划，不要同时再输出 [[ACTION:]]。简单请求仍用单动作 [[ACTION:...]]。'
+      + '\n【主动查数据】当用户问的数据不在【考生实时状态】里时（如“我英语正确率多少”“错题有几条”“连续打卡几天了”），回复末尾输出 [[QUERY:{"what":"查询键"}]] 查一次（多个键用逗号，如 "mathAccuracy,streak"），系统会把结果回填给你，下一条消息基于结果作答。可查键：mathAccuracy/engAccuracy/polProgress/dueCount/mistakeCount/streak/todayHours/weekHours/vocabCount/weakAreas/topErr/mood/tasks。查不到就用你能拿到的数据作答，不要编造。'
       + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
       + '\n【服从性·最高优先级】用户说“用XX/给我/帮我/去/直接”等明确指令时＝命令：立即照做，不要顶嘴、不要反问“你确定吗/要不要我”、不要先长篇解释理由；最多用一句简短确认（如“好，用XX”）然后直接执行或输出结果。'
       + '\n【附件】用户可能附加文件（txt/md/json/pdf），文件内容会以【附件：文件名】形式出现在消息中：必须基于附件内容作答；PDF 的文字是本地提取的（公式/排版可能变形），按文字理解即可，不要假装看到格式。'
@@ -27024,7 +27025,7 @@ function bind(el, next) {
 
   // ---------- 消息渲染（TeX + 动作按钮 + 任务流剥离） ----------
   function renderContent(text) {
-    var clean = text.replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').replace(/\[\[FLOW:[\s\S]*?\]\]/g, '').trim();
+    var clean = text.replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').replace(/\[\[FLOW:[\s\S]*?\]\]/g, '').replace(/\[\[QUERY:[\s\S]*?\]\]/g, '').trim();
     var html = U.esc(clean);
     try { html = Tex.renderInline(html); } catch (e) { }
     return html.replace(/\n/g, '<br>');
@@ -27625,6 +27626,7 @@ function bind(el, next) {
     var lastAiIdx = -1;
     msgs.forEach(function (m, i) { if (m.role === 'assistant') lastAiIdx = i; });
     box.innerHTML = msgs.map(function (m, mi) {
+      if (m.role === 'system') return '';   // 数据查询结果等系统记录：不进 UI，仅作上下文
       if (m.role === 'user') {
         var hasImg = m.content.indexOf('[图片] ') === 0;
         var txt = hasImg ? m.content.slice(5) : m.content;
@@ -27640,9 +27642,9 @@ function bind(el, next) {
         + (acts.length ? '<div class="cp-actions">' + acts.map(function (a, i) { return '<button class="cp-act" data-ai="' + i + '">' + U.esc(actionLabel(a)) + '</button>'; }).join('') + '</div>' : '')
         + '</div>' + flowCard + dlBtn + '</div>';
     }).join('');
-    // 绑定历史动作按钮
+    // 绑定历史动作按钮（仅 assistant，排除 user/system，与渲染的 AI 气泡一一对应）
     var rows = box.querySelectorAll('.cp-row.cp-ai');
-    msgs.filter(function (m) { return m.role !== 'user'; }).forEach(function (m, ri) {
+    msgs.filter(function (m) { return m.role === 'assistant'; }).forEach(function (m, ri) {
       var acts = parseActions(m.content);
       var row = rows[ri];
       if (!row) return;
@@ -27946,6 +27948,7 @@ function bind(el, next) {
 
     var sysMsgs = history().slice(-12); // 近12条作为对话上下文
     var convoText = sysMsgs.slice(0, -1).map(function (m) {
+      if (m.role === 'system') return m.content;                     // 数据查询结果：原样注入（不带角色前缀）
       return (m.role === 'user' ? '考生' : '教练') + '：' + m.content;
     }).join('\n');
     var skillBlock = skillHit
@@ -27968,6 +27971,15 @@ function bind(el, next) {
           executeAction(a, null).then(function (msg) { if (msg) appendExecNote(msg); });
         }
       });
+      // 【主动查数据】教练输出的 QUERY 即时执行：结果显示在气泡下 + 回填对话历史（下轮可引用）
+      var qKeys = parseQuery(full);
+      if (qKeys) {
+        var qRes = runQuery(qKeys);
+        if (qRes.length) {
+          appendExecNote('📊 ' + qRes.join('；'));
+          pushHistory('system', '数据查询（' + queryLabel(qKeys) + '）：' + qRes.join('；'));
+        }
+      }
       memBadge();
       reflectIfWorthy(false);
     }).catch(function (e) {
@@ -28190,6 +28202,50 @@ function bind(el, next) {
     });
   }
 
+  // ============================================================
+  // 教练主动查数据（QUERY）：[[QUERY:{"what":"mathAccuracy,dueCount"}]]
+  // 查询注册表可扩展（低耦合）；结果即时显示 + 回填对话历史供下轮引用。
+  // ============================================================
+  var QUERIES = {
+    mathAccuracy: { label: '数学正确率', run: function (s) { var a = Store.currentMathAccuracy(); return a != null ? '数学正确率 ' + a + '%' : '数学正确率未录入'; } },
+    engAccuracy: { label: '英语正确率', run: function (s) { var v = s.decision && s.decision.inputs && s.decision.inputs.engAccuracy; return v ? '英语阅读正确率 ' + v + '%' : '英语正确率未录入'; } },
+    polProgress: { label: '政治进度', run: function (s) { var v = s.decision && s.decision.inputs && s.decision.inputs.polProgress; var rec = (s.polRecite || []).length; return '政治完成度 ' + (v || 0) + '%' + (rec ? '，大题背诵 ' + rec + ' 道' : ''); } },
+    dueCount: { label: '到期复习', run: function (s) { var n = 0; try { n = AiMemory.dueBacklog(); } catch (e) { } return n > 0 ? '到期复习 ' + n + ' 项待清' : '暂无到期复习'; } },
+    mistakeCount: { label: '错题数', run: function (s) { var n = (s.mistakes || []).length; return '错题本共 ' + n + ' 条' + (n ? '（本周新增 ' + Store.mistakeCountWeek() + '）' : ''); } },
+    streak: { label: '连续打卡', run: function (s) { return '连续打卡 ' + Store.studyStreak() + ' 天'; } },
+    todayHours: { label: '今日时长', run: function (s) { return '今日学习 ' + Store.todayHours() + ' 小时'; } },
+    weekHours: { label: '本周时长', run: function (s) { return '本周日均 ' + U.round1(U.sum(Store.weekHours()) / 7) + ' 小时'; } },
+    vocabCount: { label: '单词量', run: function (s) { var v = s.vocab || []; return '单词本 ' + v.length + ' 词' + (v.length ? '（待复习 ' + v.filter(function (x) { return x.due && x.due <= U.dkey(); }).length + '）' : ''); } },
+    weakAreas: { label: '薄弱点', run: function (s) { var w = (s.weaknessProfile && s.weaknessProfile.weakAreas) || []; return w.length ? '薄弱点：' + w.slice(0, 4).join('、') : '暂无薄弱点记录'; } },
+    topErr: { label: '本周错误', run: function (s) { var t = Store.weekTopMistakes(); if (!t || !t.length) return '本周暂无错误记录'; var map = { sign: '符号错误', fraction: '分式', integral: '积分', concept: '概念', careless: '粗心', other: '其他' }; return '本周主要错误：' + (map[t[0].key] || t[0].key) + '（' + t[0].count + ' 次）'; } },
+    mood: { label: '心情', run: function (s) { var m = (s.mental || []).slice(-1)[0]; return m ? '最近心情 ' + m.mood + '/10（' + m.date + '）' : '最近未记录心情'; } },
+    tasks: { label: '今日任务', run: function (s) { var st = Store.todayTaskStats(); var d = 0, t = 0; Object.keys(st).forEach(function (k) { d += st[k][0]; t += st[k][1]; }); return '今日任务 ' + d + '/' + t + ' 完成'; } }
+  };
+  function parseQuery(text) {
+    var m = /\[\[QUERY:([\s\S]*?)\]\]/.exec(text || '');
+    if (!m) return null;
+    try {
+      var q = AI.extractRobustJSON(m[1]);
+      var what = q && q.what;
+      if (!what) return null;
+      var keys = String(what).split(/[,，、\s]+/).filter(Boolean).slice(0, 8);
+      return keys.length ? keys : null;
+    } catch (e) { return null; }
+  }
+  function runQuery(keys) {
+    var s = Store.get();
+    var out = [];
+    (keys || []).forEach(function (k) {
+      var q = QUERIES[k];
+      if (!q) return;
+      try { out.push(q.run(s)); } catch (e) { out.push(q.label + '查询失败'); }
+    });
+    return out;
+  }
+  function queryLabel(keys) {
+    return (keys || []).map(function (k) { return (QUERIES[k] && QUERIES[k].label) || k; }).join('、');
+  }
+
   // 启动提醒检查器（有 pending 自动轮询，清空自动停）
   try { reminderTicker(); } catch (e) {}
 
@@ -28201,6 +28257,8 @@ function bind(el, next) {
     superviseCheck: superviseCheck,
     parseActions: parseActions,
     parseFlow: parseFlow,
+    parseQuery: parseQuery,
+    runQuery: runQuery,
     flowRunAll: flowRunAll,
     flowRunNext: flowRunNext,
     executeAction: executeAction,
