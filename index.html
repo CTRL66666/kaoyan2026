@@ -2201,6 +2201,28 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .pg-slot { display: block; }
 .pg-slot:empty { display: none; }
 
+/* 教练多步任务流（FLOW）卡片 */
+.cp-flow { margin: 8px 0 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-muted); padding: 10px 12px; }
+.cp-flow-h { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; }
+.cp-flow-count { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+.cp-flow-pbar { height: 6px; border-radius: 3px; background: var(--line); margin: 8px 0 4px; overflow: hidden; }
+.cp-flow-pfill { height: 100%; background: var(--ok); border-radius: 3px; transition: width .35s ease; }
+.cp-flow-step { display: flex; align-items: flex-start; gap: 7px; padding: 5px 0; font-size: 13px; flex-wrap: wrap; }
+.cp-flow-ico { flex: 0 0 16px; text-align: center; font-weight: 700; }
+.cp-flow-label { flex: 1; min-width: 120px; }
+.cp-flow-msg { flex-basis: 100%; font-size: 12px; color: var(--text-muted); padding-left: 23px; }
+.cp-flow-pend .cp-flow-ico { color: var(--text-muted); }
+.cp-flow-run .cp-flow-ico { color: var(--blue); }
+.cp-flow-done .cp-flow-ico { color: var(--ok); }
+.cp-flow-fail .cp-flow-ico { color: var(--danger); }
+.cp-flow-fail .cp-flow-label { color: var(--danger); }
+.cp-flow-btns { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.cp-flow-btn { border: 1px solid var(--line); background: var(--surface); color: var(--text-primary); border-radius: 6px; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.cp-flow-btn:hover { border-color: var(--blue); color: var(--blue); }
+.cp-flow-runall { background: var(--blue); border-color: var(--blue); color: #fff; }
+.cp-flow-runall:hover { color: #fff; }
+.cp-flow-fin { font-size: 12px; color: var(--ok); }
+
 </style>
 </head>
 <body>
@@ -9017,7 +9039,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       var out = [];
       this.list().forEach(function (m) {
         (m.actions || []).forEach(function (a) {
-          if (a && a.type) out.push({ pid: m.id, type: a.type, label: a.label || a.type, auto: !!a.auto, run: a.run, needs: a.needs });
+          if (a && a.type) out.push({ pid: m.id, type: a.type, label: a.label || a.type, auto: !!a.auto, run: a.run, needs: a.needs, undo: a.undo });
         });
       });
       return out;
@@ -26910,6 +26932,7 @@ function bind(el, next) {
       + '去复习到期 [[ACTION:{"type":"reviewDue","tab":"可选页面id"}]]；'
       + '定时提醒 [[ACTION:{"type":"addReminder","text":"提醒内容","hours":2}]]（hours 几小时后，或用 "time":"20:00" 今天/明天该时刻）。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
+      + '\n【多步任务流】用户请求需要「3 个及以上连续操作」时（如“安排今晚复习”“帮我走完一轮单词+错题+复盘”），不要逐条给动作，改为输出一个计划：[[FLOW:{"title":"计划名","steps":[{"type":"动作","参数"...},...]}]]，steps 每项就是上面动作协议里的一个动作对象（type 用上面定义的：addTask/planDay/toggleTask/goto/addReminder/startQuiz 等，最多 8 步）。输出 FLOW 时正文只写一句话说明计划，不要同时再输出 [[ACTION:]]。简单请求仍用单动作 [[ACTION:...]]。'
       + '\n【答疑】涉及具体知识点/错题/学科问题时，作为该科目专家给出可落地、引用他真实数据（错误类型/薄弱点/正确率）的深入讲解；用户明确要“详细/深入”时可超出150字限制，把一道题/一个考点讲透。'
       + '\n【服从性·最高优先级】用户说“用XX/给我/帮我/去/直接”等明确指令时＝命令：立即照做，不要顶嘴、不要反问“你确定吗/要不要我”、不要先长篇解释理由；最多用一句简短确认（如“好，用XX”）然后直接执行或输出结果。'
       + '\n【附件】用户可能附加文件（txt/md/json/pdf），文件内容会以【附件：文件名】形式出现在消息中：必须基于附件内容作答；PDF 的文字是本地提取的（公式/排版可能变形），按文字理解即可，不要假装看到格式。'
@@ -26999,9 +27022,9 @@ function bind(el, next) {
     });
   }
 
-  // ---------- 消息渲染（TeX + 动作按钮） ----------
+  // ---------- 消息渲染（TeX + 动作按钮 + 任务流剥离） ----------
   function renderContent(text) {
-    var clean = text.replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').trim();
+    var clean = text.replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').replace(/\[\[FLOW:[\s\S]*?\]\]/g, '').trim();
     var html = U.esc(clean);
     try { html = Tex.renderInline(html); } catch (e) { }
     return html.replace(/\n/g, '<br>');
@@ -27257,11 +27280,31 @@ function bind(el, next) {
   })();
 
   // 【插件】查找插件注册的教练动作定义（PluginBus.actions()）
+  // 包装成与内置 ACTIONS 相同的 run(a, btn) 契约：内部正确传 ctx（插件 run 签名 run(ctx, a)），
+  // 支持异步（返回 Promise）与撤销（undo(ctx, a)）。
   function pluginActionDef(type) {
     try {
       if (!window.PluginBus) return null;
       var acts = window.PluginBus.actions();
-      for (var i = 0; i < acts.length; i++) if (acts[i].type === type) return acts[i];
+      for (var i = 0; i < acts.length; i++) {
+        if (acts[i].type !== type) continue;
+        var pd = acts[i];
+        return {
+          pid: pd.pid,
+          label: pd.label || type,
+          auto: !!pd.auto,
+          needs: pd.needs,
+          isPlugin: true,
+          run: function (a, btn) {
+            var ctx = window.PluginBus.ctxOf(pd.pid) || {};
+            return pd.run(ctx, a);   // 可能是 string 或 Promise<string>
+          },
+          undo: typeof pd.undo === 'function' ? function (a) {
+            var ctx = window.PluginBus.ctxOf(pd.pid) || {};
+            return pd.undo(ctx, a);
+          } : null
+        };
+      }
     } catch (e) { }
     return null;
   }
@@ -27280,13 +27323,18 @@ function bind(el, next) {
     return a.label || '执行';
   }
 
-  // 执行动作：auto 自动执行；返回执行结果文案（供气泡状态显示）
+  // 执行动作：auto 自动执行；返回 Promise<结果文案>（异步插件动作 / 表单收参均支持）
   function executeAction(a, btn) {
     var def = ACTIONS[a.type];
-    if (!def) def = pluginActionDef(a.type);   // 插件动作
-    if (!def) { if (btn) { btn.textContent = '⚠ 未知动作'; btn.disabled = true; } return ''; }
-    try {
-      var msg = def.run(a, btn) || '';
+    if (!def) def = pluginActionDef(a.type);   // 插件动作（已包装 ctx/异步/undo）
+    if (!def) { if (btn) { btn.textContent = '⚠ 未知动作'; btn.disabled = true; } return Promise.resolve(''); }
+    // 表单收参：插件动作 needs 声明 → 先弹表单收集参数再执行（取消返回 null → 静默）
+    var runPromise = def.needs ? collectActionParams(def, a) : Promise.resolve(a);
+    return runPromise.then(function (filled) {
+      if (filled == null) return '';   // 用户取消
+      return def.run(filled, btn);
+    }).then(function (msg) {
+      msg = msg || '';
       if (btn) {
         btn.textContent = '✓ ' + (msg ? msg.slice(0, 10) : (def.label + ' 已执行'));
         btn.disabled = true;
@@ -27296,15 +27344,63 @@ function bind(el, next) {
           var undoBtn = document.createElement('button');
           undoBtn.className = 'cp-act cp-act-undo';
           undoBtn.textContent = '↩ 撤销';
-          undoBtn.onclick = function () { def.undo(a); Toast.show('已撤销', 'info', 1500); undoBtn.remove(); };
+          undoBtn.onclick = function () { try { def.undo(a); } catch (e) { } Toast.show('已撤销', 'info', 1500); undoBtn.remove(); };
           btn.parentNode && btn.parentNode.appendChild(undoBtn);
         }
       }
+      // 结果回传：插件动作执行结果沉淀为 AI 记忆（教练后续对话可见）
+      if (def.isPlugin && msg && msg.indexOf('失败') < 0) { try { AiMemory.recordEvent('插件动作「' + def.label + '」', msg); } catch (e) { } }
       return msg;
-    } catch (e) {
+    }).catch(function (e) {
       if (btn) { btn.textContent = '⚠ 执行失败'; btn.disabled = false; }
       return '执行失败：' + ((e && e.message) || String(e));
+    });
+  }
+
+  // 插件动作表单收参：needs='input'（单输入）或 needs={title,fields:[{key,label,type,options,placeholder}]}
+  function collectActionParams(def, a) {
+    var fields = [];
+    var title = def.label || '参数';
+    if (def.needs === 'input') {
+      fields = [{ key: 'input', label: '参数', type: 'text', placeholder: '请输入' }];
+    } else if (def.needs && Array.isArray(def.needs.fields) && def.needs.fields.length) {
+      fields = def.needs.fields;
+      title = def.needs.title || def.label || '参数';
     }
+    if (!fields.length) return Promise.resolve(a);
+    return new Promise(function (resolve) {
+      var html = fields.map(function (f, i) {
+        var lbl = U.esc(f.label || f.key);
+        if (f.type === 'select' && Array.isArray(f.options)) {
+          var opts = f.options.map(function (o) {
+            var ov = typeof o === 'object' ? o.v : o;
+            var ot = typeof o === 'object' ? (o.t || o.v) : o;
+            return '<option value="' + U.esc(ov) + '">' + U.esc(ot) + '</option>';
+          }).join('');
+          return '<label class="form-col"><span class="muted-sm">' + lbl + '</span><select class="input" id="pf-' + i + '">' + opts + '</select></label>';
+        }
+        return '<label class="form-col"><span class="muted-sm">' + lbl + '</span>'
+          + '<input class="input" id="pf-' + i + '" type="' + (f.type === 'number' ? 'number' : 'text') + '" placeholder="' + U.esc(f.placeholder || '') + '"></label>';
+      }).join('');
+      Modal.open({
+        title: '⚙ ' + U.esc(title), dismissable: false,
+        html: '<div style="display:flex;flex-direction:column;gap:10px">' + html + '</div>',
+        actions: [
+          { label: '取消', onClick: function (close) { close(); resolve(null); } },
+          { label: '执行', kind: 'btn-primary', onClick: function (close) {
+            var filled = Object.assign({}, a);
+            fields.forEach(function (f, i) {
+              var el = document.getElementById('pf-' + i);
+              var v = el ? el.value : '';
+              if (f.type === 'number') v = (parseFloat(v) || 0);
+              filled[f.key] = v;
+            });
+            close();
+            resolve(filled);
+          } }
+        ]
+      });
+    });
   }
 
   // planDay：弹预览清单（可勾选/全选）→ 确认后批量新增到今日任务（只增不删）
@@ -27535,13 +27631,14 @@ function bind(el, next) {
         return '<div class="cp-row cp-user"><div class="cp-bubble">' + (hasImg ? '<span class="cp-img-ph">' + U.icon('snap') + ' 图片</span>' : '') + U.esc(txt) + '</div></div>';
       }
       var acts = parseActions(m.content);
+      var flowCard = parseFlow(m.content) ? flowCardHtml(m.content) : '';
       // 仅最新一条 AI 回复显示「存为文件」按钮（讲义生成后一键落盘）
       var dlBtn = (mi === lastAiIdx)
         ? '<div class="cp-dlbar"><button class="cp-dl" data-mi="' + mi + '" title="把这条回复存为 Markdown 文件（可打印/转 PDF）">⬇️ 存为 Markdown</button></div>'
         : '';
       return '<div class="cp-row cp-ai"><div class="cp-bubble">' + renderContent(m.content)
         + (acts.length ? '<div class="cp-actions">' + acts.map(function (a, i) { return '<button class="cp-act" data-ai="' + i + '">' + U.esc(actionLabel(a)) + '</button>'; }).join('') + '</div>' : '')
-        + '</div>' + dlBtn + '</div>';
+        + '</div>' + flowCard + dlBtn + '</div>';
     }).join('');
     // 绑定历史动作按钮
     var rows = box.querySelectorAll('.cp-row.cp-ai');
@@ -27570,6 +27667,7 @@ function bind(el, next) {
       };
     });
     box.scrollTop = box.scrollHeight;
+    flowBindEvents();
   }
 
   function open(opts) {
@@ -27867,8 +27965,7 @@ function bind(el, next) {
       parseActions(full).forEach(function (a) {
         var def = ACTIONS[a.type] || pluginActionDef(a.type);
         if (def && def.auto) {
-          var msg = executeAction(a, null);
-          if (msg) appendExecNote(msg);
+          executeAction(a, null).then(function (msg) { if (msg) appendExecNote(msg); });
         }
       });
       memBadge();
@@ -27892,6 +27989,186 @@ function bind(el, next) {
     last.appendChild(note);
     box.scrollTop = box.scrollHeight;
     if (msg && msg.indexOf('失败') < 0) Toast.show(msg, 'success', 2500);
+  }
+
+  // ============================================================
+  // 多步任务流（FLOW）：教练输出 [[FLOW:{"title":..,"steps":[{type,..}]}]]
+  // 完全复用现有动作（ACTIONS / 插件动作），执行器不重写任何业务逻辑——低耦合。
+  // ============================================================
+  function flowHash(content) {
+    var h = 5381;
+    var s = String(content || '');
+    for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    return 'f' + h.toString(36);
+  }
+  function parseFlow(text) {
+    var m = /\[\[FLOW:([\s\S]*?)\]\]/.exec(text || '');
+    if (!m) return null;
+    try {
+      var f = AI.extractRobustJSON(m[1]);
+      if (!f || !Array.isArray(f.steps) || !f.steps.length) return null;
+      return { title: f.title || '', steps: f.steps.slice(0, 8) };
+    } catch (e) { return null; }
+  }
+  // flowState: {hash: {title, steps:[{a,status,msg}]}}（内存态，renderMessages 重建时恢复）
+  var flowState = {};
+  function flowEnsure(content) {
+    var h = flowHash(content);
+    var f = parseFlow(content);
+    if (!f) return null;
+    if (!flowState[h]) {
+      flowState[h] = {
+        title: f.title,
+        steps: f.steps.map(function (s) { return { a: s, status: 'pending', msg: '' }; })
+      };
+    }
+    return { hash: h, st: flowState[h] };
+  }
+  // 执行单个步骤（复用现有动作业务；planDay 多步流里不弹 Modal，直接批量落任务；返回 Promise<boolean>）
+  function flowExecStep(st) {
+    if (!st || st.status === 'done') return Promise.resolve(false);
+    st.status = 'running';
+    var a = st.a || {};
+    var def = ACTIONS[a.type] || pluginActionDef(a.type);
+    if (!def) { st.status = 'failed'; st.msg = '未知动作：' + a.type; return Promise.resolve(false); }
+    if (a.type === 'planDay') {
+      var cnt = 0;
+      (a.tasks || []).forEach(function (t) {
+        if (t && t.text) { try { ACTIONS.addTask.run({ subject: t.subject || 'math', text: t.text }); cnt++; } catch (e) { } }
+      });
+      st.status = 'done'; st.msg = '已排入 ' + cnt + ' 项任务';
+      return Promise.resolve(true);
+    }
+    // 插件动作可能是异步（返回 Promise）；这里统一 await
+    return Promise.resolve().then(function () { return def.run(a, null); }).then(function (msg) {
+      st.status = 'done'; st.msg = msg || (def.label + ' 已执行');
+      return true;
+    }).catch(function (e) {
+      st.status = 'failed'; st.msg = '失败：' + ((e && e.message) || String(e));
+      return false;
+    });
+  }
+  // 全部执行：顺序跑，遇失败停下（后续保持 pending），返回 Promise<{done, failed}>
+  function flowRunAll(content, onStep) {
+    var e = flowEnsure(content);
+    if (!e) return Promise.resolve(null);
+    var done = 0, failed = 0, stopped = false;
+    var chain = Promise.resolve();
+    e.st.steps.forEach(function (st) {
+      chain = chain.then(function () {
+        if (stopped) return;
+        if (st.status === 'done') { done++; return; }
+        return flowExecStep(st).then(function (ok) {
+          if (onStep) onStep(st);
+          if (ok) done++; else { failed++; stopped = true; }
+        });
+      });
+    });
+    return chain.then(function () { return { done: done, failed: failed }; });
+  }
+  // 逐步：执行下一个 pending，返回 Promise<{exhausted, ok?}>
+  function flowRunNext(content, onStep) {
+    var e = flowEnsure(content);
+    if (!e) return Promise.resolve(null);
+    var st = e.st.steps.filter(function (x) { return x.status === 'pending'; })[0];
+    if (!st) return Promise.resolve({ exhausted: true });
+    return flowExecStep(st).then(function (ok) {
+      if (onStep) onStep(st);
+      return { exhausted: false, ok: ok };
+    });
+  }
+
+  // 渲染任务流卡片（从 flowState 读状态；局部刷新用）
+  function flowCardHtml(content) {
+    var e = flowEnsure(content);
+    if (!e) return '';
+    var st = e.st;
+    var doneN = st.steps.filter(function (x) { return x.status === 'done'; }).length;
+    var failN = st.steps.filter(function (x) { return x.status === 'failed'; }).length;
+    var pct = st.steps.length ? Math.round(doneN / st.steps.length * 100) : 0;
+    var running = st.steps.some(function (x) { return x.status === 'running'; });
+    var allDone = doneN + failN >= st.steps.length;
+    var rows = st.steps.map(function (s, i) {
+      var ico = s.status === 'done' ? '✓' : (s.status === 'failed' ? '✗' : (s.status === 'running' ? '▸' : '○'));
+      var cls = s.status === 'done' ? 'cp-flow-done' : (s.status === 'failed' ? 'cp-flow-fail' : (s.status === 'running' ? 'cp-flow-run' : 'cp-flow-pend'));
+      var label = U.esc(actionLabel(s.a));
+      var msg = s.msg ? '<div class="cp-flow-msg">' + U.esc(s.msg) + '</div>' : '';
+      return '<div class="cp-flow-step ' + cls + '">'
+        + '<span class="cp-flow-ico">' + ico + '</span>'
+        + '<span class="cp-flow-label">' + (i + 1) + '. ' + label + '</span>'
+        + msg + '</div>';
+    }).join('');
+    var btnRow = '';
+    if (!allDone && !running) {
+      btnRow = '<div class="cp-flow-btns">'
+        + '<button class="cp-flow-btn cp-flow-runall" data-fh="' + e.hash + '">▶ 全部执行</button>'
+        + '<button class="cp-flow-btn cp-flow-next" data-fh="' + e.hash + '">⏭ 逐步</button>'
+        + '<button class="cp-flow-btn cp-flow-abort" data-fh="' + e.hash + '">✕ 中止</button>'
+        + '</div>';
+    } else if (allDone) {
+      btnRow = '<div class="cp-flow-btns"><span class="cp-flow-fin">' + (failN ? '完成（' + failN + ' 步失败）' : '全部完成 ✅') + '</span></div>';
+    }
+    return '<div class="cp-flow" data-fh="' + e.hash + '">'
+      + '<div class="cp-flow-h"><span>⚡ ' + U.esc(st.title || '执行计划') + '</span>'
+      + '<span class="cp-flow-count">' + doneN + '/' + st.steps.length + '</span></div>'
+      + '<div class="cp-flow-pbar"><div class="cp-flow-pfill" style="width:' + pct + '%"></div></div>'
+      + rows + btnRow + '</div>';
+  }
+  // 局部刷新某张任务流卡片（不重建消息列表）
+  function flowRefreshCard(hash) {
+    var card = document.querySelector('.cp-flow[data-fh="' + hash + '"]');
+    if (!card) return;
+    var box = document.getElementById('cp-msgs');
+    // 找到该卡片对应的消息 content（从 flowState 反查）
+    var content = null;
+    history().forEach(function (m) {
+      if (!content && m.role === 'assistant' && flowHash(m.content) === hash) content = m.content;
+    });
+    if (content) {
+      var html = flowCardHtml(content);
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      var fresh = tmp.firstChild;
+      card.parentNode.replaceChild(fresh, card);
+    }
+  }
+  // 绑定任务流按钮（renderMessages 尾部调用）
+  function flowBindEvents() {
+    var box = document.getElementById('cp-msgs');
+    if (!box) return;
+    var map = {};
+    history().forEach(function (m) { if (m.role === 'assistant' && parseFlow(m.content)) map[flowHash(m.content)] = m.content; });
+    box.querySelectorAll('.cp-flow').forEach(function (card) {
+      var h = card.getAttribute('data-fh');
+      var content = map[h];
+      if (!content) return;
+      card.querySelectorAll('.cp-flow-btn').forEach(function (b) {
+        b.onclick = function () {
+          if (b.classList.contains('cp-flow-runall')) {
+            b.disabled = true;
+            flowRunAll(content, function () { flowRefreshCard(h); }).then(function (r) {
+              flowRefreshCard(h);
+              if (r && r.failed) Toast.show('有步骤执行失败，已停止', 'warn', 2500);
+              else if (r) Toast.show('任务流执行完成', 'success', 2500);
+            });
+          } else if (b.classList.contains('cp-flow-next')) {
+            b.disabled = true;
+            flowRunNext(content, function () { flowRefreshCard(h); }).then(function (n) {
+              flowRefreshCard(h);
+              if (n && n.exhausted) Toast.show('所有步骤已执行', 'info', 2000);
+              else if (n && n.ok === false) Toast.show('该步骤执行失败', 'warn', 2500);
+            });
+          } else if (b.classList.contains('cp-flow-abort')) {
+            var e = flowEnsure(content);
+            if (e) {
+              e.st.steps.forEach(function (s) { if (s.status === 'pending') { s.status = 'failed'; s.msg = '已中止'; } });
+            }
+            flowRefreshCard(h);
+            Toast.show('已中止剩余步骤', 'info', 2000);
+          }
+        };
+      });
+    });
   }
 
   // 满2条用户消息（或关闭面板时有余量）→ 自动反思沉淀记忆
@@ -27923,6 +28200,10 @@ function bind(el, next) {
     pushAssistant: pushAssistant,
     superviseCheck: superviseCheck,
     parseActions: parseActions,
+    parseFlow: parseFlow,
+    flowRunAll: flowRunAll,
+    flowRunNext: flowRunNext,
+    executeAction: executeAction,
     actionLabel: actionLabel,
     matchSkill: matchSkill,
     composeUserPayload: composeUserPayload,
@@ -30342,6 +30623,55 @@ function bind(el, next) {
         "      }).join('');",
         "      return '<div class=\'card\'><div class=\'card-title-sm\'>🥁 押题卷成绩走势（' + hist.length + ' 卷）</div>' + rows + '</div>';",
         "    } }]",
+        "});"
+      ])
+    },
+    {
+      id: 'async-form-action', name: '异步表单动作', version: '1.0', icon: '⚙️',
+      desc: '插件动作自由度演示：needs 表单收参（科目/内容/数量）+ 异步执行（Promise）+ 撤销。教练可用它批量加任务。',
+      tags: ['动作', '异步', '表单'],
+      code: mkCode([
+        "PluginBus.register({",
+        "  id: 'async-form-action', name: '异步表单动作', version: '1.0', author: '内置',",
+        "  desc: '演示插件动作的异步执行 + 表单收参 + 撤销',",
+        "  actions: [{",
+        "    type: 'batchAddTasks', label: '批量加任务', auto: false,",
+        "    needs: { title: '批量加任务', fields: [",
+        "      { key: 'subject', label: '科目', type: 'select', options: [{ v: 'math', t: '数学' }, { v: 'eng', t: '英语' }, { v: 'pol', t: '政治' }, { v: 'ctrl', t: '专业课' }] },",
+        "      { key: 'text', label: '任务内容', type: 'text', placeholder: '如：极限专题 20 题' },",
+        "      { key: 'count', label: '重复数量', type: 'number', placeholder: '默认 1' }",
+        "    ] },",
+        "    run: function (ctx, a) {",
+        "      var n = Math.max(1, Math.min(10, parseInt(a.count, 10) || 1));",
+        "      return new Promise(function (resolve, reject) {",
+        "        setTimeout(function () {",
+        "          try {",
+        "            var added = 0;",
+        "            for (var i = 0; i < n; i++) {",
+        "              ctx.Store.update(function (s) {",
+        "                var maxOrder = 0;",
+        "                s.tasks.forEach(function (t) { if (t.order != null && t.order > maxOrder) maxOrder = t.order; });",
+        "                s.tasks.push({ id: ctx.uid(), subject: a.subject || 'math', text: (n > 1 ? (a.text + '（' + (i + 1) + '/' + n + '）') : a.text), done: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), order: maxOrder + 1 });",
+        "              });",
+        "              added++;",
+        "            }",
+        "            ctx.log('异步批量加任务 ' + added + ' 项');",
+        "            resolve('已加 ' + added + ' 项任务');",
+        "          } catch (e) { reject(e); }",
+        "        }, 600);",
+        "      });",
+        "    },",
+        "    undo: function (ctx, a) {",
+        "      var base = a.text;",
+        "      ctx.Store.update(function (s) {",
+        "        s.tasks = s.tasks.filter(function (t) {",
+        "          if (t.done) return true;",
+        "          return t.text !== base && t.text.indexOf(base + '（') !== 0;",
+        "        });",
+        "      });",
+        "      ctx.log('撤销批量加任务');",
+        "    }",
+        "  }]",
         "});"
       ])
     },
