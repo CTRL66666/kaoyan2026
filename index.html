@@ -26931,6 +26931,7 @@ function bind(el, next) {
       + '标记考点已掌握 [[ACTION:{"type":"markMastered","name":"考点名（与考点库完全一致）"}]]；'
       + '去复习到期 [[ACTION:{"type":"reviewDue","tab":"可选页面id"}]]；'
       + '定时提醒 [[ACTION:{"type":"addReminder","text":"提醒内容","hours":2}]]（hours 几小时后，或用 "time":"20:00" 今天/明天该时刻）。'
+      + '\n【工具选择·按场景自主判断】打卡一个「已存在」的任务用 toggleTask（关键词匹配，找不到会自动新建并打卡，不会失败）；新增一个任务用 addTask；一次性排多个任务用 planDay；查数据用 QUERY；3 步以上连续操作用 FLOW。拿不准任务是否已存在时，优先 addTask，或先 QUERY tasks 看任务列表再精确打卡。'
       + '只在该做事时才给动作，闲聊不给。动作之外不要输出任何其他JSON。'
       + '\n【多步任务流】用户请求需要「3 个及以上连续操作」时（如“安排今晚复习”“帮我走完一轮单词+错题+复盘”），不要逐条给动作，改为输出一个计划：[[FLOW:{"title":"计划名","steps":[{"type":"动作","参数"...},...]}]]，steps 每项就是上面动作协议里的一个动作对象（type 用上面定义的：addTask/planDay/toggleTask/goto/addReminder/startQuiz 等，最多 8 步）。输出 FLOW 时正文只写一句话说明计划，不要同时再输出 [[ACTION:]]。简单请求仍用单动作 [[ACTION:...]]。'
       + '\n【主动查数据】当用户问的数据不在【考生实时状态】里时（如“我英语正确率多少”“错题有几条”“连续打卡几天了”），回复末尾输出 [[QUERY:{"what":"查询键"}]] 查一次（多个键用逗号，如 "mathAccuracy,streak"），系统会把结果回填给你，下一条消息基于结果作答。可查键：mathAccuracy/engAccuracy/polProgress/dueCount/mistakeCount/streak/todayHours/weekHours/vocabCount/weakAreas/topErr/mood/tasks。查不到就用你能拿到的数据作答，不要编造。'
@@ -27075,11 +27076,26 @@ function bind(el, next) {
       label: '打卡任务', auto: true,
       run: function (a) {
         if (!a.text) return '';
-        var hit = null;
-        Store.get().tasks.forEach(function (t) { if (!hit && !t.done && t.text.indexOf(a.text) >= 0) hit = t; });
-        if (!hit) return '未找到匹配的未完成任务：' + a.text;
-        TasksModule.toggleTask(hit.id, true, { silent: true });
-        return '已打卡：' + hit.text;
+        var pending = null, doneHit = null;
+        Store.get().tasks.forEach(function (t) {
+          if (t.text.indexOf(a.text) < 0) return;
+          if (!t.done && !pending) pending = t;
+          if (t.done && !doneHit) doneHit = t;
+        });
+        if (pending) { TasksModule.toggleTask(pending.id, true, { silent: true }); return '已打卡：' + pending.text; }
+        if (doneHit) return '已完成过：' + doneHit.text;   // 幂等：不重复新建
+        // 智能降级：任务不存在 → 新建同名任务并打卡（用户想记录"做了 X"，不因任务名漂移而失败）
+        var now = new Date().toISOString();
+        Store.update(function (s) {
+          var maxOrder = 0;
+          s.tasks.forEach(function (t) { if (t.order != null && t.order > maxOrder) maxOrder = t.order; });
+          s.tasks.push({ id: U.uid(), subject: a.subject || 'math', text: a.text, done: false, createdAt: now, updatedAt: now, order: maxOrder + 1 });
+        });
+        var added = null;
+        Store.get().tasks.forEach(function (t) { if (!added && !t.done && t.text === a.text) added = t; });
+        if (added) TasksModule.toggleTask(added.id, true, { silent: true });
+        if (App.current === 'dashboard' || App.current === 'scheduler') App.refresh();
+        return '已新建并打卡：' + a.text;
       },
       undo: function (a) {
         var hit = null;
@@ -28222,7 +28238,7 @@ function bind(el, next) {
     weakAreas: { label: '薄弱点', run: function (s) { var w = (s.weaknessProfile && s.weaknessProfile.weakAreas) || []; return w.length ? '薄弱点：' + w.slice(0, 4).join('、') : '暂无薄弱点记录'; } },
     topErr: { label: '本周错误', run: function (s) { var t = Store.weekTopMistakes(); if (!t || !t.length) return '本周暂无错误记录'; var map = { sign: '符号错误', fraction: '分式', integral: '积分', concept: '概念', careless: '粗心', other: '其他' }; return '本周主要错误：' + (map[t[0].key] || t[0].key) + '（' + t[0].count + ' 次）'; } },
     mood: { label: '心情', run: function (s) { var m = (s.mental || []).slice(-1)[0]; return m ? '最近心情 ' + m.mood + '/10（' + m.date + '）' : '最近未记录心情'; } },
-    tasks: { label: '今日任务', run: function (s) { var st = Store.todayTaskStats(); var d = 0, t = 0; Object.keys(st).forEach(function (k) { d += st[k][0]; t += st[k][1]; }); return '今日任务 ' + d + '/' + t + ' 完成'; } }
+    tasks: { label: '今日任务', run: function (s) { var st = Store.todayTaskStats(); var d = 0, t = 0; Object.keys(st).forEach(function (k) { d += st[k][0]; t += st[k][1]; }); var undone = (s.tasks || []).filter(function (x) { return !x.done; }).slice(0, 5).map(function (x) { return x.text; }); return '今日任务 ' + d + '/' + t + ' 完成' + (undone.length ? '；未完成：' + undone.join('、') : ''); } }
   };
   function parseQuery(text) {
     var m = /\[\[QUERY:([\s\S]*?)\]\]/.exec(text || '');
