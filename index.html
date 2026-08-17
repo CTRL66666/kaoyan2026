@@ -27962,6 +27962,9 @@ function bind(el, next) {
     }, img).then(function (full) {
       sending = false;
       if (!full || !full.trim()) { renderMessages(); return; }
+      // 新消息的 FLOW 状态重置：避免与历史里相同 content 复用上一次执行完的 done 状态（导致按钮消失）
+      var _fh = flowHash(full);
+      if (flowState[_fh]) delete flowState[_fh];
       pushHistory('assistant', full);
       renderMessages();
       // 【接管工具】新消息内的低风险动作自动执行（历史回显不重复执行）
@@ -28259,6 +28262,8 @@ function bind(el, next) {
     parseFlow: parseFlow,
     parseQuery: parseQuery,
     runQuery: runQuery,
+    flowCardHtml: flowCardHtml,
+    flowEnsure: flowEnsure,
     flowRunAll: flowRunAll,
     flowRunNext: flowRunNext,
     executeAction: executeAction,
