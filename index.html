@@ -8821,6 +8821,9 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       tools: Array.isArray(m.tools) ? m.tools.slice(0, 10) : [],
       panels: Array.isArray(m.panels) ? m.panels.slice(0, 6) : [],
       hooks: m.hooks && typeof m.hooks === 'object' ? m.hooks : {},
+      // v7 拓展：插件注册数据查询接口（教练 [[QUERY:{"what":"key"}]] 可查）+ 底部主 tab
+      queries: Array.isArray(m.queries) ? m.queries.slice(0, 20) : [],
+      maintabs: Array.isArray(m.maintabs) ? m.maintabs.slice(0, 3) : [],
       // v6 解耦装饰：css 全局样式注入（改外观）；enhancers 页面渲染后注入（改布局/能力）
       css: String(m.css || '').slice(0, 20000),
       enhancers: Array.isArray(m.enhancers) ? m.enhancers.slice(0, 12) : [],
@@ -8853,6 +8856,15 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     });
     rec.shortcuts.forEach(function (s) {
       if (s && s.key && typeof s.run !== 'function') throw new Error('快捷键 ' + s.key + ' 缺 run 函数');
+    });
+    rec.queries.forEach(function (q, i) {
+      if (!q || !q.key || !q.label) throw new Error('查询 #' + (i + 1) + ' 缺 key/label');
+      if (typeof q.run !== 'function') throw new Error('查询 ' + q.label + ' 缺 run 函数');
+    });
+    rec.maintabs.forEach(function (t, i) {
+      if (!t || !t.id || !t.name) throw new Error('主 tab #' + (i + 1) + ' 缺 id/name');
+      if (typeof t.render !== 'function') throw new Error('主 tab ' + t.name + ' 缺 render 函数');
+      if (!/^[a-z0-9][a-z0-9\-_]{1,31}$/i.test(String(t.id))) throw new Error('主 tab id 只能含字母数字-_');
     });
     return rec;
   }
@@ -9049,6 +9061,26 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       this.list().forEach(function (m) {
         (m.tools || []).forEach(function (t) {
           if (t && t.id) out.push({ pid: m.id, id: t.id, title: t.title || t.id, icon: t.icon || '🧩', render: t.render, mount: t.mount });
+        });
+      });
+      return out;
+    },
+    // v7 插件注册数据查询接口：教练 [[QUERY:{"what":"key"}]] 可查插件数据（run 签名 run(ctx)）
+    queries: function () {
+      var out = [];
+      this.list().forEach(function (m) {
+        (m.queries || []).forEach(function (q) {
+          if (q && q.key) out.push({ pid: m.id, key: q.key, label: q.label || q.key, run: q.run });
+        });
+      });
+      return out;
+    },
+    // v7 插件注册底部主 tab（导航扩展）：maintabs [{id,name,icon,render(ctx,el)}]
+    maintabs: function () {
+      var out = [];
+      this.list().forEach(function (m) {
+        (m.maintabs || []).forEach(function (t) {
+          if (t && t.id) out.push({ pid: m.id, id: t.id, name: t.name || t.id, icon: t.icon || '🧩', render: t.render });
         });
       });
       return out;
@@ -28258,18 +28290,40 @@ function bind(el, next) {
       return keys.length ? keys : null;
     } catch (e) { return null; }
   }
+  function pluginQuery(key) {
+    try {
+      if (!window.PluginBus) return null;
+      var qs = window.PluginBus.queries();
+      for (var i = 0; i < qs.length; i++) if (qs[i].key === key) return qs[i];
+    } catch (e) { }
+    return null;
+  }
   function runQuery(keys) {
     var s = Store.get();
     var out = [];
     (keys || []).forEach(function (k) {
       var q = QUERIES[k];
-      if (!q) return;
-      try { out.push(q.run(s)); } catch (e) { out.push(q.label + '查询失败'); }
+      if (q) {
+        try { out.push(q.run(s)); } catch (e) { out.push(q.label + '查询失败'); }
+        return;
+      }
+      // v7 插件注册的查询键（run 签名 run(ctx)）
+      var pq = pluginQuery(k);
+      if (pq) {
+        try {
+          var ctx = window.PluginBus.ctxOf(pq.pid) || {};
+          out.push(pq.run(ctx));
+        } catch (e) { out.push(pq.label + '查询失败'); }
+      }
     });
     return out;
   }
   function queryLabel(keys) {
-    return (keys || []).map(function (k) { return (QUERIES[k] && QUERIES[k].label) || k; }).join('、');
+    return (keys || []).map(function (k) {
+      if (QUERIES[k]) return QUERIES[k].label;
+      var pq = pluginQuery(k);
+      return (pq && pq.label) || k;
+    }).join('、');
   }
 
   // ============================================================
@@ -30745,6 +30799,41 @@ function bind(el, next) {
       ])
     },
     {
+      id: 'insight-plugin', name: '学习洞察', version: '1.0', icon: '📊',
+      desc: 'v7 拓展能力演示：注册数据查询接口（教练可查「本周专注」）+ 底部主 tab「洞察」展示数据概览。',
+      tags: ['查询', '主tab'],
+      code: mkCode([
+        "PluginBus.register({",
+        "  id: 'insight-plugin', name: '学习洞察', version: '1.0', author: '内置',",
+        "  desc: '演示插件注册数据查询接口 + 底部主 tab',",
+        "  queries: [{",
+        "    key: 'focusWeek', label: '本周专注',",
+        "    run: function (ctx) {",
+        "      var s = ctx.Store.get();",
+        "      var mins = 0; Object.keys(s.studyHours || {}).forEach(function (k) { mins += s.studyHours[k] * 60; });",
+        "      return '本周累计学习 ' + Math.round(mins / 60 * 10) / 10 + ' 小时';",
+        "    }",
+        "  }],",
+        "  maintabs: [{",
+        "    id: 'insight-tab', name: '洞察', icon: '📊',",
+        "    render: function (ctx, el) {",
+        "      var s = ctx.Store.get();",
+        "      var streak = ctx.Store.studyStreak ? ctx.Store.studyStreak() : 0;",
+        "      var vocab = (s.vocab || []).length;",
+        "      var mistakes = (s.mistakes || []).length;",
+        "      el.innerHTML = '<div class=\\'card\\'><div class=\\'card-title\\'>📊 学习洞察（插件主 tab）</div>'",
+        "        + '<div style=\\'display:flex;gap:12px;flex-wrap:wrap\\'>'",
+        "        + '<span>连续打卡 <b>' + streak + '</b> 天</span>'",
+        "        + '<span>单词 <b>' + vocab + '</b> 词</span>'",
+        "        + '<span>错题 <b>' + mistakes + '</b> 条</span>'",
+        "        + '</div>'",
+        "        + '<div class=\\'muted-sm\\' style=\\'font-size:11.5px;margin-top:6px\\'>本 tab 由「学习洞察」插件注册——底部导航扩展，卸载即消失。教练说「查一下本周专注」可触发插件的 focusWeek 查询。</div></div>';",
+        "    }",
+        "  }]",
+        "});"
+      ])
+    },
+    {
       id: 'async-form-action', name: '异步表单动作', version: '1.0', icon: '⚙️',
       desc: '插件动作自由度演示：needs 表单收参（科目/内容/数量）+ 异步执行（Promise）+ 撤销。教练可用它批量加任务。',
       tags: ['动作', '异步', '表单'],
@@ -31033,6 +31122,15 @@ function bind(el, next) {
       '<button class="bn-btn' + (current === t[0] ? ' bn-on' : '') + '" data-tab="' + t[0] + '">'
       + '<span class="bn-icon">' + t[2] + '</span><span class="bn-label">' + t[1] + '</span></button>'
     ).join('');
+    // v7 插件主 tab（插在「工具」按钮前）
+    try {
+      if (window.PluginBus) {
+        window.PluginBus.maintabs().forEach(function (t) {
+          html += '<button class="bn-btn' + (current === t.id ? ' bn-on' : '') + '" data-tab="' + t.id + '">'
+            + '<span class="bn-icon">' + (t.icon || '🧩') + '</span><span class="bn-label">' + U.esc(t.name) + '</span></button>';
+        });
+      }
+    } catch (e) { }
     html += '<button class="bn-btn' + (TOOL_TABS.some(t => t[0] === current) ? ' bn-on' : '') + '" data-tab="__tools">'
       + '<span class="bn-icon">' + ICONS.tools + '</span><span class="bn-label">工具</span></button>';
     nav.innerHTML = html;
@@ -31107,6 +31205,19 @@ function bind(el, next) {
             }
           }];
         }
+      }
+      // v7 插件注册的底部主 tab（导航扩展）：maintabs [{id,name,icon,render(ctx,el)}]
+      var ms = window.PluginBus.maintabs();
+      for (var j = 0; j < ms.length; j++) {
+        if (ms[j].id !== tabId) continue;
+        var mt = ms[j];
+        return [tabId, mt.name, mt.icon || '🧩', {
+          render: function (el) {
+            var mctx = window.PluginBus.ctxOf(mt.pid) || {};
+            try { mt.render(mctx, el); }
+            catch (e) { el.innerHTML = '<div class="alert alert-danger">插件主 tab 渲染失败：' + U.esc(e.message || e) + '</div>'; }
+          }
+        }];
       }
     } catch (e) { }
     return null;
