@@ -8784,7 +8784,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       has: function () { return !!(window.AI && AI.configured()); },
       chat: function (sys, usr, opts) {
         if (!(window.AI && AI.configured())) return Promise.reject(new Error('未配置 AI'));
-        return AI.chatText ? AI.chatText(sys, usr, null, opts || {}) : Promise.reject(new Error('AI 无 chatText'));
+        // 复用 chatStream（AI 无 chatText 接口）；null onChunk 拿到完整文本，noThink 保证稳定输出
+        return AI.chatStream(sys, usr, null, null, Object.assign({ noThink: true }, opts || {}));
       },
       json: function (sys, usr, opts) {
         if (!(window.AI && AI.configured())) return Promise.reject(new Error('未配置 AI'));
@@ -8891,7 +8892,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     clearTimers(rec.id);
     (rec.timers || []).forEach(function (t) {
       if (!t || !t.run) return;
-      var fn = function () { try { t.run(ctxOf(rec.id), {}); } catch (e) { log(rec.id, '定时器错误：' + (e.message || e)); } };
+      var fn = function () { try { t.run(ctxOf(rec.id), t); } catch (e) { log(rec.id, '定时器错误：' + (e.message || e)); } };
       if (t.at && /^\d{1,2}:\d{2}$/.test(t.at)) {
         // 每日固定时刻：先算到下一次该时刻的毫秒数，再每 24h 触发
         var tick = function () {
@@ -8936,6 +8937,11 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 
     register: function (m) {
       var rec = normalize(m);
+      // 覆盖重注册（热更新）：清理旧订阅/面板，避免残留（timers/css 由 scheduleTimers/_injectCss 内部清理）
+      if (registry[rec.id]) {
+        try { PluginBus.unsubscribeAll(rec.id); } catch (e) { }
+        try { PluginBus.closePanelsOf(rec.id); } catch (e) { }
+      }
       registry[rec.id] = { manifest: rec };
       try {
         scheduleTimers(rec);
@@ -9220,7 +9226,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (!rec) throw new Error('插件「' + targetPid + '」未启用或不存在');
       var fn = rec.services && rec.services[serviceName];
       if (typeof fn !== 'function') throw new Error('插件「' + targetPid + '」未提供服务 ' + serviceName);
-      return fn(ctxOf(targetPid), args);
+      // 展开参数：服务函数签名 fn(ctx, ...args)
+      return fn.apply(null, [ctxOf(targetPid)].concat(args));
     },
     // ctx 便捷：call 另一个插件的服务
     callService: function (targetPid, serviceName) {
@@ -30609,7 +30616,7 @@ function bind(el, next) {
       ['skills: [{trigger,title,prompt}]', 'AI 技能。trigger=触发词（教练 /xx 命令与技能中心都用它）；prompt 含 {input} 时执行前会弹输入框'],
       ['actions: [{type,label,auto,run(ctx,a)}]', '教练动作。auto=true 自动执行；run 返回提示文案；可配 undo(ctx,a) 撤销'],
       ['tools: [{id,title,icon,render(ctx)|mount(el,ctx)}]', '工具页。render 返回 HTML 字符串；mount 可交互（事件绑定/动态更新）'],
-      ['hooks: {eventName: fn(ctx,payload)}', "事件钩子。内置事件：taskToggled/vocabGraded/polRecited/mistakeAdded/moodRecorded/focusDone/examGraded/copilotReplied；'*' 通配监听全部"],
+      ['hooks: {eventName: fn(ctx,payload)}', "事件钩子。内置事件：taskToggled/vocabGraded/polRecited/mistakeAdded/moodRecorded/focusDone/examGraded/copilotReplied/essayGraded/quizDone；'*' 通配监听全部"],
       ['timers: [{at|every|once, run(ctx)}]', "定时任务。at:'20:00' 每日时刻 / every:'30min' 间隔 / once:'5min' 单次"],
       ['shortcuts: [{key,label,run(ctx)}]', "全局快捷键。key 如 'ctrl+shift+p'（ctrl/alt/shift/meta 组合）"],
       ['config: [{key,label,type,default,options}]', '配置项。type: text/number/select/bool；插件中心自动渲染表单；ctx.config(key) 读取'],
