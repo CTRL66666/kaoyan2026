@@ -6203,11 +6203,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       + '    "learnPath": "\u7ae0\u8282A \u2192 \u7ae0\u8282B \u2192 \u7ae0\u8282C"  // \u63a8\u8350\u5b66\u4e60\u8def\u5f84\n'
       + '  },\n'
       + '  "topics": [\n'
-      + '    {"id":"p1","name":"\u8003\u70b9\u540d","tier":1,"group":"\u7ae0\u82821",\n'
-      + '     "keyPoints":["\u6838\u5fc3\u8981\u70b91","\u6838\u5fc3\u8981\u70b92","\u6838\u5fc3\u8981\u70b93"],\n'
-      + '     "pitfalls":["\u6613\u9519\u70b91","\u6613\u9519\u70b92"],\n'
-      + '     "approach":"\u89e3\u9898\u5957\u8def\uff08\u4ece\u54ea\u5165\u624b\u3001\u5206\u51e0\u6b65\u8d70\uff09",\n'
-      + '     "examPatterns":["\u5178\u578b\u8003\u6cd51","\u5178\u578b\u8003\u6cd52"]},\n'
+      + '    {"id":"p1","name":"\u8003\u70b9\u540d","tier":1,"group":"\u7ae0\u82821"},\n'
       + '    {"id":"p2","name":"\u8003\u70b9\u540d","tier":2,"group":"\u7ae0\u82821"},\n'
       + '    ...\n'
       + '  ],  // 8-18\u4e2a\u8003\u70b9\uff1btier=1\u5fc5\u62ff\u5c42(100-110)\u3001tier=2\u62d4\u9ad8\u5c42(110-125)\u3001tier=3\u51b2\u523a\u5c42(125+)\uff1bgroup\u6309\u7ae0\u8282\u5206\u7ec4\n'
@@ -6220,8 +6216,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       + '1. modules \u5fc5\u987b\u662f\u8be5\u4e13\u4e1a\u7684\u771f\u5b9e\u7ae0\u8282\uff0c\u4e0d\u80fd\u662f\u901a\u7528\u540d\u79f0\n'
       + '2. topics \u8986\u76d6\u8be5\u4e13\u4e1a\u8003\u7814\u7684\u6838\u5fc3\u77e5\u8bc6\u70b9\uff0ctier\u5206\u5e03\u5408\u7406\n'
       + '3. conceptGraph \u53cd\u6620\u771f\u5b9e\u7684\u524d\u7f6e\u4f9d\u8d56\u5173\u7cfb\n'
-      + '4. \u53ea\u8fd4\u7eaf JSON\uff0c\u4e0d\u8981\u52a0\u6ce8\u91ca\n'
-      + '5. \u6bcf\u4e2a\u8003\u70b9\u5fc5\u987b\u5e26 keyPoints(3-5\u6761\u6838\u5fc3\u77e5\u8bc6\u70b9)\u3001pitfalls(2-4\u6761\u6613\u9519\u70b9)\u3001approach(\u89e3\u9898\u5957\u8def)\u3001examPatterns(2-4\u79cd\u5178\u578b\u8003\u6cd5)\u2014\u2014\u5185\u5bb9\u8981\u76f4\u51fb\u8981\u5bb3\u3001\u62f3\u62f3\u5230\u8089\uff0c\u4e0d\u8981\u6cdb\u6cdb\u800c\u8c08';
+      + '4. \u53ea\u8fd4\u7eaf JSON\uff0c\u4e0d\u8981\u52a0\u6ce8\u91ca';
 
     // ---- 鲁棒 JSON 提取与修复 ----
     function extractJSON(raw) {
@@ -6303,11 +6298,6 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
           if (!data.modules || !Array.isArray(data.topics)) throw new Error('缺少 modules/topics');
           data.topics.forEach(function (t, i) {
             if (!t.id) t.id = 'gen-' + i;
-            // 考点深度内容规范化（AI 生成的核心要点/易错点/套路/考法；缺省为空数组，兼容旧数据）
-            t.keyPoints = Array.isArray(t.keyPoints) ? t.keyPoints.map(function (x) { return String(x); }).filter(Boolean).slice(0, 6) : [];
-            t.pitfalls = Array.isArray(t.pitfalls) ? t.pitfalls.map(function (x) { return String(x); }).filter(Boolean).slice(0, 5) : [];
-            t.examPatterns = Array.isArray(t.examPatterns) ? t.examPatterns.map(function (x) { return String(x); }).filter(Boolean).slice(0, 5) : [];
-            t.approach = String(t.approach || '').slice(0, 200);
           });
           if (data.conceptGraph) {
             data.conceptGraph.forEach(function (n, i) {
@@ -18762,7 +18752,6 @@ function bind(el, next) {
       }
       html += '<div class="btn-row" style="margin-top:8px">'
         + '<button class="btn btn-primary btn-sm sp-prac" data-id="' + r.id + '" data-subj="' + r.subj + '" data-name="' + U.esc(r.name) + '">去练这题</button>'
-        + (topicDetail(r.subj, r.id) && ((topicDetail(r.subj, r.id).keyPoints || []).length || topicDetail(r.subj, r.id).approach) ? '<button class="btn btn-ghost btn-sm sp-detail" data-subj="' + r.subj + '" data-id="' + r.id + '">📖 精讲</button>' : '')
         + (findMethodFor(r.name, r.subj) ? '<button class="btn btn-ghost btn-sm sp-method" data-pb="' + findMethodFor(r.name, r.subj).id + '">🧭 方法</button>' : '')
         + (isMastered
             ? '<button class="btn btn-ghost btn-sm sp-recover" data-id="' + r.id + '" data-name="' + U.esc(r.name) + '">恢复薄弱</button>'
@@ -20039,23 +20028,6 @@ function bind(el, next) {
       setTimeout(function () { QuizModule.startVariant({ subject: subj, type: 'concept', desc: name, refId: id || '' }); }, 0);
     } else { App.go('quiz'); }
   }
-  // 取考点的深度精讲内容（AI 生成的核心要点/易错点/套路/考法，通用任何专业）
-  function topicDetail(subj, id) {
-    var arr = (DB.TOPICS && DB.TOPICS[subj]) || [];
-    for (var i = 0; i < arr.length; i++) if (arr[i].id === id) return arr[i];
-    return null;
-  }
-  function showTopicDetail(subj, id) {
-    var t = topicDetail(subj, id);
-    if (!t) { Toast.warn('该考点暂无精讲内容'); return; }
-    var html = '';
-    if (t.keyPoints && t.keyPoints.length) html += '<div class="pbd-sec"><div class="pbd-sec-t">🎯 核心要点 · 考什么</div>' + t.keyPoints.map(function (x) { return '<div class="pbd-li">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>';
-    if (t.approach) html += '<div class="pbd-sec"><div class="pbd-sec-t">🪜 解题套路 · 怎么破</div><div class="pbd-do">' + Tex.renderInline(t.approach) + '</div></div>';
-    if (t.pitfalls && t.pitfalls.length) html += '<div class="pbd-sec"><div class="pbd-sec-t">🕳 易错点 · 坑在哪</div>' + t.pitfalls.map(function (x) { return '<div class="pbd-li" style="color:var(--danger)">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>';
-    if (t.examPatterns && t.examPatterns.length) html += '<div class="pbd-sec"><div class="pbd-sec-t">📝 典型考法 · 怎么考</div>' + t.examPatterns.map(function (x) { return '<div class="pbd-li">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>';
-    if (!html) html = '<div class="empty">该考点暂无精讲内容，可重新生成专业体系补充。</div>';
-    Modal.open({ title: '📖 ' + (t.name || '') + ' · 考点精讲', wide: true, dismissable: true, html: html, actions: [{ label: '关闭', kind: 'btn-ghost' }] });
-  }
   // 当前全量评分行（每日推荐兜底用）
   function rowsOf() {
     var st = Store.get();
@@ -20118,11 +20090,6 @@ function bind(el, next) {
     el.querySelectorAll('.sp-prac').forEach(function (b) {
       b.onclick = function () {
         goPractice(b.getAttribute('data-subj'), b.getAttribute('data-id'), b.getAttribute('data-name'));
-      };
-    });
-    el.querySelectorAll('.sp-detail').forEach(function (b) {
-      b.onclick = function () {
-        showTopicDetail(b.getAttribute('data-subj'), b.getAttribute('data-id'));
       };
     });
     // 【轮12】科目折叠：点击科目组头切换该科目条目显隐
@@ -20290,7 +20257,6 @@ function bind(el, next) {
     phaseOf: phaseOf,
     minutesOf: minutesOf,
     markRushDone: markRushDone,
-    topicDetail: topicDetail,
     findMethodFor: findMethodFor,
     weightsOf: weightsOf,
     learnWeights: learnWeights,
