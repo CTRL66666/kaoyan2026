@@ -8967,30 +8967,69 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (st && st.parentNode) st.parentNode.removeChild(st);
       delete PluginBus._cssTags[pid];
     },
-    // 宿主在每页渲染完成后调用：enhancers [{tab:'dashboard|all', slot:'top|bottom', html:str 或 fn(ctx,el), selector?:'css 选择器'}]
+    // 宿主在每页渲染完成后调用：enhancers [{tab:'dashboard|all', slot:'top|bottom', html:str 或 fn(ctx,el), mount:fn(ctx,box)返回destroy, selector?, subscribe:['key']}]
+    // v8：支持 html（静态注入）/ mount（可交互，返回 destroy）/ subscribe（数据变化自动重挂载）
+    _enh: {},   // 'pid:i' -> {destroy, container, subscribe, tab, pid}
     _onPageRendered: function (el, tab) {
       if (!el) return;
       var self = this;
       this.list().forEach(function (m) {
-        (m.enhancers || []).forEach(function (en) {
-          if (!en || !en.html) return;
+        (m.enhancers || []).forEach(function (en, i) {
+          if (!en || (!en.html && typeof en.mount !== 'function')) return;
           if (en.tab && en.tab !== 'all' && en.tab !== tab) return;
-          try {
-            var html = typeof en.html === 'function' ? (en.html(ctxOf(m.id), el) || '') : String(en.html);
-            if (!html) return;
-            if (en.selector) {
-              // 精确选择器注入（beforeend）：作用于模块内部已知容器
-              var target = el.querySelector(en.selector);
-              if (target) target.insertAdjacentHTML('beforeend', html);
-            } else {
-              // 通用挂载槽注入：top/bottom（App.render 已为每页预置 data-pg-slot）
-              var slot = en.slot === 'top'
-                ? el.querySelector('div[data-pg-slot="top"]')
-                : el.querySelector('div[data-pg-slot="bottom"]');
-              if (slot) slot.insertAdjacentHTML('beforeend', html);
-            }
-          } catch (e) { log(m.id, '页面装饰错误：' + (e.message || e), 'error'); }
+          self._applyEnhancer(m, en, i, el, tab);
         });
+      });
+    },
+    _applyEnhancer: function (m, en, i, el, tab) {
+      var key = m.id + ':' + i;
+      var self = this;
+      var target;
+      if (en.selector) target = el.querySelector(en.selector);
+      else target = el.querySelector(en.slot === 'top' ? 'div[data-pg-slot="top"]' : 'div[data-pg-slot="bottom"]');
+      if (!target) return;
+      var container = document.createElement('div');
+      container.className = 'plg-enh';
+      container.setAttribute('data-plg-enh', key);
+      var destroy = null;
+      try {
+        if (typeof en.mount === 'function') {
+          destroy = en.mount(ctxOf(m.id), container) || null;
+        } else {
+          var html = typeof en.html === 'function' ? (en.html(ctxOf(m.id), el) || '') : String(en.html);
+          if (html) container.innerHTML = html;
+        }
+      } catch (e) { log(m.id, '页面装饰错误：' + (e.message || e), 'error'); }
+      target.appendChild(container);
+      self._enh[key] = { destroy: destroy, container: container, subscribe: en.subscribe, tab: tab, pid: m.id };
+    },
+    _clearEnh: function (key) {
+      var rec = this._enh[key];
+      if (!rec) return;
+      try { if (typeof rec.destroy === 'function') rec.destroy(); } catch (e) { }
+      try { if (rec.container && rec.container.parentNode) rec.container.parentNode.removeChild(rec.container); } catch (e) { }
+      delete this._enh[key];
+    },
+    _clearAllEnh: function () {
+      var self = this;
+      Object.keys(this._enh).forEach(function (k) { self._clearEnh(k); });
+    },
+    // 响应式重注入：subscribe 的 enhancer 在 store 变化后（防抖）重新挂载当前页面
+    _reapplyReactive: function () {
+      var self = this;
+      var view = document.getElementById('view');
+      if (!view || !window.App) return;
+      var tab = App.current;
+      Object.keys(self._enh).forEach(function (key) {
+        var rec = self._enh[key];
+        if (!rec || !rec.subscribe || !rec.subscribe.length) return;
+        if (rec.tab !== tab && rec.tab !== 'all') return;
+        var parts = key.split(':');
+        var m = enabledRec(parts[0]);
+        var idx = +parts[1];
+        if (!m || !m.enhancers || !m.enhancers[idx]) { self._clearEnh(key); return; }
+        self._clearEnh(key);
+        self._applyEnhancer(m, m.enhancers[idx], idx, view, tab);
       });
     },
 
@@ -9215,6 +9254,9 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
           try { fn(ctxOf(pid), detail || {}); } catch (e) { log(pid, '订阅回调错误：' + (e.message || e), 'error'); }
         });
       });
+      // v8 响应式装饰：subscribe 的 enhancer 防抖重注入（避免频繁 update 抖动）
+      clearTimeout(self._enhDebounce);
+      self._enhDebounce = setTimeout(function () { try { self._reapplyReactive(); } catch (e) { } }, 300);
     },
 
     // ---- 插件间通信：服务注册/调用 ----
@@ -9472,14 +9514,22 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         clearTimers(id);
         PluginBus.unsubscribeAll(id);
         PluginBus._removeCss(id);                                          // 装饰移除
+        PluginBus._clearEnhOf(id);                                        // 响应式装饰容器移除
         try { if (r.manifest.onDisable) r.manifest.onDisable(ctxOf(id)); } catch (e) { log(id, '禁用错误：' + (e.message || e), 'error'); }
       }
+    },
+    _clearEnhOf: function (pid) {
+      var self = this;
+      Object.keys(this._enh).forEach(function (k) {
+        if (self._enh[k] && self._enh[k].pid === pid) self._clearEnh(k);
+      });
     },
     remove: function (id) {
       Store.update(function (s) { s.plugins = (s.plugins || []).filter(function (x) { return x.id !== id; }); });
       clearTimers(id);
       PluginBus.unsubscribeAll(id);
       PluginBus._removeCss(id);
+      PluginBus._clearEnhOf(id);
       try { if (registry[id] && registry[id].manifest.onDisable) registry[id].manifest.onDisable(ctxOf(id)); } catch (e) {}
       PluginBus.closePanelsOf(id);
       delete registry[id];
@@ -30802,6 +30852,37 @@ function bind(el, next) {
         "      }).join('');",
         "      return '<div class=\'card\'><div class=\'card-title-sm\'>🥁 押题卷成绩走势（' + hist.length + ' 卷）</div>' + rows + '</div>';",
         "    } }]",
+        "});"
+      ])
+    },
+    {
+      id: 'live-countdown', name: '实时倒计时卡', version: '1.0', icon: '⏳',
+      desc: 'v8 响应式增强演示：mount 可交互注入作战台顶部倒计时卡，subscribe 任务数据变化自动刷新（打卡后即时更新）。',
+      tags: ['装饰', '响应式', 'mount'],
+      code: mkCode([
+        "PluginBus.register({",
+        "  id: 'live-countdown', name: '实时倒计时卡', version: '1.0', author: '内置',",
+        "  desc: '响应式可交互增强：作战台顶部倒计时卡，任务变化自动刷新',",
+        "  enhancers: [{",
+        "    tab: 'dashboard', slot: 'top', subscribe: ['tasks'],",
+        "    mount: function (ctx, box) {",
+        "      var paint = function () {",
+        "        var s = ctx.Store.get();",
+        "        var left = ctx.U.daysTo ? ctx.U.daysTo(s.settings.examDate) : 0;",
+        "        var st = ctx.Store.todayTaskStats ? ctx.Store.todayTaskStats() : {};",
+        "        var d = 0, t = 0; Object.keys(st).forEach(function (k) { d += st[k][0]; t += st[k][1]; });",
+        "        box.innerHTML = '<div class=\\'card pg-decor-card\\' style=\\'border-left:3px solid var(--blue)\\'>'",
+        "          + '<div class=\\'card-title-sm\\'>⏳ 实时倒计时（响应式增强）</div>'",
+        "          + '<div style=\\'display:flex;gap:14px;flex-wrap:wrap\\'>'",
+        "          + '<span>距考研 <b style=\\'color:var(--danger)\\'>' + left + '</b> 天</span>'",
+        "          + '<span>今日任务 <b>' + d + '/' + t + '</b> 完成</span>'",
+        "          + '</div>'",
+        "          + '<div class=\\'muted-sm\\' style=\\'font-size:11.5px;margin-top:4px\\'>本卡由「实时倒计时卡」插件 mount 注入——打卡后（tasks 变化）自动刷新，无需手动。</div></div>';",
+        "      };",
+        "      paint();",
+        "      return function () { box.innerHTML = ''; };",
+        "    }",
+        "  }]",
         "});"
       ])
     },
