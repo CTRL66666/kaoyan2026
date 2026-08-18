@@ -19784,10 +19784,37 @@ function bind(el, next) {
   }
 
   // ==================== 冲刺路径规划 ====================
+  // 时间盒：按押题分阶梯分配建议时长（必押 25 / 重点 20 / 关注 15 / 可选 10 分钟）
+  function minutesOf(score) {
+    if (score >= 18) return 25;
+    if (score >= 12) return 20;
+    if (score >= 8) return 15;
+    return 10;
+  }
+  // 标记冲刺考点完成（回写 rushPlan，下次生成自动跳过）
+  function markRushDone(id) {
+    Store.update(function (s) {
+      var plan = (s.sprintData && s.sprintData.rushPlan) || null;
+      if (!plan || !plan.days) return;
+      plan.days.forEach(function (d) {
+        (d.tasks || []).forEach(function (t) { if (t.id === id) t.done = true; });
+      });
+    });
+    var btn = document.querySelector('.sp-rush-done[data-id="' + id + '"]');
+    if (btn) { btn.textContent = '✓ 已完成'; btn.disabled = true; btn.classList.remove('btn-primary'); btn.classList.add('btn-ghost'); }
+    Toast.success('已标记完成，下次生成自动跳过');
+  }
   function rushPlan(el) {
     var st = Store.get();
     var daysLeft = U.daysTo(st.settings.examDate);
     if (daysLeft <= 0) { Toast.warn('考试日期已过或未设置'); return; }
+
+    // 已掌握 + 上次已完成的考点：动态跳过（避免重复安排）
+    var prevPlan = (st.sprintData && st.sprintData.rushPlan) || null;
+    var doneIds = {};
+    if (prevPlan && prevPlan.days) {
+      prevPlan.days.forEach(function (d) { (d.tasks || []).forEach(function (t) { if (t.done) doneIds[t.id] = 1; }); });
+    }
 
     var heat = st.heat || {};
     var dep = leverageMap();
@@ -19796,12 +19823,16 @@ function bind(el, next) {
     SUBJ_ORDER.forEach(function (subj) {
       (DB.TOPICS[subj] || []).forEach(function (t) {
         var s = scoreOf(t, heat, dep, trends);
-        if (s.score > 0 && s.lvl < 2) allRows.push({ subj: subj, id: t.id, name: t.name, score: s.score, group: t.group || '' });
+        var h = (st.heat || {})[t.id];
+        var mastered = h && Mastery.effScore(h) != null && Mastery.effScore(h) >= 80;
+        if (s.score > 0 && s.lvl < 2 && !mastered && !doneIds[t.id]) {
+          allRows.push({ subj: subj, id: t.id, name: t.name, score: s.score, group: t.group || '', minutes: minutesOf(s.score), done: false });
+        }
       });
     });
     allRows.sort(function (a, b) { return b.score - a.score; });
 
-    // 按天分配：每天 3-4 个考点，按科目均衡
+    // 按天分配：每天 4 个考点，按科目均衡
     var perDay = 4;
     var totalDays = Math.min(daysLeft, Math.ceil(allRows.length / perDay));
     var days = [];
@@ -19821,19 +19852,31 @@ function bind(el, next) {
     var plan = { days: days, generatedAt: new Date().toISOString() };
     Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.rushPlan = plan; });
 
+    var totalTasks = days.reduce(function (a, d) { return a + d.tasks.length; }, 0);
     var daysHtml = days.map(function (d, di) {
+      var dayMins = d.tasks.reduce(function (a, t) { return a + (t.minutes || 10); }, 0);
       var tasksHtml = d.tasks.map(function (t) {
-        return '<div style="padding:4px 0;font-size:13px"><span class="task-tag" style="background:' + subjColor(t.subj) + ';font-size:10px">' + subjName(t.subj) + '</span> '
-          + U.esc(t.name) + ' <span class="muted-sm">（押题分' + t.score + '）</span></div>';
+        return '<div style="padding:5px 0;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+          + '<span class="task-tag" style="background:' + subjColor(t.subj) + ';font-size:10px">' + subjName(t.subj) + '</span>'
+          + '<span style="flex:1;min-width:120px">' + U.esc(t.name) + '</span>'
+          + '<span class="muted-sm" style="font-size:11px">' + t.score + '分 · ' + (t.minutes || 10) + 'min</span>'
+          + '<button class="btn btn-sm btn-primary sp-rush-done" data-id="' + t.id + '">✓ 完成</button>'
+          + '</div>';
       }).join('');
       var dateLabel = di === 0 ? '今天' : di === 1 ? '明天' : d.date.slice(5);
-      return '<div class="card" style="margin:6px 0;background:var(--bg-muted)"><div class="card-title-sm" style="display:flex;justify-content:space-between;align-items:center">📅 ' + dateLabel + ' · 第' + (di + 1) + '天'
+      return '<div class="card" style="margin:6px 0;background:var(--bg-muted)"><div class="card-title-sm" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">'
+        + '<span>📅 ' + dateLabel + ' · 第' + (di + 1) + '天 <span class="muted-sm" style="font-size:11px">⏱ 约 ' + dayMins + ' 分钟</span></span>'
         + '<button class="btn btn-sm btn-ghost sp-rush-add" data-day="' + di + '">📥 排入今日</button></div>' + tasksHtml + '</div>';
     }).join('');
 
+    var summary = totalTasks
+      ? '<div class="alert" style="margin-bottom:8px">🎯 共 <b>' + totalTasks + '</b> 个考点 · 每天 <b>' + perDay + '</b> 个 · 预计 <b>' + totalDays + '</b> 天清完'
+        + (daysLeft > totalDays ? '（余 ' + (daysLeft - totalDays) + ' 天弹性）' : '（时间偏紧，优先必押）') + '</div>'
+      : '<div class="alert alert-ok" style="margin-bottom:8px">✅ 未掌握考点均已排入过计划。去练新题或补测薄弱点吧。</div>';
+
     Modal.open({
-      title: '🗺️ 冲刺路径规划（' + totalDays + '天 · 每天约' + perDay + '个考点）', wide: true, dismissable: true,
-      html: '<div class="muted-sm" style="margin-bottom:8px">基于押题评分按天分配冲刺任务，每天每科1个最高分考点。可把任意一天整体排入今日任务。</div>' + daysHtml,
+      title: '🗺️ 智能作战计划（' + totalDays + '天 · 时间盒化）', wide: true, dismissable: true,
+      html: summary + '<div class="muted-sm" style="margin-bottom:8px">按押题分自动分配每日考点与建议时长（必押 25min / 重点 20min / 关注 15min / 可选 10min）。点「✓完成」标记，下次生成自动跳过已完成与已掌握考点。</div>' + daysHtml,
       actions: [{ label: '关闭', kind: 'btn-ghost' }]
     });
 
@@ -19860,6 +19903,9 @@ function bind(el, next) {
           Toast.success(added ? '已把第' + (di + 1) + '天的 ' + added + ' 个考点排入今日任务' : '这些考点已在今日任务中');
           if (added) App.refresh();
         };
+      });
+      document.querySelectorAll('.sp-rush-done').forEach(function (b) {
+        b.onclick = function () { markRushDone(b.getAttribute('data-id')); };
       });
     }, 80);
   }
@@ -20195,6 +20241,8 @@ function bind(el, next) {
   window.SprintModule = {
     render: render,
     phaseOf: phaseOf,
+    minutesOf: minutesOf,
+    markRushDone: markRushDone,
     findMethodFor: findMethodFor,
     weightsOf: weightsOf,
     learnWeights: learnWeights,
