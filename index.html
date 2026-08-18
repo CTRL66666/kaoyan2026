@@ -27025,8 +27025,11 @@ function bind(el, next) {
   }
 
   // ---------- 消息渲染（TeX + 动作按钮 + 任务流剥离） ----------
+  function stripTools(text) {
+    return String(text || '').replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').replace(/\[\[FLOW:[\s\S]*?\]\]/g, '').replace(/\[\[QUERY:[\s\S]*?\]\]/g, '').trim();
+  }
   function renderContent(text) {
-    var clean = text.replace(/\[\[ACTION:[\s\S]*?\]\]/g, '').replace(/\[\[FLOW:[\s\S]*?\]\]/g, '').replace(/\[\[QUERY:[\s\S]*?\]\]/g, '').trim();
+    var clean = stripTools(text);
     var html = U.esc(clean);
     try { html = Tex.renderInline(html); } catch (e) { }
     return html.replace(/\n/g, '<br>');
@@ -27972,8 +27975,12 @@ function bind(el, next) {
       : '';
     var userPayload = composeUserPayload(convoText, skillBlock, attach, img, text);
 
-    AI.chatStream(systemPrompt(), userPayload, function (full) {
-      bubble.innerHTML = renderContent(full || '') + '<span class="ai-cursor"></span>';
+    // ============ 真·多轮 Agent loop ============
+    // 教练回复若含 QUERY（读数据），执行后同轮回填结果、继续让教练作答，直到收敛（无 QUERY）或达到上限。
+    // 流式体验：每轮文本 + 📊 结果追加到同一气泡；最终 pushHistory 存完整拼接（末轮含标记，供动作按钮渲染）。
+    agentLoop(AI.chatStream, systemPrompt(), userPayload, function (parts, chunk) {
+      var prefix = parts.join('\n\n');
+      bubble.innerHTML = renderContent(prefix + (prefix ? '\n\n' : '') + chunk) + '<span class="ai-cursor"></span>';
       box.scrollTop = box.scrollHeight;
     }, img).then(function (full) {
       sending = false;
@@ -28265,6 +28272,36 @@ function bind(el, next) {
     return (keys || []).map(function (k) { return (QUERIES[k] && QUERIES[k].label) || k; }).join('、');
   }
 
+  // ============================================================
+  // 真·多轮 Agent loop：教练回复含 QUERY 时，执行后同轮回填、继续作答直到收敛。
+  // chatFn 依赖注入（生产传 AI.chatStream，测试传 mock），返回 Promise<完整拼接文本>。
+  // ============================================================
+  function agentLoop(chatFn, sys, payload, onChunk, img) {
+    var rounds = 0, MAX_ROUNDS = 3;
+    var visibleParts = [];
+    function runRound(p) {
+      return chatFn(sys, p, function (chunk) {
+        if (onChunk) onChunk(visibleParts, chunk);
+      }, img, { cache: false }).then(function (resp) {
+        rounds++;
+        var qKeys = parseQuery(resp);
+        if (qKeys && rounds < MAX_ROUNDS) {
+          var qRes = runQuery(qKeys);
+          if (qRes.length) {
+            visibleParts.push(stripTools(resp));
+            visibleParts.push('📊 ' + qRes.join('；'));
+            var next = p + '\n\n【你上轮回复】' + resp + '\n【数据查询结果】' + qRes.join('；')
+              + '\n请基于以上数据直接回答用户的问题，不要再输出 [[QUERY:]]。';
+            return runRound(next);
+          }
+        }
+        // 收敛：返回完整拼接（末轮 resp 保留标记，供动作按钮渲染）
+        return visibleParts.concat([resp]).join('\n\n');
+      });
+    }
+    return runRound(payload);
+  }
+
   // 启动提醒检查器（有 pending 自动轮询，清空自动停）
   try { reminderTicker(); } catch (e) {}
 
@@ -28278,6 +28315,8 @@ function bind(el, next) {
     parseFlow: parseFlow,
     parseQuery: parseQuery,
     runQuery: runQuery,
+    agentLoop: agentLoop,
+    stripTools: stripTools,
     flowCardHtml: flowCardHtml,
     flowEnsure: flowEnsure,
     flowRunAll: flowRunAll,
