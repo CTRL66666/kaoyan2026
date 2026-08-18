@@ -1796,10 +1796,13 @@ html[data-theme="night"] .pb-step-now { box-shadow: 0 0 0 2px rgba(240, 185, 90,
 .gd-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .gd-title { flex: 1; font-size: 16px; font-weight: 600; }
 .gd-count { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.gd-prog { display: flex; gap: 5px; margin: 10px 0 12px; }
+.gd-prog { display: flex; gap: 8px; margin: 10px 0 12px; align-items: center; }
 .gd-prog i { flex: 1; height: 5px; border-radius: 3px; background: var(--line); transition: background .3s; }
 .gd-prog i.done { background: linear-gradient(90deg, #f6cd6f, #e2a43f); }
 .gd-prog i.now { background: var(--pc, #4a6cd4); animation: sklShimmer 1.4s ease-in-out infinite; }
+.gd-prog-step { width: 24px; height: 24px; border-radius: 50%; background: var(--line); color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; transition: all .25s; flex: 0 0 auto; }
+.gd-prog-step.done { background: var(--ok); color: #fff; }
+.gd-prog-step.now { background: var(--pc, #4a6cd4); color: #fff; transform: scale(1.18); box-shadow: 0 0 0 3px rgba(74,108,212,.18); }
 .gd-dones { margin-bottom: 10px; }
 .gd-done { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--text-muted); padding: 3px 0; }
 .gd-done-no { color: var(--ok); font-weight: 600; flex: 0 0 auto; }
@@ -15263,6 +15266,7 @@ function bind(el, next) {
       steps: steps,
       pitfalls: arr(raw.pitfalls, 4).map(function (t) { return String(t).slice(0, 50); }),
       verify: arr(raw.verify, 3).map(function (t) { return String(t).slice(0, 50); }),
+      confusions: arr(raw.confusions, 4).map(function (t) { return String(t).slice(0, 60); }),
       source: 'ai', uses: 0, createdAt: new Date().toISOString()
     };
   }
@@ -15439,6 +15443,7 @@ function bind(el, next) {
       + '<div class="pbd-side pbd-bad"><div class="pbd-sec-t">🕳 高频坑</div>' + (p.pitfalls || []).map(function (x) { return '<div class="pbd-li">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>'
       + '<div class="pbd-side pbd-ok"><div class="pbd-sec-t">✅ 验证方法</div>' + (p.verify || []).map(function (x) { return '<div class="pbd-li">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>'
       + '</div>'
+      + (p.confusions && p.confusions.length ? '<div class="pbd-sec" style="margin-top:10px"><div class="pbd-sec-t">🔀 易混辨析 · 别搞混</div>' + p.confusions.map(function (x) { return '<div class="pbd-li" style="color:var(--warn)">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>' : '')
       + '<div class="pbd-actions">'
       + '<button class="btn btn-gold pb-example" data-pb="' + p.id + '">⚡ AI 出例题 · 带教</button>'
       + '<button class="btn btn-ghost pb-guide" data-pb="' + p.id + '">分步带练</button>'
@@ -15485,12 +15490,16 @@ function bind(el, next) {
     var steps = p.steps || [];
     var st = steps[guideIdx];
     var html = '<div class="gd-prog">' + steps.map(function (s, i) {
-      return '<i class="' + (i < guideIdx ? 'done' : i === guideIdx ? 'now' : '') + '"></i>';
+      var cls = i < guideIdx ? 'done' : i === guideIdx ? 'now' : '';
+      return '<span class="gd-prog-step ' + cls + '">' + (i < guideIdx ? '✓' : (i + 1)) + '</span>';
     }).join('') + '</div>';
     if (guideIdx > 0) {
       html += '<div class="gd-dones">' + steps.slice(0, guideIdx).map(function (s2, i) {
         return '<div class="gd-done"><span class="gd-done-no">✓ ' + (i + 1) + '</span><b>' + U.esc(s2.name) + '</b><span class="gd-done-txt">' + U.esc((guideInputs[i] || '').slice(0, 40)) + '</span>'
-          + (guideTeach[i] ? '<div class="gd-teach">🏫 ' + Tex.renderInline(guideTeach[i]) + '</div>' : '') + '</div>';
+          + (guideTeach[i] ? '<div class="gd-teach">🏫 ' + Tex.renderInline(guideTeach[i]) + '</div>' : '')
+          + '<details class="gd-std" style="margin-top:4px"><summary style="font-size:12px;cursor:pointer;opacity:.7">📌 标准做法对照</summary>'
+          + '<div style="font-size:12.5px;margin-top:4px">' + Tex.renderInline(s2.do || '') + (s2.tip ? '<span style="color:var(--warn)">　⚠️ ' + Tex.renderInline(s2.tip) + '</span>' : '') + '</div></details>'
+          + '</div>';
       }).join('') + '</div>';
     }
     html += '<div class="gd-step" style="--pc:' + pc(p) + '">'
@@ -15580,13 +15589,15 @@ function bind(el, next) {
       + '    ...至少 4 步,至多 7 步,按真实解题顺序,覆盖「识别→下手→执行→验证」完整闭环\n'
       + '  ],\n'
       + '  "pitfalls": ["整题高频错1(≤30字)", "错2", ...] (2-4条),\n'
-      + '  "verify": ["验证方法1(≤30字)", "方法2"] (1-3条)\n'
+      + '  "verify": ["验证方法1(≤30字)", "方法2"] (1-3条),\n'
+      + '  "confusions": ["易混辨析1(≤40字,如「和XX题型易混,关键区别是YY」)", "辨析2"] (1-4条)\n'
       + '}\n\n'
       + '质量纪律：① steps 必须可执行（动词开头、有具体动作），禁止「分析题目」「套公式」这类空话；'
       + '② recognize 是「触发信号」而非题目描述（学生看到这些就该想到这方法）；'
       + '③ pitfalls 与 steps.tip 不重复（tip 是该步特有坑，pitfall 是整题级）；'
       + '④ verify 是对最终结果的合理性验证（如代值/量级/边界/单位）；'
-      + '⑤ subject 必须根据用户给出的科目填入，**严禁默认填 math**。\n'
+      + '⑤ confusions 是易混辨析——点出最容易和哪个相似题型混淆、一句关键区别，帮学生建立边界感；'
+      + '⑥ subject 必须根据用户给出的科目填入，**严禁默认填 math**。\n'
       + '只输出 JSON 本身（不要前言/后记/markdown 围栏/代码块标记）。';
   }
   function checkSystem(p) {
@@ -15808,7 +15819,19 @@ function bind(el, next) {
             guideTeach[guideIdx] = (r && r.t) || ex.teach; advance();
           }).catch(function () { guideTeach[guideIdx] = ex.teach; advance(); });
         } else { guideTeach[guideIdx] = ex.teach; advance(); }
-      } else advance();
+      } else {
+        // 普通带练：每步也 AI 讲解（对照标准步骤 do/tip 给反馈），让每步都有"教练在场"
+        var st = (p.steps || [])[guideIdx];
+        if (typeof AI !== 'undefined' && AI.configured()) {
+          gdNext.disabled = true; gdNext.textContent = '⏳ 教练点评中…';
+          AI.chatJSON('你是苏格拉底式教练。考生刚写完这一步的尝试。对照【标准做法】给一句反馈（≤50字；写对了就半句肯定再点出关键，写错了直接指出并给正确思路）。只输出 JSON：{"t":"..."}。用简体中文。',
+            '【步骤】' + (st.name || '') + '\n【标准做法】' + (st.do || '') + (st.tip ? '\n【该步坑】' + st.tip : '') + '\n【考生尝试】' + guideInputs[guideIdx]
+          ).then(function (r) {
+            guideTeach[guideIdx] = (r && r.t) || '';
+            advance();
+          }).catch(function () { advance(); });
+        } else advance();
+      }
     };
     var gdPrev = el.querySelector('#gd-prev');
     if (gdPrev) gdPrev.onclick = function () { guideIdx = Math.max(0, guideIdx - 1); render(el); };
