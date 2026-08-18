@@ -19856,11 +19856,19 @@ function bind(el, next) {
     var daysHtml = days.map(function (d, di) {
       var dayMins = d.tasks.reduce(function (a, t) { return a + (t.minutes || 10); }, 0);
       var tasksHtml = d.tasks.map(function (t) {
+        var h = heat[t.id];
+        var eff = h ? Mastery.effScore(h) : null;
+        var badge = eff == null ? '<span class="task-tag" style="background:#8c8c8c;font-size:10px;color:#fff">未测</span>'
+          : eff >= 80 ? '<span class="task-tag" style="background:#237804;font-size:10px;color:#fff">已掌握</span>'
+          : eff >= 50 ? '<span class="task-tag" style="background:#fa8c16;font-size:10px;color:#fff">一般</span>'
+          : '<span class="task-tag" style="background:#cf1322;font-size:10px;color:#fff">薄弱</span>';
         return '<div style="padding:5px 0;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
           + '<span class="task-tag" style="background:' + subjColor(t.subj) + ';font-size:10px">' + subjName(t.subj) + '</span>'
-          + '<span style="flex:1;min-width:120px">' + U.esc(t.name) + '</span>'
-          + '<span class="muted-sm" style="font-size:11px">' + t.score + '分 · ' + (t.minutes || 10) + 'min</span>'
-          + '<button class="btn btn-sm btn-primary sp-rush-done" data-id="' + t.id + '">✓ 完成</button>'
+          + '<span style="flex:1;min-width:110px">' + U.esc(t.name) + '</span>'
+          + badge
+          + '<span class="muted-sm" style="font-size:11px">' + t.score + '分·' + (t.minutes || 10) + 'min</span>'
+          + '<button class="btn btn-sm btn-primary sp-rush-go" data-subj="' + t.subj + '" data-id="' + t.id + '" data-name="' + U.esc(t.name) + '">去练</button>'
+          + '<button class="btn btn-sm btn-ghost sp-rush-done" data-id="' + t.id + '" title="标记已完成（下次跳过）">✓</button>'
           + '</div>';
       }).join('');
       var dateLabel = di === 0 ? '今天' : di === 1 ? '明天' : d.date.slice(5);
@@ -19876,7 +19884,7 @@ function bind(el, next) {
 
     Modal.open({
       title: '🗺️ 智能作战计划（' + totalDays + '天 · 时间盒化）', wide: true, dismissable: true,
-      html: summary + '<div class="muted-sm" style="margin-bottom:8px">按押题分自动分配每日考点与建议时长（必押 25min / 重点 20min / 关注 15min / 可选 10min）。点「✓完成」标记，下次生成自动跳过已完成与已掌握考点。</div>' + daysHtml,
+      html: summary + '<div class="muted-sm" style="margin-bottom:8px">点「去练」直接进入该考点的 AI 变式测验，练完掌握度实时更新；「✓」手动标记完成。下次生成自动跳过已掌握/已完成考点。</div>' + daysHtml,
       actions: [{ label: '关闭', kind: 'btn-ghost' }]
     });
 
@@ -19906,6 +19914,12 @@ function bind(el, next) {
       });
       document.querySelectorAll('.sp-rush-done').forEach(function (b) {
         b.onclick = function () { markRushDone(b.getAttribute('data-id')); };
+      });
+      document.querySelectorAll('.sp-rush-go').forEach(function (b) {
+        b.onclick = function () {
+          Modal.close();
+          goPractice(b.getAttribute('data-subj'), b.getAttribute('data-id'), b.getAttribute('data-name'));
+        };
       });
     }, 80);
   }
