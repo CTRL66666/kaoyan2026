@@ -15562,7 +15562,7 @@ function bind(el, next) {
       + '<div class="gd-stepname">' + U.esc(st.name) + '</div>'
       + '<div class="gd-stepdo">' + Tex.renderInline(st.do || '') + '</div>'
       + (curExample && curExample.pbId === p.id ? '<div class="gd-exnote">🏫 本题教练掌握参考解法——你先写这步，写完教练当场讲解。</div>' : '')
-      + '<div class="gd-hintrow"><button class="btn btn-sm btn-ghost" id="gd-hint">' + (curExample && curExample.pbId === p.id ? '💡 卡住了？教练给提示' : '💡 卡住了？要个提示') + '</button></div>'
+      + '<div class="gd-hintrow"><button class="btn btn-sm btn-ghost" id="gd-hint">' + (curExample && curExample.pbId === p.id ? '💡 卡住了？教练给提示' : '💡 卡住了？要个提示') + '</button><button class="btn btn-sm btn-primary" id="gd-write">🏫 教练带你写</button></div>'
       + '<div id="gd-hint-slot"></div>'
       + '<textarea class="input gd-in" id="gd-in" rows="3" placeholder="写下你这一步的尝试…（写完点下一步）">' + U.esc(guideInputs[guideIdx] || '') + '</textarea>'
       + '<div class="gd-nav">'
@@ -15910,6 +15910,8 @@ function bind(el, next) {
     if (gdProblem) gdProblem.oninput = function () { guideProblem = gdProblem.value; };
     var gdHint = el.querySelector('#gd-hint');
     if (gdHint) gdHint.onclick = function () { doGuideHint(el); };
+    var gdWrite = el.querySelector('#gd-write');
+    if (gdWrite) gdWrite.onclick = function () { doGuideWrite(el, byId(curPb)); };
     var gdNext = el.querySelector('#gd-next');
     if (gdNext) gdNext.onclick = function () {
       var p = byId(curPb); if (!p) return;
@@ -16043,6 +16045,31 @@ function bind(el, next) {
       if (slot) slot.innerHTML = '<div class="pb-hint">💡 ' + U.esc(full || (exg ? exg.hint : st.tip) || '') + '</div>';
     }).catch(function () {
       if (slot) slot.innerHTML = '<div class="pb-hint">💡 （AI 不可用）按这个想：' + U.esc((exg && exg.hint) || st.tip || st.do || '') + '</div>';
+    });
+  }
+
+  // 教练带你写：AI 生成这步的标准做法，直接填入答题框（用户可继续补充/修改）
+  function doGuideWrite(el, p) {
+    if (!p) return;
+    var st = (p.steps || [])[guideIdx]; if (!st) return;
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('未配置 AI，无法代写'); return; }
+    Toast.show('正在为「' + st.name + '」生成标准写法…', 'info', 2500);
+    var exg = (curExample && curExample.pbId === p.id) ? (curExample.steps || [])[guideIdx] : null;
+    var userText = (el.querySelector('#gd-in') || {}).value || '';
+    var system = '你是考研方法论教练，为考生写出这一步的标准做法（约 80-160 字，含关键计算/推理/结论），不写"解"字、不前言。简体中文。';
+    var user = '方法卡：' + p.title + ' 第' + (guideIdx + 1) + '步「' + st.name + '」'
+      + '\n【标准做法】' + (st.do || '')
+      + (st.tip ? '\n【该步坑】' + st.tip : '')
+      + (exg && exg.key ? '\n【例题关键】' + exg.key : (curExample && curExample.stem ? '\n【题目】' + curExample.stem : (guideProblem ? '\n【题目】' + guideProblem : '')))
+      + (userText ? '\n【考生已写】' + userText : '');
+    AI.chatStream(system, user, null, null, { noThink: true }).then(function (text) {
+      var ta = el.querySelector('#gd-in');
+      if (ta && text) {
+        ta.value = text.trim();
+        Toast.success('已填入标准做法，你可在上面继续补充');
+      }
+    }).catch(function (e) {
+      Toast.warn('生成失败：' + (e.message || e));
     });
   }
 
