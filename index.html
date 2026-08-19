@@ -19351,6 +19351,10 @@ function bind(el, next) {
       + optsHtml
       + (r && r.comment ? '<div class="gd-teach" style="margin-top:6px">🏫 ' + Tex.renderInline(r.comment) + '</div>' : '')
       + (done || answered ? '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(q.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(q.solution || '') + '</div></details>' : '')
+      // 【新增】单题复核（思考模式）：AI 深度复核这一题的答案/解析，防 AI 幻觉
+      + (done || answered ? '<div class="btn-row" style="margin-top:6px">'
+        + '<button class="btn btn-sm btn-ghost sp-q-review" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px">🔍 复核此题（思考模式）</button>'
+        + '</div><div class="sp-q-review-slot" data-qi="' + qi + '" style="margin-top:4px"></div>' : '')
       // 【新增】加入题库 / 加入错题（任意题可收藏或手动入错题本）
       + (function () {
         var inBank = questionInBank(examId, qi);
@@ -19616,9 +19620,11 @@ function bind(el, next) {
         // 【轮22】AI 答案复核：思考模式深度复核整卷（防 AI 幻觉错误）
         + '<div class="sp-exam-review" style="margin:8px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
         + '<button class="btn btn-sm btn-primary" id="sp-exam-review">🔍 AI 答案复核（思考模式·防 AI 错误）</button>'
-        + '<span class="muted-sm" style="font-size:11.5px">深度复核每道题，发现原答案错误时给正确解答</span>'
+        + '<button class="btn btn-sm btn-gold" id="sp-exam-analyze">📊 整卷深度分析（思考模式）</button>'
+        + '<span class="muted-sm" style="font-size:11.5px">难度命中率·创新度·真题契合度·复习建议</span>'
         + '</div>'
         + '<div id="sp-exam-review-slot"></div>'
+        + '<div id="sp-exam-analyze-slot"></div>'
         + '<div class="card-title-sm" style="margin-top:6px">🩺 本卷弱点（' + wrongs.length + ' 题失分）</div>'
         + wrongHtml
         + '</div>';
@@ -19665,6 +19671,15 @@ function bind(el, next) {
     if (submit) submit.onclick = function () { gradeExam(examId, el); };
     var reviewBtn = el.querySelector('#sp-exam-review');
     if (reviewBtn) reviewBtn.onclick = function () { doReviewExam(exam, el); };
+    var analyzeBtn = el.querySelector('#sp-exam-analyze');
+    if (analyzeBtn) analyzeBtn.onclick = function () { doAnalyzeExam(exam, el); };
+    el.querySelectorAll('.sp-q-review').forEach(function (b) {
+      b.onclick = function () {
+        var qi = +b.getAttribute('data-qi');
+        var slot = el.querySelector('.sp-q-review-slot[data-qi="' + qi + '"]');
+        doReviewQuestion(exam, qi, b, slot);
+      };
+    });
 
     if (!done) {
       // 真实倒计时：startedAt 持久化（重开续表），到点自动交卷
@@ -19780,6 +19795,89 @@ function bind(el, next) {
         user: o.user != null ? o.user : (prev.user || ''),
         at: new Date().toISOString()
       };
+    });
+  }
+
+  // 单题复核（思考模式）：AI 深度复核这一题的答案/解析，防幻觉
+  function doReviewQuestion(exam, qi, btn, slot) {
+    var q = (exam.questions || [])[qi];
+    if (!q || !slot) return;
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('未配置 AI'); return; }
+    if (slot.dataset.busy) return;
+    slot.dataset.busy = '1';
+    btn.disabled = true;
+    slot.innerHTML = '<div class="cp-thinking" style="font-size:12px">🤔 深度复核中（思考模式）…</div>';
+    var r = (exam.results || [])[qi] || {};
+    var usr = '请批判性复核这道题的原标准答案与原解析是否正确（不要默认正确，防 AI 幻觉）。\n'
+      + '【题目】' + Tex.renderInline(q.stem || '') + '\n【考生答案】' + (r.answer || '(未答)') + '\n【原标准答案】' + (q.answer || '') + '\n【原解析】' + Tex.renderInline(q.solution || '')
+      + '\n\n只输出 JSON：{"verdict":"correct|wrong|partial","reason":"≤30字","corrected":"仅 verdict≠correct 时给正确解答，否则空串"}';
+    AI.chatStream('你是考研复核专家，批判性复核这一道题。', usr, null, null, { noThink: false, timeout: 300000, cache: false }).then(function (full) {
+      slot.dataset.busy = ''; btn.disabled = false;
+      var j = null; try { j = AI.extractRobustJSON(full); } catch (e) { }
+      var verdict = j && j.verdict; var reason = (j && j.reason) || ''; var corrected = (j && j.corrected) || '';
+      var cls = verdict === 'correct' ? 'var(--ok)' : verdict === 'wrong' ? 'var(--danger)' : 'var(--warn)';
+      var txt = verdict === 'correct' ? '✓ 原答案正确' : verdict === 'wrong' ? '✗ 原答案错误' : '△ 部分错';
+      slot.innerHTML = '<div style="padding:8px;border:1px solid var(--line);border-left:3px solid ' + cls + ';border-radius:4px;background:var(--bg)">'
+        + '<b style="color:' + cls + '">' + txt + '</b><span class="muted-sm" style="margin-left:6px;font-size:12px">' + U.esc(reason) + '</span>'
+        + (corrected && verdict !== 'correct' ? '<div style="margin-top:6px;padding:6px;background:var(--bg-muted);border-radius:3px;font-size:12.5px"><b style="color:var(--ok)">✓ 正确解答：</b>' + Tex.renderInline(corrected) + '</div>' : '')
+        + '</div>';
+    }).catch(function (e) {
+      slot.dataset.busy = ''; btn.disabled = false;
+      slot.innerHTML = '<div class="alert alert-danger" style="font-size:12px">复核失败：' + U.esc(e.message || e) + '</div>';
+    });
+  }
+
+  // 整卷深度分析（思考模式）：难度命中率 / 创新度 / 真题契合度 / 多维评估 + 复习建议
+  function doAnalyzeExam(exam, el) {
+    if (!exam) return;
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('未配置 AI'); return; }
+    var slot = el.querySelector('#sp-exam-analyze-slot');
+    if (!slot) return;
+    if (slot.dataset.busy) return;
+    slot.dataset.busy = '1';
+    Toast.show('AI 正在深度分析整卷（思考模式，可能需要 1-3 分钟）…', 'info', 3500);
+    slot.innerHTML = '<div class="cp-thinking">📊 AI 深度分析中（多维评估）</div><div class="skl-line"></div><div class="skl-line skl-w80"></div>';
+    var qs = (exam.questions || []).map(function (q, i) {
+      return (i + 1) + '. [' + (q.diff === 'hard' ? '压轴' : q.diff === 'medium' ? '中档' : '基础') + '] ' + Tex.renderInline((q.stem || '').slice(0, 60)) + '（' + (q.topicName || '') + '）';
+    }).join('\n');
+    var usr = '请深度分析下面这套押题卷，从多维度评估并给出复习参考意见。\n'
+      + '【评估维度（每项给 0-10 分 + 一句点评）】\n'
+      + '1. 难度命中率：整卷实际难度分布是否符合"出题难度要求"（是否偏简单/偏难/分布失衡）；\n'
+      + '2. 创新度：题目是否老套大众（语料库套路题）、有无创新设问/综合角度/反直觉陷阱；\n'
+      + '3. 真题契合度：单题与整体是否契合真实考研真题风格（信息密度/设问方式/干扰项质量/计算量）；\n'
+      + '4. 考点覆盖度：是否覆盖了该卷目标考点、有无偏题漏点；\n'
+      + '5. 区分度：能否拉开不同水平考生（有无送分题 vs 压轴题梯度）；\n'
+      + '6. 命题严谨性：题干/选项/答案/解析有无逻辑漏洞或歧义。\n'
+      + '【输出格式】只输出 JSON：{"scores":{"difficulty":0-10,"innovation":0-10,"fidelity":0-10,"coverage":0-10,"discrimination":0-10,"rigor":0-10},"comments":{"difficulty":"一句点评","innovation":"...","fidelity":"...","coverage":"...","discrimination":"...","rigor":"..."},"overall":"总评一段(≤120字)","suggestions":["复习建议1","建议2","建议3"]}\n\n'
+      + '【试卷信息】\n科目：' + (exam.subject || '') + '，共 ' + (exam.questions || []).length + ' 题，满分 ' + ((exam.questions || []).reduce(function (a, q) { return a + (q.score || 0); }, 0)) + '。\n'
+      + '【各题】\n' + qs;
+    AI.chatStream('你是考研命题评估专家，对整套卷做多维批判性评估。', usr, function (txt) {
+      slot.innerHTML = '<div class="report" style="font-size:13px">' + Tex.renderInline(txt || '') + '<span class="ai-cursor"></span></div>';
+    }, null, { noThink: false, timeout: 600000, cache: false }).then(function (full) {
+      slot.dataset.busy = '';
+      var j = null; try { j = AI.extractRobustJSON(full); } catch (e) { }
+      if (!j || !j.scores) {
+        slot.innerHTML = '<div class="report" style="font-size:13px">' + Tex.renderInline(full || '（未返回结构化结果）') + '</div>';
+        return;
+      }
+      var DIM = { difficulty: '难度命中率', innovation: '创新度', fidelity: '真题契合度', coverage: '考点覆盖度', discrimination: '区分度', rigor: '命题严谨性' };
+      var COLOR = { difficulty: '#fa8c16', innovation: '#7c3aed', fidelity: '#096dd9', coverage: '#237804', discrimination: '#d4b106', rigor: '#cf1322' };
+      var bars = Object.keys(DIM).map(function (k) {
+        var v = Math.max(0, Math.min(10, +(j.scores[k] || 0)));
+        return '<div style="margin:6px 0">'
+          + '<div style="display:flex;justify-content:space-between;font-size:12.5px"><span>' + DIM[k] + '</span><b style="color:' + COLOR[k] + '">' + v + '/10</b></div>'
+          + '<div style="height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:2px"><span style="display:block;height:100%;width:' + (v * 10) + '%;background:' + COLOR[k] + '"></span></div>'
+          + '<div class="muted-sm" style="font-size:12px;margin-top:2px">' + U.esc((j.comments && j.comments[k]) || '') + '</div></div>';
+      }).join('');
+      var overall = j.overall ? '<div class="alert" style="margin:8px 0;background:var(--bg-muted)">📋 <b>总评</b>：' + Tex.renderInline(j.overall) + '</div>' : '';
+      var sugg = Array.isArray(j.suggestions) && j.suggestions.length
+        ? '<div class="card-title-sm" style="margin-top:8px">📚 复习参考意见</div>' + j.suggestions.map(function (s) { return '<div class="pbd-li">· ' + Tex.renderInline(s) + '</div>'; }).join('')
+        : '';
+      slot.innerHTML = '<div class="card" style="background:var(--bg-muted)"><div class="card-title-sm">📊 整卷多维评估</div>' + bars + overall + sugg + '</div>';
+      Toast.success('整卷分析完成');
+    }).catch(function (e) {
+      slot.dataset.busy = '';
+      slot.innerHTML = '<div class="alert alert-danger">分析失败：' + U.esc(e.message || e) + '</div>';
     });
   }
 
