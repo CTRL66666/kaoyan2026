@@ -15632,36 +15632,45 @@ function bind(el, next) {
   }
 
   // ---------- AI 提示词 ----------
-  function genSystem() {
-    return '你是考研方法论教练，为给定题型提炼一张「解题方法卡」。\n'
-      + '硬性输出格式（**字段必须齐全，缺一不可**）：\n'
+  // 阶段1：生成方法卡骨架（核心解题结构 + 考频难度）
+  function genCoreSystem() {
+    return '你是考研方法论教练，为给定题型提炼一张「解题方法卡」的骨架。\n'
+      + '硬性输出 JSON（字段必须齐全）：\n'
       + '{\n'
       + '  "subject": "math|ctrl|eng|pol" (必填,本卡所属科目),\n'
       + '  "title": "题型名(≤12字)",\n'
-      + '  "recognize": ["识别信号1(≤30字)", "识别信号2", "识别信号3", "信号4", "信号5"] (3-5条),\n'
+      + '  "recognize": ["识别信号1(≤30字)", "信号2", ...] (3-5条,触发信号而非题目描述),\n'
       + '  "steps": [\n'
       + '    {"name":"步骤名(≤8字,动词开头)","do":"这步做什么(≤40字,具体可执行)","tip":"该步高频坑(≤30字)"},\n'
       + '    ...至少 4 步,至多 7 步,按真实解题顺序,覆盖「识别→下手→执行→验证」完整闭环\n'
       + '  ],\n'
-      + '  "pitfalls": ["整题高频错1(≤30字)", "错2", ...] (2-4条),\n'
-      + '  "verify": ["验证方法1(≤30字)", "方法2"] (1-3条),\n'
-      + '  "confusions": ["易混辨析1(≤40字,如「和XX题型易混,关键区别是YY」)", "辨析2"] (1-4条),\n'
-      + '  "example": {"stem":"经典例题题干(≤80字,本题型代表性题)","solution":"解答要点(≤100字,关键步骤串联,不是整篇)"},\n'
-      + '  "mnemonic": "一句口诀/记忆锚点(≤30字,好记、点出本题型最易错的一步)",\n'
-      + '  "examFreq": 1,  // 考频 1=必考(几乎每年)、2=常考(隔年出现)、3=偶尔(低频冷门)\n'
-      + '  "difficulty": "medium"  // 难度 basic=基础送分 / medium=中档拉分 / hard=压轴难题\n'
+      + '  "pitfalls": ["整题高频错1(≤30字)", ...] (2-4条),\n'
+      + '  "verify": ["验证方法1(≤30字)", ...] (1-3条),\n'
+      + '  "examFreq": 1,  // 1=必考(几乎每年) 2=常考(隔年) 3=偶尔(冷门)\n'
+      + '  "difficulty": "medium"  // basic=基础送分 / medium=中档拉分 / hard=压轴难题\n'
       + '}\n\n'
-      + '质量纪律：① steps 必须可执行（动词开头、有具体动作），禁止「分析题目」「套公式」这类空话；'
-      + '② recognize 是「触发信号」而非题目描述（学生看到这些就该想到这方法）；'
+      + '质量纪律：① steps 必须可执行（动词开头、有具体动作），禁止「分析题目」「套公式」空话；'
+      + '② recognize 是触发信号（看到这些就该想到这方法）；'
       + '③ pitfalls 与 steps.tip 不重复（tip 是该步特有坑，pitfall 是整题级）；'
-      + '④ verify 是对最终结果的合理性验证（如代值/量级/边界/单位）；'
-      + '⑤ confusions 是易混辨析——点出最容易和哪个相似题型混淆、一句关键区别，帮学生建立边界感；'
-      + '⑥ example 是本题型的代表性例题（难度适中、直击核心），solution 是解答要点而非整篇过程；'
-      + '⑦ mnemonic 是记忆锚点（押韵/顺口、点出最易错的一步），帮学生考前快速回忆；'
-      + '⑧ examFreq 按该题型历年真实出现频率给 1/2/3，difficulty 按得分难度给 basic/medium/hard；'
-      + '⑨ subject 必须根据用户给出的科目填入，**严禁默认填 math**。\n'
+      + '④ verify 是对最终结果的合理性验证（代值/量级/边界/单位）；'
+      + '⑤ examFreq 按历年真实频率、difficulty 按得分难度；'
+      + '⑥ subject 严禁默认 math。\n'
       + '只输出 JSON 本身（不要前言/后记/markdown 围栏/代码块标记）。';
   }
+  // 阶段2：基于骨架，补全增强维度（易混辨析/例题/口诀）
+  function genEnrichSystem(pb) {
+    return '你是考研方法论教练。为下面这张方法卡骨架补全增强维度，让内容更全面、更易记、更可练。\n'
+      + '【方法卡骨架】\n标题：' + pb.title
+      + '\n步骤：' + (pb.steps || []).map(function (s, i) { return (i + 1) + '.' + s.name; }).join('、')
+      + '\n识别信号：' + (pb.recognize || []).join('、')
+      + '\n\n只输出 JSON：\n'
+      + '{"confusions":["易混辨析1(≤40字,如「和XX题型易混,关键区别是YY」)"...(1-4条)],\n'
+      + ' "example":{"stem":"经典例题题干(≤80字,本题型代表性题)","solution":"解答要点(≤100字,关键步骤串联)"},\n'
+      + ' "mnemonic":"一句口诀/记忆锚点(≤30字,好记、点出本题型最易错的一步)"}\n'
+      + '规则：confusions 点出与相似题型的边界；example 是代表性例题、solution 是解答要点不是整篇；mnemonic 好记、点出最易错一步。\n'
+      + '只输出 JSON 本身。';
+  }
+
   function checkSystem(p) {
     return '你是解题步骤审查官。把考生的步骤与标准方法卡逐步比对。'
       + '\n【方法卡】' + p.title + '：' + (p.steps || []).map(function (st, i) { return (i + 1) + '.' + st.name + '(' + (st.do || '') + ')'; }).join('；')
@@ -15972,23 +15981,42 @@ function bind(el, next) {
     busy = true; render(el);
     var slot = document.getElementById('pb-gen-slot');
     var attempt = 0;
+    function saveAndShow(pb, note) {
+      busy = false;
+      Store.update(function (s) { s.playbooks.push(pb); });
+      curPb = pb.id; curTab = 'detail';
+      render(el);
+      Toast.success('方法卡已入库' + (note ? '（' + note + '）' : '') + '：' + pb.title);
+      confetti();
+    }
     function runGen(extraHint) {
       attempt++;
       var user = '科目：' + (SUBJ_CN[genSubject] || '') + '\n题型/题目：\n' + txt.trim() + (extraHint || '');
-      return AI.chatJSON(genSystem(), user).then(function (raw) {
+      // 阶段1：生成骨架
+      return AI.chatJSON(genCoreSystem(), user).then(function (raw) {
         var pb = normalizePlaybook(raw, genSubject);
         if (!pb) { busy = false; render(el); Toast.warn('生成结果不规范，请重试'); return; }
-        // 质量校验：内容单薄时自动补强重试一次
+        // 质量校验：骨架单薄时自动补强重试一次
         if (!qualityOk(pb) && attempt < 2) {
-          Toast.show('内容略单薄，自动补强一次…', 'info', 2000);
-          return runGen('\n\n【注意】上次生成质量不足（步骤/识别信号/坑太少），请补充更完整、更可执行的内容。');
+          Toast.show('骨架略单薄，自动补强一次…', 'info', 2000);
+          return runGen('\n\n【注意】上次骨架质量不足（步骤/识别信号/坑太少），请补充更完整、更可执行的内容。');
         }
-        busy = false;
-        Store.update(function (s) { s.playbooks.push(pb); });
-        curPb = pb.id; curTab = 'detail';
-        render(el);
-        Toast.success('方法卡已入库：' + pb.title);
-        confetti();
+        // 阶段2：补全增强维度（易混辨析/例题/口诀），失败则降级用骨架
+        Toast.show('骨架已定，正在补全例题/口诀/辨析…', 'info', 2500);
+        return AI.chatJSON(genEnrichSystem(pb), '').then(function (enr) {
+          if (enr) {
+            if (Array.isArray(enr.confusions) && enr.confusions.length) {
+              pb.confusions = enr.confusions.map(function (x) { return String(x); }).filter(Boolean).slice(0, 4);
+            }
+            if (enr.example && enr.example.stem) {
+              pb.example = { stem: String(enr.example.stem).slice(0, 120), solution: String(enr.example.solution || '').slice(0, 200) };
+            }
+            if (enr.mnemonic) pb.mnemonic = String(enr.mnemonic).slice(0, 40);
+          }
+          saveAndShow(pb, '');
+        }).catch(function () {
+          saveAndShow(pb, '骨架（增强维度未补全）');
+        });
       });
     }
     runGen('').catch(function (e) {
