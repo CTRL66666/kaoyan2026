@@ -15080,6 +15080,11 @@ function bind(el, next) {
   'use strict';
 
   var SUBJ_CN = { math: '数学', ctrl: '专业课', eng: '英语', pol: '政治' };
+  // 考频 / 难度 映射（方法卡维度）
+  var FREQ_CN = { 1: '必考', 2: '常考', 3: '偶尔' };
+  var FREQ_COLOR = { 1: '#cf1322', 2: '#fa8c16', 3: '#8c8c8c' };
+  var DIFF_CN = { basic: '基础', medium: '中档', hard: '压轴' };
+  var DIFF_COLOR = { basic: '#52c41a', medium: '#fa8c16', hard: '#cf1322' };
   var SUBJ_PC = { math: '#4a6cd4', ctrl: '#2f9560', eng: '#8a4fe0', pol: '#7a8699' };
   var TYPE_CN = { sign: '符号错误', fraction: '分式处理', integral: '积分', concept: '概念不清', careless: '粗心', other: '其他' };
 
@@ -15280,6 +15285,8 @@ function bind(el, next) {
         ? { stem: String(raw.example.stem || '').slice(0, 120), solution: String(raw.example.solution || '').slice(0, 200) }
         : null,
       mnemonic: String(raw.mnemonic || '').slice(0, 40),
+      examFreq: (raw.examFreq === 1 || raw.examFreq === 3) ? raw.examFreq : 2,       // 考频 1必考/2常考/3偶尔
+      difficulty: ['basic', 'medium', 'hard'].indexOf(raw.difficulty) >= 0 ? raw.difficulty : 'medium',  // 难度 基础/中档/压轴
       source: 'ai', uses: 0, createdAt: new Date().toISOString()
     };
   }
@@ -15341,6 +15348,10 @@ function bind(el, next) {
   var checkInputs = [];
   var checkProblem = '';
   var genSubject = 'math';
+  // 方法库筛选状态
+  var libSubj = '';           // ''=全部 / math|ctrl|eng|pol
+  var libFreq = 0;            // 0=全部 / 1必考 / 2常考 / 3偶尔
+  var libDiff = '';           // ''=全部 / basic|medium|hard
   var guideIdx = 0;
   var guideInputs = [];
   var guideProblem = '';
@@ -15387,7 +15398,12 @@ function bind(el, next) {
   }
 
   function libHtml() {
-    var pbs = list().slice().sort(function (a, b) { return (b.uses || 0) - (a.uses || 0) || (a.createdAt < b.createdAt ? 1 : -1); });
+    var pbs = list().filter(function (p) {
+      if (libSubj && p.subject !== libSubj) return false;
+      if (libFreq && (p.examFreq || 2) !== libFreq) return false;
+      if (libDiff && (p.difficulty || 'medium') !== libDiff) return false;
+      return true;
+    }).slice().sort(function (a, b) { return (b.uses || 0) - (a.uses || 0) || (a.createdAt < b.createdAt ? 1 : -1); });
     var reco = smartReco();
     var html = '';
     if (reco) {
@@ -15411,11 +15427,29 @@ function bind(el, next) {
         + '</div>';
     }
     if (!pbs.length) return html + '<div class="card"><div class="empty">方法库为空。去「AI 生成」建第一张方法卡。</div></div>';
+    // 筛选栏（科目 / 考频 / 难度）
+    html += '<div class="pb-filter" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 10px">'
+      + '<select id="pb-f-subj" class="input input-sel" style="width:auto">'
+      + '<option value="">全部科目</option>'
+      + Object.keys(SUBJ_CN).map(function (k) { return '<option value="' + k + '"' + (libSubj === k ? ' selected' : '') + '>' + SUBJ_CN[k] + '</option>'; }).join('')
+      + '</select>'
+      + '<select id="pb-f-freq" class="input input-sel" style="width:auto">'
+      + '<option value="0">全部考频</option>'
+      + [1, 2, 3].map(function (k) { return '<option value="' + k + '"' + (libFreq === k ? ' selected' : '') + '>' + FREQ_CN[k] + '</option>'; }).join('')
+      + '</select>'
+      + '<select id="pb-f-diff" class="input input-sel" style="width:auto">'
+      + '<option value="">全部难度</option>'
+      + ['basic', 'medium', 'hard'].map(function (k) { return '<option value="' + k + '"' + (libDiff === k ? ' selected' : '') + '>' + DIFF_CN[k] + '</option>'; }).join('')
+      + '</select>'
+      + '<span class="muted-sm" style="font-size:11px">共 ' + pbs.length + ' 张</span>'
+      + '</div>';
     html += '<div class="pb-grid">';
     html += pbs.map(function (p, idx) {
       return '<div class="pb2" style="--pc:' + pc(p) + ';animation:cardIn .3s ' + (0.08 + idx * 0.04).toFixed(2) + 's both">'
         + '<div class="pb2-top"><b class="pb2-title">' + U.esc(p.title) + '</b>'
         + '<span class="pb2-subj">' + (SUBJ_CN[p.subject] || p.subject) + '</span>'
+        + '<span style="color:' + (FREQ_COLOR[p.examFreq] || '#8c8c8c') + ';font-size:10px;font-weight:600">' + (FREQ_CN[p.examFreq] || '常考') + '</span>'
+        + '<span style="color:' + (DIFF_COLOR[p.difficulty] || '#fa8c16') + ';font-size:10px;font-weight:600">' + (DIFF_CN[p.difficulty] || '中档') + '</span>'
         + (p.source === 'ai' ? '<span class="pb2-ai">AI</span>' : '') + '</div>'
         + '<div class="pb2-path">' + (p.steps || []).map(function () { return '<i></i>'; }).join('') + '</div>'
         + '<div class="pb2-rec">' + (p.recognize || []).slice(0, 3).map(function (r) { return '<span>' + Tex.renderInline(r) + '</span>'; }).join('') + '</div>'
@@ -15439,6 +15473,8 @@ function bind(el, next) {
       + '<div class="pbd-hero" style="--pc:' + pc(p) + '">'
       + '<div class="pbd-title">' + U.esc(p.title) + '</div>'
       + '<div class="pbd-meta"><span>' + (SUBJ_CN[p.subject] || p.subject) + '</span><span>' + (p.steps || []).length + ' 步流程</span>'
+      + '<span style="color:' + (FREQ_COLOR[p.examFreq] || '#8c8c8c') + ';font-weight:600">' + (FREQ_CN[p.examFreq] || '常考') + '</span>'
+      + '<span style="color:' + (DIFF_COLOR[p.difficulty] || '#fa8c16') + ';font-weight:600">' + (DIFF_CN[p.difficulty] || '中档') + '</span>'
       + '<span>' + (p.source === 'builtin' ? '内置精编' : 'AI 生成') + '</span>' + (p.uses ? '<span>练过 ' + p.uses + ' 次</span>' : '') + '</div>'
       + '</div>'
       + '<div class="pbd-sec"><div class="pbd-sec-t">🎯 识别信号 · 碰到这些就该想到它</div>'
@@ -15611,7 +15647,9 @@ function bind(el, next) {
       + '  "verify": ["验证方法1(≤30字)", "方法2"] (1-3条),\n'
       + '  "confusions": ["易混辨析1(≤40字,如「和XX题型易混,关键区别是YY」)", "辨析2"] (1-4条),\n'
       + '  "example": {"stem":"经典例题题干(≤80字,本题型代表性题)","solution":"解答要点(≤100字,关键步骤串联,不是整篇)"},\n'
-      + '  "mnemonic": "一句口诀/记忆锚点(≤30字,好记、点出本题型最易错的一步)"\n'
+      + '  "mnemonic": "一句口诀/记忆锚点(≤30字,好记、点出本题型最易错的一步)",\n'
+      + '  "examFreq": 1,  // 考频 1=必考(几乎每年)、2=常考(隔年出现)、3=偶尔(低频冷门)\n'
+      + '  "difficulty": "medium"  // 难度 basic=基础送分 / medium=中档拉分 / hard=压轴难题\n'
       + '}\n\n'
       + '质量纪律：① steps 必须可执行（动词开头、有具体动作），禁止「分析题目」「套公式」这类空话；'
       + '② recognize 是「触发信号」而非题目描述（学生看到这些就该想到这方法）；'
@@ -15620,7 +15658,8 @@ function bind(el, next) {
       + '⑤ confusions 是易混辨析——点出最容易和哪个相似题型混淆、一句关键区别，帮学生建立边界感；'
       + '⑥ example 是本题型的代表性例题（难度适中、直击核心），solution 是解答要点而非整篇过程；'
       + '⑦ mnemonic 是记忆锚点（押韵/顺口、点出最易错的一步），帮学生考前快速回忆；'
-      + '⑧ subject 必须根据用户给出的科目填入，**严禁默认填 math**。\n'
+      + '⑧ examFreq 按该题型历年真实出现频率给 1/2/3，difficulty 按得分难度给 basic/medium/hard；'
+      + '⑨ subject 必须根据用户给出的科目填入，**严禁默认填 math**。\n'
       + '只输出 JSON 本身（不要前言/后记/markdown 围栏/代码块标记）。';
   }
   function checkSystem(p) {
@@ -15802,6 +15841,13 @@ function bind(el, next) {
     el.querySelectorAll('[data-tab]').forEach(function (b) {
       b.onclick = function () { curTab = b.getAttribute('data-tab'); guideFinished = null; render(el); };
     });
+    // 方法库筛选
+    var fSubj = el.querySelector('#pb-f-subj');
+    if (fSubj) fSubj.onchange = function () { libSubj = fSubj.value; render(el); };
+    var fFreq = el.querySelector('#pb-f-freq');
+    if (fFreq) fFreq.onchange = function () { libFreq = +fFreq.value || 0; render(el); };
+    var fDiff = el.querySelector('#pb-f-diff');
+    if (fDiff) fDiff.onchange = function () { libDiff = fDiff.value; render(el); };
     el.querySelectorAll('.pb-detail').forEach(function (b) {
       b.onclick = function () { curPb = b.getAttribute('data-pb'); curTab = 'detail'; render(el); };
     });
@@ -15911,22 +15957,41 @@ function bind(el, next) {
   }
 
   // ---------- 生成 ----------
+  // 方法卡质量校验：步骤≥4、识别信号≥3、高频坑≥2（不足则自动补强重试）
+  function qualityOk(pb) {
+    if (!pb) return false;
+    if ((pb.steps || []).length < 4) return false;
+    if ((pb.recognize || []).length < 3) return false;
+    if ((pb.pitfalls || []).length < 2) return false;
+    return true;
+  }
   function doGen(el) {
     var txt = (el.querySelector('#pb-gen-in') || {}).value || '';
     if (!txt.trim()) { Toast.warn('先输入题型或粘贴一道题'); return; }
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
     busy = true; render(el);
     var slot = document.getElementById('pb-gen-slot');
-    AI.chatJSON(genSystem(), '科目：' + (SUBJ_CN[genSubject] || '') + '\n题型/题目：\n' + txt.trim()).then(function (raw) {
-      var pb = normalizePlaybook(raw, genSubject);
-      busy = false;
-      if (!pb) { render(el); Toast.warn('生成结果不规范，请重试'); return; }
-      Store.update(function (s) { s.playbooks.push(pb); });
-      curPb = pb.id; curTab = 'detail';
-      render(el);
-      Toast.success('方法卡已入库：' + pb.title);
-      confetti();
-    }).catch(function (e) {
+    var attempt = 0;
+    function runGen(extraHint) {
+      attempt++;
+      var user = '科目：' + (SUBJ_CN[genSubject] || '') + '\n题型/题目：\n' + txt.trim() + (extraHint || '');
+      return AI.chatJSON(genSystem(), user).then(function (raw) {
+        var pb = normalizePlaybook(raw, genSubject);
+        if (!pb) { busy = false; render(el); Toast.warn('生成结果不规范，请重试'); return; }
+        // 质量校验：内容单薄时自动补强重试一次
+        if (!qualityOk(pb) && attempt < 2) {
+          Toast.show('内容略单薄，自动补强一次…', 'info', 2000);
+          return runGen('\n\n【注意】上次生成质量不足（步骤/识别信号/坑太少），请补充更完整、更可执行的内容。');
+        }
+        busy = false;
+        Store.update(function (s) { s.playbooks.push(pb); });
+        curPb = pb.id; curTab = 'detail';
+        render(el);
+        Toast.success('方法卡已入库：' + pb.title);
+        confetti();
+      });
+    }
+    runGen('').catch(function (e) {
       busy = false; render(el);
       if (slot) slot.innerHTML = '<div class="alert alert-danger">生成失败：' + U.esc(e.message) + '</div>';
     });
@@ -16071,6 +16136,7 @@ function bind(el, next) {
     matchFor: matchFor,
     smartReco: smartReco,
     normalizePlaybook: normalizePlaybook,
+    qualityOk: qualityOk,
     normalizeExample: normalizeExample,
     parseExampleRobust: parseExampleRobust,
     analyze: analyze,
@@ -18818,6 +18884,7 @@ function bind(el, next) {
       var p = priority(r.score);
       var isMastered = r.mastered;
       var reason = reasons[r.id];
+      var method = findMethodFor(r.name, r.subj);
       html += '<div class="sp-item' + (isMastered ? ' mastered' : '') + '" style="border-left:4px solid ' + subjColor(r.subj) + '">'
         + '<div class="sp-top"><span class="sp-name">' + U.esc(r.name) + '</span>'
         + '<span class="sp-badge ' + p.cls + '">' + p.label + '</span></div>'
@@ -18831,7 +18898,7 @@ function bind(el, next) {
       }
       html += '<div class="btn-row" style="margin-top:8px">'
         + '<button class="btn btn-primary btn-sm sp-prac" data-id="' + r.id + '" data-subj="' + r.subj + '" data-name="' + U.esc(r.name) + '">去练这题</button>'
-        + (findMethodFor(r.name, r.subj) ? '<button class="btn btn-ghost btn-sm sp-method" data-pb="' + findMethodFor(r.name, r.subj).id + '">🧭 方法</button>' : '')
+        + (method ? '<button class="btn btn-ghost btn-sm sp-method" data-pb="' + method.id + '" title="' + U.esc(method.title) + '">🧭 方法<span style="opacity:.75;font-size:10px"> ' + (method.examFreq === 1 ? '必考' : method.examFreq === 3 ? '偶尔' : '常考') + '·' + (method.difficulty === 'hard' ? '压轴' : method.difficulty === 'basic' ? '基础' : '中档') + '</span></button>' : '')
         + (isMastered
             ? '<button class="btn btn-ghost btn-sm sp-recover" data-id="' + r.id + '" data-name="' + U.esc(r.name) + '">恢复薄弱</button>'
             : '<button class="btn btn-ghost btn-sm sp-master" data-id="' + r.id + '" data-name="' + U.esc(r.name) + '">标记已掌握</button>')
