@@ -15276,6 +15276,10 @@ function bind(el, next) {
       pitfalls: arr(raw.pitfalls, 4).map(function (t) { return String(t).slice(0, 50); }),
       verify: arr(raw.verify, 3).map(function (t) { return String(t).slice(0, 50); }),
       confusions: arr(raw.confusions, 4).map(function (t) { return String(t).slice(0, 60); }),
+      example: (raw.example && typeof raw.example === 'object')
+        ? { stem: String(raw.example.stem || '').slice(0, 120), solution: String(raw.example.solution || '').slice(0, 200) }
+        : null,
+      mnemonic: String(raw.mnemonic || '').slice(0, 40),
       source: 'ai', uses: 0, createdAt: new Date().toISOString()
     };
   }
@@ -15453,8 +15457,14 @@ function bind(el, next) {
       + '<div class="pbd-side pbd-ok"><div class="pbd-sec-t">✅ 验证方法</div>' + (p.verify || []).map(function (x) { return '<div class="pbd-li">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>'
       + '</div>'
       + (p.confusions && p.confusions.length ? '<div class="pbd-sec" style="margin-top:10px"><div class="pbd-sec-t">🔀 易混辨析 · 别搞混</div>' + p.confusions.map(function (x) { return '<div class="pbd-li" style="color:var(--warn)">· ' + Tex.renderInline(x) + '</div>'; }).join('') + '</div>' : '')
+      + (p.mnemonic ? '<div class="pbd-sec" style="margin-top:10px"><div class="pbd-sec-t">🧠 记忆锚点 · 考前背这句</div><div class="pbd-li" style="font-weight:600">「' + Tex.renderInline(p.mnemonic) + '」</div></div>' : '')
+      + (p.example && p.example.stem ? '<div class="pbd-sec" style="margin-top:10px"><div class="pbd-sec-t">📖 经典例题</div>'
+        + '<div class="pbd-li"><b>题干</b>：' + Tex.renderInline(p.example.stem) + '</div>'
+        + (p.example.solution ? '<div class="pbd-li" style="color:var(--ok)"><b>解答要点</b>：' + Tex.renderInline(p.example.solution) + '</div>' : '')
+        + '</div>' : '')
       + '<div class="pbd-actions">'
       + '<button class="btn btn-gold pb-example" data-pb="' + p.id + '">⚡ AI 出例题 · 带教</button>'
+      + '<button class="btn btn-ghost pb-enrich" data-pb="' + p.id + '">✨ AI 补全（例题/口诀/辨析）</button>'
       + '<button class="btn btn-ghost pb-guide" data-pb="' + p.id + '">分步带练</button>'
       + '<button class="btn btn-ghost pb-check" data-pb="' + p.id + '">✍️ 步骤审查</button>'
       + '</div></div>';
@@ -15599,14 +15609,18 @@ function bind(el, next) {
       + '  ],\n'
       + '  "pitfalls": ["整题高频错1(≤30字)", "错2", ...] (2-4条),\n'
       + '  "verify": ["验证方法1(≤30字)", "方法2"] (1-3条),\n'
-      + '  "confusions": ["易混辨析1(≤40字,如「和XX题型易混,关键区别是YY」)", "辨析2"] (1-4条)\n'
+      + '  "confusions": ["易混辨析1(≤40字,如「和XX题型易混,关键区别是YY」)", "辨析2"] (1-4条),\n'
+      + '  "example": {"stem":"经典例题题干(≤80字,本题型代表性题)","solution":"解答要点(≤100字,关键步骤串联,不是整篇)"},\n'
+      + '  "mnemonic": "一句口诀/记忆锚点(≤30字,好记、点出本题型最易错的一步)"\n'
       + '}\n\n'
       + '质量纪律：① steps 必须可执行（动词开头、有具体动作），禁止「分析题目」「套公式」这类空话；'
       + '② recognize 是「触发信号」而非题目描述（学生看到这些就该想到这方法）；'
       + '③ pitfalls 与 steps.tip 不重复（tip 是该步特有坑，pitfall 是整题级）；'
       + '④ verify 是对最终结果的合理性验证（如代值/量级/边界/单位）；'
       + '⑤ confusions 是易混辨析——点出最容易和哪个相似题型混淆、一句关键区别，帮学生建立边界感；'
-      + '⑥ subject 必须根据用户给出的科目填入，**严禁默认填 math**。\n'
+      + '⑥ example 是本题型的代表性例题（难度适中、直击核心），solution 是解答要点而非整篇过程；'
+      + '⑦ mnemonic 是记忆锚点（押韵/顺口、点出最易错的一步），帮学生考前快速回忆；'
+      + '⑧ subject 必须根据用户给出的科目填入，**严禁默认填 math**。\n'
       + '只输出 JSON 本身（不要前言/后记/markdown 围栏/代码块标记）。';
   }
   function checkSystem(p) {
@@ -15708,6 +15722,36 @@ function bind(el, next) {
     });
   }
 
+  // AI 补全：针对已有方法卡补缺失的维度（例题/口诀/易混辨析），只补不覆盖
+  function doEnrich(el, p) {
+    if (!p) return;
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI，才能补全'); return; }
+    busy = true; render(el);
+    Toast.show('正在补全「' + p.title + '」的例题/口诀/辨析…', 'info', 2500);
+    AI.chatJSON('你是考研方法论教练。为下面这张方法卡补全缺失的维度，让内容更全面。只输出 JSON：{"example":{"stem":"经典例题题干","solution":"解答要点"},"mnemonic":"好记的口诀","confusions":["易混辨析"]}。规则：example 是本题型代表性例题（难度适中、直击核心）；mnemonic 是好记的口诀（点出最易错的一步）；confusions 是易混辨析（与相似题型的关键区别）。用简体中文。',
+      '【方法卡】\n标题：' + p.title + '\n识别信号：' + (p.recognize || []).join('、') + '\n步骤：' + (p.steps || []).map(function (s, i) { return (i + 1) + '.' + s.name; }).join('、') + '\n已有易混辨析：' + (p.confusions || []).join('、')
+    ).then(function (r) {
+      busy = false;
+      if (!r) { render(el); Toast.warn('补全失败，请重试'); return; }
+      Store.update(function (s) {
+        var pb = (s.playbooks || []).filter(function (x) { return x.id === p.id; })[0];
+        if (!pb) return;
+        if (r.example && r.example.stem && !pb.example) pb.example = { stem: String(r.example.stem).slice(0, 120), solution: String(r.example.solution || '').slice(0, 200) };
+        if (r.mnemonic && !pb.mnemonic) pb.mnemonic = String(r.mnemonic).slice(0, 40);
+        if (Array.isArray(r.confusions) && r.confusions.length) {
+          var existing = pb.confusions || [];
+          r.confusions.forEach(function (c) { if (existing.length < 4 && existing.indexOf(c) < 0) existing.push(String(c).slice(0, 60)); });
+          pb.confusions = existing;
+        }
+      });
+      render(el);
+      Toast.success('已补全：例题/口诀/辨析');
+    }).catch(function (e) {
+      busy = false; render(el);
+      Toast.danger('补全失败：' + (e.message || e));
+    });
+  }
+
   // ---------- 专业课方法卡软编码（2026-08-07）：按用户当前专业 AI 生成 ----------
   function majorInfo() {
     try {
@@ -15770,6 +15814,9 @@ function bind(el, next) {
     });
     el.querySelectorAll('.pb-example').forEach(function (b) {
       b.onclick = function () { doGenExample(el, byId(b.getAttribute('data-pb'))); };
+    });
+    el.querySelectorAll('.pb-enrich').forEach(function (b) {
+      b.onclick = function () { doEnrich(el, byId(b.getAttribute('data-pb'))); };
     });
     var genMajor = el.querySelector('#pb-genmajor');
     if (genMajor) genMajor.onclick = function () { doGenMajor(el); };
