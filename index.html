@@ -19166,7 +19166,8 @@ function bind(el, next) {
         + '<label class="fld fld-full"><span>难度</span><select id="sp-cfg-diff" class="input">' + diffOpts + '</select></label>'
         + '<label class="fld fld-full"><span>题量</span><select id="sp-cfg-count" class="input">' + cntOpts + '</select></label>'
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px;padding-top:6px"><input type="checkbox" id="sp-cfg-think"' + (p.think ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⏳ 启用思考模式（出题质量更高，耗时/消耗约 3-5 倍）</span></label>'
-        + '<div class="muted-sm" style="margin-top:6px">AI 将按科目真题卷面结构组卷，优先覆盖你的薄弱考点。</div>'
+        + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="sp-cfg-parallel"' + (p.parallel ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⚡ 并发出卷（总工程师规划 → 多 AI 并行出题，智能并发最高 5 路，带实时状态面板）</span></label>'
+        + '<div class="muted-sm" style="margin-top:6px">' + (p.parallel ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。' : 'AI 将按科目真题卷面结构组卷，优先覆盖你的薄弱考点。') + '</div>'
         + '</div>',
       actions: [
         { label: '取消', kind: 'btn-ghost' },
@@ -19175,14 +19176,24 @@ function bind(el, next) {
             subject: (document.getElementById('sp-cfg-subj') || {}).value || 'auto',
             diff: (document.getElementById('sp-cfg-diff') || {}).value || 'mix',
             count: (document.getElementById('sp-cfg-count') || {}).value || 'std',
-            think: !!(document.getElementById('sp-cfg-think') || {}).checked
+            think: !!(document.getElementById('sp-cfg-think') || {}).checked,
+            parallel: !!(document.getElementById('sp-cfg-parallel') || {}).checked
           };
           saveExamPref(prefs);
           close();
-          aiExam(el, prefs);
+          if (prefs.parallel) parallelExamBuild(el, prefs);
+          else aiExam(el, prefs);
         } }
       ]
     });
+    // 并行开关切换时更新提示文字
+    var parCb = document.getElementById('sp-cfg-parallel');
+    if (parCb) parCb.onchange = function () {
+      var hint = document.querySelector('.modal .muted-sm');
+      if (hint) hint.textContent = parCb.checked
+        ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。'
+        : 'AI 将按科目真题卷面结构组卷，优先覆盖你的薄弱考点。';
+    };
   }
   // 按科目收集薄弱考点（aiExam 共用）
   function collectSubjTopics(heat, dep, trends) {
@@ -19293,6 +19304,268 @@ function bind(el, next) {
       }
     });
     if (el) render(el);
+  }
+
+  // ==================== 并行出卷系统（多 Agent 协作出卷） ====================
+  // 总工程师规划 → 多出题员并行出题（智能并发 2~5 实时调配）→ 状态面板 → 失败重试 → 总审查
+  // 智能并发调度器：观测滑动窗口内 成功率/平均耗时，动态调并发（2 起步，最高 5）
+  function makeScheduler() {
+    var MIN = 2, MAX = 5, cur = 2, active = 0, wins = [], down = 0, SAMPLES = 8;
+    return {
+      permit: function () { return active < cur; },
+      enter: function () { active++; },
+      leave: function () { active--; },
+      concurrency: function () { return cur; },
+      observe: function (ms, ok) {
+        wins.push({ ms: ms, ok: ok });
+        if (wins.length > SAMPLES) wins.shift();
+        if (ok) down = 0; else down++;
+        if (wins.length >= SAMPLES) {
+          var okN = wins.filter(function (w) { return w.ok; }).length;
+          var avg = wins.reduce(function (a, w) { return a + w.ms; }, 0) / wins.length;
+          if (okN >= SAMPLES - 2 && avg < 12000 && cur < MAX) cur++;            // 稳快 → 升并发
+          else if (okN <= SAMPLES / 2 || avg > 30000) cur = Math.max(MIN, cur - 1); // 失败多/慢 → 降并发
+          wins = [];
+        }
+        if (down >= 3) { cur = Math.max(MIN, cur - 1); down = 0; }               // 连续失败 → 立即降
+      }
+    };
+  }
+  // 总工程师规划提示词：为整卷分配每题的 题型/难度/考点/方向/分值
+  function plannerSystem(subj, bp, prefs) {
+    var hardRule = prefs.diff === 'superhard' ? '全部题 hard（超难特训）'
+      : prefs.diff === 'hard' ? '约 70% hard + 30% medium'
+      : '约 40% hard + 60% medium';
+    return '你是考研命题组总工程师，负责规划一套完整押题卷的蓝图（不命题，只规划）。\n'
+      + '【科目】' + (subj === 'math' ? '数学' : subj === 'ctrl' ? '专业课' : subj === 'pol' ? '政治' : '英语') + ' · 总分 ' + bp.totalScore + ' · 限时 ' + bp.timeLimit + ' 分钟\n'
+      + '【卷面结构】' + bp.itemCount + '\n'
+      + '【难度要求】' + hardRule + '\n'
+      + '【输出】只输出 JSON：{"title":"卷标题(≤16字)","questions":[{"qid":1,"type":"choice|fill|solve|essay","diff":"medium|hard","topic":"考点名","direction":"出题方向(≤40字,含创新设问角度)","score":分值}]}\n'
+      + '规则：① 题号按卷面结构排列（选择→填空→解答），题目数量严格按卷面结构；② 每题 score 由你分配，总和必须 = ' + bp.totalScore + '；③ direction 要具体（如"跨章节综合/反证构造/临界参数讨论"），避免"考查XX"空话；④ 考点分布覆盖该科目核心板块，不重复；⑤ diff 严格按难度要求分配。';
+  }
+  // 出题员提示词：只负责一道题的精细命题
+  function workerSystem(subj, p, bp, major) {
+    return '你是考研命题专家，负责一套押题卷中【一道题】的精细命题（其他题由其他专家负责，你只需做好这一题）。\n'
+      + '【你的任务】\n题号：' + p.qid + '\n题型：' + p.type + '\n难度：' + p.diff + '\n考点：' + p.topic + '\n出题方向：' + p.direction + '\n分值：' + p.score + '\n'
+      + '【科目】' + (subj === 'math' ? '数学' : subj === 'ctrl' ? '专业课（' + major + '）' : subj === 'pol' ? '政治' : '英语') + '\n'
+      + '【卷面风格】' + bp.style + '\n'
+      + (bp.example ? '【参考命题示例】' + bp.example + '\n' : '')
+      + '【真题风格硬要求】① 题干有信息密度，严禁一眼看出答案的直白题；② 选择题干扰项具迷惑性（符号/单位/概念张冠李戴/绝对化）；③ 解答题多步推导，solution 给完整步骤链；④ 创新设问（跨章节综合/反证/临界参数/条件隐蔽化），别出语料库套路题；⑤ solution 写"陷阱识别→正确思路→严密步骤"。\n'
+      + '【输出】只输出 JSON：{"stem":"题干(公式用 $...$ LaTeX)","type":"' + p.type + '","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"标准答案","solution":"完整解析(LaTeX)","diff":"' + p.diff + '","score":' + p.score + ',"topicName":"' + p.topic + '"}'
+      + (p.type === 'choice' ? '（choice 必须给 4 个 options）' : p.type === 'fill' ? '（填空用 _____ 做空）' : '（解答题可无 options）') + '。只输出 JSON 本身，不要前言/后记。';
+  }
+  // 总审查提示词：整卷合理性审查
+  function chiefReviewSystem(subj, bp) {
+    return '你是考研命题总审查官。对一套并行生成的押题卷做整体合理性审查（题干/答案/解析的严谨性、难度分布、考点覆盖、有无重复或雷同、分数分配）。\n'
+      + '只输出 JSON：{"verdict":"ok|minor|major","issues":[{"qid":N,"issue":"问题描述(≤40字)"}],"summary":"总评(≤80字)"}\n'
+      + '规则：① verdict=ok 表示无实质问题；minor 表示有小瑕疵不影响使用；major 表示有题目存在明显错误或整体失衡；② 只挑真问题，不要为凑数而列。';
+  }
+  // 单题结果规范化（对齐现有 exam.questions 结构）
+  function normalizeParallelQ(raw, p) {
+    if (!raw || typeof raw !== 'object' || !raw.stem) return null;
+    return {
+      stem: String(raw.stem || ''), type: raw.type === 'choice' ? 'choice' : (p.type || 'solve'),
+      options: Array.isArray(raw.options) ? raw.options.slice(0, 4).map(String) : [],
+      answer: String(raw.answer || ''), solution: String(raw.solution || ''),
+      diff: raw.diff === 'hard' ? 'hard' : 'medium',
+      score: Number(raw.score) || p.score || 0, topicName: String(raw.topicName || p.topic || '')
+    };
+  }
+  // ---------- 状态面板（题号网格可视化） ----------
+  var parPanel = null;   // {cells:{qid->el}, headEl, logEl, startTs, doneN, totalN}
+  function parPanelHtml(questions) {
+    return '<div class="par-panel">'
+      + '<div class="par-head" id="par-head" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px"></div>'
+      + '<div class="par-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:6px">'
+      + questions.map(function (p) {
+        return '<div class="par-cell par-queued" id="par-cell-' + p.qid + '" style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-muted)">'
+          + '<div style="display:flex;justify-content:space-between;align-items:center"><b>题' + p.qid + '</b><span style="font-size:10px;opacity:.7">' + (p.diff === 'hard' ? '压轴' : '中档') + '·' + p.score + '分</span></div>'
+          + '<div class="par-cell-topic" style="margin:2px 0;font-size:11px;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + U.esc(p.topic) + '</div>'
+          + '<div class="par-cell-status" style="font-size:11px;color:var(--text-muted)">⏳ 排队</div></div>';
+      }).join('') + '</div>'
+      + '<div class="par-log" id="par-log" style="margin-top:8px;font-size:12px;max-height:120px;overflow:auto"></div>'
+      + '</div>';
+  }
+  function parPaint(qid, status, ms, err) {
+    if (!parPanel) return;
+    var cell = document.getElementById('par-cell-' + qid);
+    if (!cell) return;
+    var cls = 'par-' + status;
+    cell.className = 'par-cell ' + cls;
+    var stEl = cell.querySelector('.par-cell-status');
+    if (!stEl) return;
+    var map = { working: '⏳ 思考中' + (ms ? ' ' + ms + 's' : ''), done: '✅ 完成 ' + (ms || 0) + 's', error: '❌ ' + U.esc((err || '失败').slice(0, 14)), queued: '⏳ 排队' };
+    stEl.textContent = map[status] || status;
+    if (status === 'done') cell.style.borderColor = 'var(--ok)';
+    else if (status === 'error') cell.style.borderColor = 'var(--danger)';
+    else if (status === 'working') cell.style.borderColor = '#096dd9';
+  }
+  function parHead(questions, sched, doneN, startTs) {
+    if (!parPanel) return;
+    var head = document.getElementById('par-head');
+    if (!head) return;
+    var elapsed = Math.round((Date.now() - startTs) / 1000);
+    head.innerHTML = '<span class="tag" style="background:#096dd9;color:#fff">并发 ' + sched.concurrency() + '/5</span>'
+      + '<span class="tag">完成 ' + doneN + '/' + questions.length + '</span>'
+      + '<span class="tag">已耗时 ' + elapsed + 's</span>'
+      + '<span class="tag">状态实时更新中…</span>';
+  }
+  function parLog(msg) {
+    if (!parPanel) return;
+    var log = document.getElementById('par-log');
+    if (!log) return;
+    log.insertAdjacentHTML('beforeend', '<div>· ' + U.esc(msg) + '</div>');
+    log.scrollTop = log.scrollHeight;
+  }
+  // ---------- 并行出题主流程（规划 → 并行 → 重试 → 审查） ----------
+  function runParallelQuestions(plan, subj, bp, major, prefs) {
+    var questions = plan.questions || [];
+    if (!questions.length) return Promise.reject(new Error('规划为空'));
+    Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
+    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length };
+    var sched = makeScheduler();
+    var results = new Array(questions.length);
+    var launched = new Array(questions.length).fill(false);
+    var retried = {};
+    var pending = questions.length;
+    parHead(questions, sched, 0, parPanel.startTs);
+    function finish(i, q, err) {
+      pending--;
+      parPanel.doneN++;
+      parHead(questions, sched, parPanel.doneN, parPanel.startTs);
+      if (q) {
+        results[i] = q;
+        parPaint(q.qid, 'done', Math.round((Date.now() - parPanel.startTs) / 1000) - 0, null);
+      } else {
+        results[i] = null;
+        parPaint(questions[i].qid, 'error', 0, err || '失败');
+        parLog('题' + questions[i].qid + ' 失败：' + (err || '解析失败'));
+      }
+      pump();
+      if (pending === 0) {
+        var builtQ = results.filter(function (q2) { return q2; });
+        if (builtQ.length < Math.ceil(questions.length * 0.7)) return Promise.reject(new Error('并行出题失败过多（' + builtQ.length + '/' + questions.length + '）'));
+        return Promise.resolve({ title: plan.title || 'AI 并行押题卷', questions: builtQ, timeLimit: bp.timeLimit });
+      }
+      return null;
+    }
+    function launch(i) {
+      var p = questions[i];
+      var t0 = Date.now();
+      parPaint(p.qid, 'working', Math.round((Date.now() - t0) / 1000));
+      var opts = { cache: false, noThink: !prefs.think, timeout: 300000 };
+      if (prefs.diff === 'superhard') { opts.noThink = false; delete opts.maxTokens; opts.timeout = 600000; }
+      AI.chatJSON(workerSystem(subj, p, bp, major), workerUser(subj, p, bp), null, opts).then(function (raw) {
+        var q = normalizeParallelQ(raw, p);
+        var ms = Date.now() - t0;
+        sched.leave(); sched.observe(ms, !!q);
+        if (q) { finish(i, q, null); }
+        else if (!retried[p.qid]) { retried[p.qid] = 1; sched.enter(); launch(i); }
+        else { finish(i, null, '解析失败'); }
+      }).catch(function (e) {
+        var ms = Date.now() - t0;
+        sched.leave(); sched.observe(ms, false);
+        if (!retried[p.qid]) { retried[p.qid] = 1; sched.enter(); launch(i); }
+        else { finish(i, null, (e && e.message) || String(e)); }
+      });
+    }
+    function pump() {
+      while (sched.permit()) {
+        var i = launched.indexOf(false);
+        if (i < 0) break;
+        launched[i] = true;
+        sched.enter();
+        launch(i);
+      }
+    }
+    pump();
+    return new Promise(function (resolve, reject) {
+      var check = setInterval(function () {
+        if (pending === 0) {
+          clearInterval(check);
+          var builtQ = results.filter(function (q2) { return q2; });
+          if (builtQ.length < Math.ceil(questions.length * 0.7)) reject(new Error('并行出题失败过多（' + builtQ.length + '/' + questions.length + '）'));
+          else resolve({ title: plan.title || 'AI 并行押题卷', questions: builtQ, timeLimit: bp.timeLimit });
+        }
+      }, 400);
+    });
+  }
+  function workerUser(subj, p, bp) {
+    return '请按你的任务精制这一道题（题' + p.qid + '：' + p.topic + '）。';
+  }
+  // 总审查（本地硬校验 + AI 深度审查）
+  function chiefReview(built, subj, bp, plan) {
+    var local = [];
+    var hardN = built.questions.filter(function (q) { return q.diff === 'hard'; }).length;
+    if (built.questions.length < plan.questions.length) local.push('实出 ' + built.questions.length + ' 题，规划 ' + plan.questions.length + ' 题');
+    if (plan.questions.filter(function (p) { return p.diff === 'hard'; }).length && hardN === 0) local.push('整卷无 hard 题');
+    var totalScore = built.questions.reduce(function (a, q) { return a + (q.score || 0); }, 0);
+    if (Math.abs(totalScore - bp.totalScore) > 10) local.push('总分 ' + totalScore + ' ≠ 卷面 ' + bp.totalScore);
+    var topics = built.questions.map(function (q) { return q.topicName; });
+    var dup = topics.filter(function (t, i) { return t && topics.indexOf(t) < i; });
+    if (dup.length) local.push('考点重复：' + dup.join('、'));
+    var payload = built.questions.map(function (q, i) {
+      return (i + 1) + '. [' + q.diff + '·' + q.score + '分] ' + q.topicName + '\n题干：' + String(q.stem || '').slice(0, 80) + '\n答案：' + String(q.answer || '').slice(0, 60);
+    }).join('\n\n');
+    return AI.chatJSON(chiefReviewSystem(subj, bp), '【整卷】\n' + payload, null, { noThink: false, timeout: 300000, cache: false }).then(function (rev) {
+      if (!rev) rev = { verdict: local.length ? 'minor' : 'ok', issues: [], summary: '' };
+      var issues = (rev.issues || []).concat(local.map(function (x) { return { qid: 0, issue: x }; }));
+      if (issues.length) parLog('总审查发现：' + issues.map(function (x) { return x.issue; }).join('；'));
+      return { verdict: rev.verdict || (issues.length ? 'minor' : 'ok'), issues: issues, summary: rev.summary || '' };
+    }).catch(function () {
+      return { verdict: local.length ? 'minor' : 'ok', issues: local.map(function (x) { return { qid: 0, issue: x }; }), summary: '' };
+    });
+  }
+  // 并行出卷总入口
+  function parallelExamBuild(el, prefs) {
+    if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI'); return; }
+    if (BgTask.isRunning('exam')) { Toast.show('押题卷生成中…', 'info'); return; }
+    prefs = Object.assign(examPref(), prefs || {});
+    BgTask.run('exam', 'AI 并行押题卷', function () {
+      var st = Store.get();
+      var heat = st.heat || {};
+      var dep = leverageMap();
+      var trends = (st.sprintData && st.sprintData.trends) || null;
+      var subjTopics = collectSubjTopics(heat, dep, trends);
+      var subj = prefs.subject !== 'auto' && SUBJ_ORDER.indexOf(prefs.subject) >= 0 ? prefs.subject : pickExamSubject(subjTopics);
+      var bp = examBlueprint(subj);
+      var major = (function () { try { return DB.getActiveMajor().name; } catch (e) { return '专业课'; } })();
+      // 阶段1：总工程师规划
+      var float = window.Components && Components.aiFloat ? Components.aiFloat('🧠 总工程师规划') : null;
+      if (float) float.status('正在规划每道题的题型/难度/方向/分值…');
+      var plannerUser = '【薄弱考点（前10）】\n' + subjTopics[subj].slice(0, 10).map(function (t, i) { return (i + 1) + '. ' + t.name + '（押题分 ' + t.score + '）'; }).join('\n');
+      return AI.chatJSON(plannerSystem(subj, bp, prefs), plannerUser, null, { cache: false, noThink: !prefs.think, timeout: 300000 }).then(function (plan) {
+        if (float) { float.done(); setTimeout(function () { float.close(); }, 600); }
+        if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('总工程师规划失败，请重试');
+        parLog('总工程师规划完成：' + plan.questions.length + ' 题，即将并行出题');
+        return plan;
+      }).then(function (plan) {
+        // 阶段2：并行出题（状态面板已内含）
+        return runParallelQuestions(plan, subj, bp, major, prefs);
+      }).then(function (built) {
+        // 阶段3：总审查
+        parLog('全部题目出题完毕，总工程师开始审查…');
+        return chiefReview(built, subj, bp, plan).then(function (review) {
+          if (review.verdict === 'ok') parLog('总审查通过（' + built.questions.length + ' 题均合理）');
+          return { built: built, review: review };
+        });
+      }).then(function (out) {
+        if (parPanel) { setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 800); }
+        var exam = {
+          id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
+          questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
+          createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel'
+        };
+        Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
+        Toast.success('并行押题卷已生成：' + exam.title + '（' + exam.questions.length + '题' + (out.review.verdict === 'ok' ? '·审查通过' : out.review.verdict === 'minor' ? '·有小瑕疵已标注' : '·建议复核') + '）');
+        if (currentEl) render(currentEl);
+        openExam(exam.id, currentEl || el);
+        return exam;
+      });
+    }).catch(function (e) {
+      Toast.warn('并行组卷失败：' + (e.message || e));
+      if (currentEl) render(currentEl);
+    });
   }
 
   // 各科目的卷面结构 + 真题风格指南（解决「题目太简单/不像真题」）
@@ -20650,6 +20923,8 @@ function bind(el, next) {
     phaseOf: phaseOf,
     minutesOf: minutesOf,
     markRushDone: markRushDone,
+    makeScheduler: makeScheduler,
+    normalizeParallelQ: normalizeParallelQ,
     findMethodFor: findMethodFor,
     weightsOf: weightsOf,
     learnWeights: learnWeights,
