@@ -7722,14 +7722,14 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     if (!_noKwArgs && !opts._noStreamOptions) {
       body.stream_options = { include_usage: true };
     }
-    // 思考模式控制（同 rawChat 逻辑：仅在显式设置时发送；_noKwArgs 强制跳过）
-    // noThink=true 时无条件发 enable_thinking:false —— 结构化 JSON 提取一旦让模型思考，
-    // reasoning_content 会占满 max_tokens，正式 JSON 被腰斩，表现为「解析失败」。
+    // 思考模式控制（统一决策：opts._think 由 normalizeOpts→resolveThink 算出，
+    // 优先级 ctx 模块配置 > 显式 noThink > 局部 think > 全局 thinkingMode > 默认不思考）
+    // _noKwArgs（400 极简重试）强制跳过思考设置
     if (!_noKwArgs) {
-      if (opts.noThink) {
+      if (opts._think === false) {
         body.chat_template_kwargs = { enable_thinking: false };
-      } else if (a.thinkingMode === true || a.thinkingMode === false) {
-        body.chat_template_kwargs = { enable_thinking: a.thinkingMode };
+      } else if (opts._think === true) {
+        body.chat_template_kwargs = { enable_thinking: true };
       }
       if (opts.maxTokens) body.max_tokens = opts.maxTokens;
     }
@@ -7843,9 +7843,82 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   function defaultMaxTokens() {
     try { var v = Store.get().ai.maxTokens; return (v > 0) ? v : null; } catch (e) { return null; }
   }
-  function chatStream(systemPrompt, userText, onChunk, imageDataUrl, opts) {
+  // ==================== AI 调用注册表（单模块思考模式配置的依据） ====================
+  // ctxKey 供调用方通过 opts.ctx 传入；moduleModes[ctxKey] 由设置页「单模块 AI 模式」子页写入。
+  var AI_REGISTRY = [
+    { ctx: 'quiz.gen', module: '出题', name: '出题生成', desc: '按考点生成题目与选项', def: 'noThink' },
+    { ctx: 'quiz.variant', module: '出题', name: '错题变式', desc: '同考点换数换问法出变式', def: 'noThink' },
+    { ctx: 'quiz.answer', module: '出题', name: '判分讲解', desc: '判分并讲解错因', def: 'noThink' },
+    { ctx: 'copilot.chat', module: 'AI 教练', name: '教练对话', desc: '自由对话 / 学习规划建议', def: 'global' },
+    { ctx: 'copilot.review', module: 'AI 教练', name: '深度复盘', desc: '学习进度全景深度复盘', def: 'global' },
+    { ctx: 'photo.analyze', module: '拍题', name: '拍照分析', desc: '解析错题照片并归因', def: 'noThink' },
+    { ctx: 'photo.similar', module: '拍题', name: '相似题生成', desc: '按照片考点出相似题', def: 'noThink' },
+    { ctx: 'photo.weak', module: '拍题', name: '薄弱分析', desc: '照片暴露的薄弱点分析', def: 'noThink' },
+    { ctx: 'essay.polish', module: '作文', name: '润色升级', desc: '作文润色 / 高分改写', def: 'noThink' },
+    { ctx: 'essay.grade', module: '作文', name: '批改打分', desc: '按考研评分标准批改', def: 'noThink' },
+    { ctx: 'word.gen', module: '单词', name: '词条提取', desc: '批量生成单词卡', def: 'noThink' },
+    { ctx: 'word.mnemonic', module: '单词', name: '记忆口诀', desc: '为单词生成记忆锚点', def: 'noThink' },
+    { ctx: 'pol.remember', module: '政治', name: '记忆口诀', desc: '政治知识点口诀化', def: 'noThink' },
+    { ctx: 'pol.recite', module: '政治', name: '背诵判定', desc: '默写结果对照判分', def: 'noThink' },
+    { ctx: 'insp.gen', module: '解题方法', name: '方法卡生成', desc: 'AI 提炼解题方法卡', def: 'noThink' },
+    { ctx: 'insp.example', module: '解题方法', name: '例题生成', desc: '按方法卡生成例题', def: 'noThink' },
+    { ctx: 'insp.major', module: '解题方法', name: '专业方法卡', desc: '专业课专属方法卡', def: 'noThink' },
+    { ctx: 'insp.guide', module: '解题方法', name: '带练提示', desc: '分步带练的提示点拨', def: 'noThink' },
+    { ctx: 'insp.write', module: '解题方法', name: '带练代写', desc: '教练带你写标准答案', def: 'noThink' },
+    { ctx: 'insp.check', module: '解题方法', name: '步骤审查', desc: '考生步骤与标准比对', def: 'noThink' },
+    { ctx: 'mental.chat', module: '心理', name: '心理疏导', desc: '共情疏导与状态干预', def: 'think' },
+    { ctx: 'sprint.trend', module: '智能押题', name: '趋势分析', desc: '押题趋势预判', def: 'noThink' },
+    { ctx: 'sprint.gen', module: '智能押题', name: '押题组卷', desc: '单次调用生成整卷', def: 'noThink' },
+    { ctx: 'sprint.parallel', module: '智能押题', name: '并行出题员', desc: '并行出卷的单题生成', def: 'noThink' },
+    { ctx: 'sprint.review', module: '智能押题', name: '答案复核', desc: '深度复核原答案防幻觉', def: 'think' },
+    { ctx: 'sprint.analyze', module: '智能押题', name: '整卷分析', desc: '多维评估整卷质量', def: 'think' },
+    { ctx: 'sprint.chief', module: '智能押题', name: '总审查', desc: '并行出卷的整卷审查', def: 'think' },
+    { ctx: 'cm.train', module: '特训营', name: '训练讲解', desc: '考点训练讲解', def: 'noThink' },
+    { ctx: 'cm.judge', module: '特训营', name: '作答判定', desc: '作答对错判定', def: 'noThink' },
+    { ctx: 'heat.gen', module: '考点热力', name: '热点生成', desc: '热力考点内容生成', def: 'noThink' },
+    { ctx: 'heat.deep', module: '考点热力', name: '深度分析', desc: '薄弱点深度归因', def: 'noThink' },
+    { ctx: 'mk.analyze', module: '错题本', name: '错题归因', desc: '错因分析 / 复习建议', def: 'global' },
+    { ctx: 'mk.deep', module: '错题本', name: '深度分析', desc: '错题深度复盘', def: 'noThink' },
+    { ctx: 'tutor.think', module: 'AI 督学', name: '智能督学', desc: '教练督学 / 全智能督学', def: 'global' }
+  ];
+  // 统一思考决策：ctx 模块配置（用户最高优先级）> 显式 noThink > 局部 think > 全局 thinkingMode > 默认不思考
+  function resolveThink(opts) {
     opts = opts || {};
-    if (!opts.maxTokens) { var dmt = defaultMaxTokens(); if (dmt) opts.maxTokens = dmt; }
+    // 1. 设置页「单模块 AI 模式」的用户配置（明确指定即直接采用，覆盖一切写死行为）
+    var ctxKey = opts.ctx;
+    if (ctxKey) {
+      var mm = null;
+      try { mm = (Store.get().ai.moduleModes || {})[ctxKey]; } catch (e) { }
+      if (mm === 'think') return true;
+      if (mm === 'noThink') return false;
+      if (mm === 'global') {
+        var ag = Store.get().ai;
+        if (ag.thinkingMode === true || ag.thinkingMode === false) return ag.thinkingMode;
+        return false;
+      }
+    }
+    // 2. 调用方显式写死的 noThink（如心理必思考、结构化提取防截断）
+    if (opts.noThink !== undefined) return !opts.noThink;
+    // 3. 局部开关（押题卷 prefs.think / 特训营 thinkMode / 深度 deep）
+    if (opts.think !== undefined) return !!opts.think;
+    // 4. 全局思考模式开关
+    var a = Store.get().ai;
+    if (a.thinkingMode === true || a.thinkingMode === false) return a.thinkingMode;
+    // 5. 默认不思考（结构化安全）
+    return false;
+  }
+  // 统一 opts 归一：算出 _think + maxTokens 兜底（显式 > 全局设置 > 不设）
+  function normalizeOpts(opts) {
+    opts = opts || {};
+    opts._think = resolveThink(opts);
+    if (opts.maxTokens == null) {
+      var dmt = defaultMaxTokens();
+      if (dmt) opts.maxTokens = dmt;
+    }
+    return opts;
+  }
+  function chatStream(systemPrompt, userText, onChunk, imageDataUrl, opts) {
+    opts = normalizeOpts(opts);
     const userMsg = imageDataUrl
       ? { role: 'user', content: [{ type: 'text', text: userText }, { type: 'image_url', image_url: { url: imageDataUrl } }] }
       : { role: 'user', content: userText };
@@ -7866,6 +7939,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   const AI = {
     configured, applyPreset, weeklySummary, chat, chatJSON, chatStream,
     memoryDigest,
+    // 单模块思考模式：注册表 + 决策函数（设置页子页渲染 / 调用方 ctx 覆盖）
+    AI_REGISTRY, resolveThink,
     // 多接口管理（备用 API · 优先级 · 智能切换）
     listApis, saveApi, deleteApi, moveApi, switchApi, activeApi,
     // 响应缓存管理
@@ -13053,7 +13128,7 @@ function bind(el, next) {
       + '④advice：一句总体建议。'
       + '只输出JSON：{"items":[{"id":"...","cause":"...","topic":"..."}],"topPatterns":[{"pattern":"...","rootCause":"...","fix":"..."}],"advice":"..."}'
       + '\n错题清单：\n' + lines;
-    AI.chatJSON(sys, user, null, { cache: false, maxTokens: 8000, noThink: noThink === true }).then(function (r) {
+    AI.chatJSON(sys, user, null, { cache: false, maxTokens: 8000, noThink: noThink === true, ctx: 'mk.analyze' }).then(function (r) {
       var items = Array.isArray(r.items) ? r.items : [];
       var itemsOk = items.map(function (it) {
         var m = batch.find(function (x) { return x.id === it.id; });
@@ -13172,7 +13247,7 @@ function bind(el, next) {
       + 'solve 类型不需要 options。answer 只写最终答案（如选项字母或数值），不要写解析过程。不要任何多余文字。';
     var usr = '聚类标签：' + c.label + '\n聚类根因：' + c.desc + '\n相关错题示例：\n' + samples;
 
-    AI.chatJSON(sys, usr, null, { cache: !deep, noThink: !deep, maxTokens: deep ? 6144 : 4096 }).then(function (result) {
+    AI.chatJSON(sys, usr, null, { cache: !deep, noThink: !deep, maxTokens: deep ? 6144 : 4096, ctx: 'mk.deep' }).then(function (result) {
       if (!result || !result.questions || !result.questions.length) throw new Error('AI 未返回有效题目');
       var setId = U.uid();
       var newSet = {
@@ -13967,7 +14042,7 @@ function bind(el, next) {
       const tierName = DB.TIERS[topic.tier].name;
       const usr = '科目：' + (DB.SUBJECTS[subjTab] || {}).name + '\n考点：' + topic.name + '\n分组：' + topic.group + '\n层级：' + tierName + '（' + DB.TIERS[topic.tier].range + '）\n请生成该考点的详细讲解。';
 
-      return AI.chatJSON(sys, usr, null, { cache: true, noThink: true, timeout: 300000 }).then(function (result) {
+      return AI.chatJSON(sys, usr, null, { cache: true, noThink: true, timeout: 300000, ctx: 'heat.gen' }).then(function (result) {
         if (!result || !result.core) throw new Error('AI 未返回有效讲解');
         return result;
       });
@@ -14019,7 +14094,7 @@ function bind(el, next) {
         + 'solve 类型不需要 options。公式用 LaTeX $...$ 格式。不要任何多余文字。';
       const usr = '科目：' + (DB.SUBJECTS[subjTab] || {}).name + '\n考点：' + topic.name + '（' + topic.group + '）\n层级：' + DB.TIERS[topic.tier].name + '\n请出 3 道针对该考点的练习题。';
 
-      return AI.chatJSON(sys, usr, null, { cache: !deep, noThink: !deep, timeout: 300000, maxTokens: deep ? 12288 : 6144 }).then(function (result) {
+      return AI.chatJSON(sys, usr, null, { cache: !deep, noThink: !deep, timeout: 300000, maxTokens: deep ? 12288 : 6144, ctx: 'heat.deep' }).then(function (result) {
         if (!result || !result.questions || !result.questions.length) throw new Error('AI 未返回有效题目');
         return result;
       });
@@ -14116,7 +14191,7 @@ function bind(el, next) {
         + '。直接、犀利、可执行。不要任何多余文字。';
       const usr = '科目：' + (DB.SUBJECTS[subjTab] || {}).name + '\n考点掌握度：\n' + topicStatus + '\n' + errSummary + '\n请给出今天的训练建议。';
 
-      return AI.chatJSON(sys, usr, null, { cache: false, noThink: true, timeout: 300000 }).then(function (result) {
+      return AI.chatJSON(sys, usr, null, { cache: false, noThink: true, timeout: 300000, ctx: 'heat.gen' }).then(function (result) {
         if (!result || !result.priority) throw new Error('AI 未返回有效建议');
         return result;
       });
@@ -14181,7 +14256,7 @@ function bind(el, next) {
         + weak.map(function (t) { return '- ID:' + t.id + ' ' + t.name + '（分组' + t.group + '，层级' + t.tier + '，掌握度' + (t.score >= 0 ? t.score + '%' : '未测') + '，关联错题' + t.relErr + '条）'; }).join('\n')
         + '\n请生成复习顺序。';
 
-      return AI.chatJSON(sys, usr, null, { cache: false, noThink: true, timeout: 300000 }).then(function (result) {
+      return AI.chatJSON(sys, usr, null, { cache: false, noThink: true, timeout: 300000, ctx: 'heat.gen' }).then(function (result) {
         if (!result || !result.steps || !result.steps.length) throw new Error('AI 未返回有效复习路径');
         return result;
       });
@@ -15893,7 +15968,7 @@ function bind(el, next) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI，才能生成例题'); return; }
     busy = true; render(el);
     Toast.show('正在按「' + p.title + '」命题…', 'info', 2500);
-    AI.chatStream(genExampleSystem(p), '方法卡步骤：' + (p.steps || []).map(function (st, i) { return (i + 1) + '.' + st.name; }).join('；') + '\n（可参考考生薄弱点：' + (AiMemory && AiMemory.digest ? AiMemory.digest(200) || '无' : '无') + '）', null, null, { noThink: true }).then(function (full) {
+    AI.chatStream(genExampleSystem(p), '方法卡步骤：' + (p.steps || []).map(function (st, i) { return (i + 1) + '.' + st.name; }).join('；') + '\n（可参考考生薄弱点：' + (AiMemory && AiMemory.digest ? AiMemory.digest(200) || '无' : '无') + '）', null, null, { noThink: true, ctx: 'insp.example' }).then(function (full) {
       busy = false;
       var r = parseExampleRobust(full, p);
       if (!r) { render(el); Toast.warn('例题解析失败，请重试'); return; }
@@ -15963,7 +16038,7 @@ function bind(el, next) {
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('请先配置 AI，才能生成专业课方法卡'); return; }
     busy = true; render(el);
     Toast.show('正在为「' + mj.name + '」提炼方法卡…', 'info', 2500);
-    AI.chatStream(genMajorSystem(mj.name, mj.modules), '考生长期记忆中的薄弱点：' + (AiMemory && AiMemory.digest ? AiMemory.digest(200) || '无' : '无'), null, null, { noThink: true }).then(function (full) {
+    AI.chatStream(genMajorSystem(mj.name, mj.modules), '考生长期记忆中的薄弱点：' + (AiMemory && AiMemory.digest ? AiMemory.digest(200) || '无' : '无'), null, null, { noThink: true, ctx: 'insp.major' }).then(function (full) {
       busy = false;
       var list = null;
       try { list = AI.extractRobustJSON(full || ''); } catch (e) { }
@@ -16202,7 +16277,7 @@ function bind(el, next) {
       + (st.tip ? '\n【该步坑】' + st.tip : '')
       + (exg && exg.key ? '\n【例题关键】' + exg.key : (curExample && curExample.stem ? '\n【题目】' + curExample.stem : (guideProblem ? '\n【题目】' + guideProblem : '')))
       + (userText ? '\n【考生已写】' + userText : '');
-    AI.chatStream(system, user, null, null, { noThink: true }).then(function (text) {
+    AI.chatStream(system, user, null, null, { noThink: true, ctx: 'insp.write' }).then(function (text) {
       var ta = el.querySelector('#gd-in');
       if (ta && text) {
         ta.value = text.trim();
@@ -17167,7 +17242,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'gen:' + s, ac: ac };
     bindCancel(ac);
-    AI.chatStream(aiSys(), trainGenPrompt(n, s, stepCountOf(tr.intensity, s)), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !tr.thinkMode, timeout: 180000 }).then(function (full) {
+    AI.chatStream(aiSys(), trainGenPrompt(n, s, stepCountOf(tr.intensity, s)), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !tr.thinkMode, ctx: 'cm.train', timeout: 180000 }).then(function (full) {
       endBusy(ac);
       var o = AI.extractRobustJSON(full);
       var arr = (o && (o.items || o.list)) || (Array.isArray(o) ? o : null);
@@ -17222,7 +17297,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'judge:' + s + '-' + qi, ac: ac };
     bindCancel(ac);
-    AI.chatStream(aiSys(), trainJudgePrompt(n, s, item, userAns), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
+    AI.chatStream(aiSys(), trainJudgePrompt(n, s, item, userAns), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), ctx: 'cm.train', timeout: 120000 }).then(function (full) {
       endBusy(ac);
       var o = AI.extractRobustJSON(full);
       endBusy(ac);
@@ -17300,7 +17375,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'var:' + s + '-' + qi, ac: ac };
     bindCancel(ac);
-    AI.chatStream(aiSys(), trainVariantPrompt(n, s, item, qi), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
+    AI.chatStream(aiSys(), trainVariantPrompt(n, s, item, qi), function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), ctx: 'cm.train', timeout: 120000 }).then(function (full) {
       endBusy(ac);
       var o = AI.extractRobustJSON(full);
       var it = (o && o.item) || (o && o.items && o.items[0]) || null;
@@ -17366,7 +17441,7 @@ function bind(el, next) {
     var ac = new AbortController();
     tbusy = { key: 'ee:' + kind, ac: ac };
     bindCancel(ac);
-    AI.chatStream(aiSys(), prompts[kind], function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
+    AI.chatStream(aiSys(), prompts[kind], function (txt) { float.content(txt); }, null, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), ctx: 'cm.train', timeout: 120000 }).then(function (full) {
       endBusy(ac);
       var o = AI.extractRobustJSON(full);
       if (!o || (kind !== 'demo' && !Array.isArray(o.items))) throw new Error('返回内容不完整');
@@ -17521,7 +17596,7 @@ function bind(el, next) {
       + '只输出 JSON：{"title":"题型名(≤12字)","recognize":["识别信号(3-5条,每条≤30字)"],"steps":[{"name":"步骤名(≤8字)","do":"这步做什么(≤40字,动词开头)","tip":"该步高频坑(≤30字)"}],"pitfalls":["整题高频错(2-4条)"],"verify":["验证方法(1-3条)"],"dualTip":"一题多解要点：常规解法与技巧解法各适用什么场景(≤80字)"}。\n'
       + '要求：recognize 必须能一眼认出这道题；steps 4-7 步按真实解题顺序；pitfalls 不重复 tip；用简体中文。不要任何多余文字。';
     var usr = '考点：' + n.name + '\n教材：' + (n.book || textbook()) + '\n本轮训练记录：\n' + lines.join('\n');
-    AI.chatStream(sys, usr, function (txt) { float.content(txt); }, null, { cache: false, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
+    AI.chatStream(sys, usr, function (txt) { float.content(txt); }, null, { cache: false, noThink: !(trainOf(n) && trainOf(n).thinkMode), ctx: 'cm.train', timeout: 120000 }).then(function (full) {
       var o = AI.extractRobustJSON(full);
       if (!o || !o.title || !Array.isArray(o.steps) || !o.steps.length) throw new Error('返回内容不完整');
       var card = {
@@ -17774,7 +17849,7 @@ function bind(el, next) {
         + (item.options && item.options.length ? '\n选项：' + item.options.map(function (o, i) { return 'ABCD'[i] + '.' + String(o || ''); }).join('；') : '')
         + '\n标准答案：' + item.answer
         + '\n输出JSON：{"correct":"对|错|部分对|无法辨认","score":0-100,"comment":"点评(≤90字，公式用$...$包裹)"}。若照片中看不出作答内容，correct 必须为"无法辨认"。不要任何多余文字。';
-      AI.chatStream(aiSys(), usr, function (txt) { float.content(txt); }, dataUrl, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), timeout: 120000 }).then(function (full) {
+      AI.chatStream(aiSys(), usr, function (txt) { float.content(txt); }, dataUrl, { cache: false, signal: ac.signal, noThink: !(trainOf(n) && trainOf(n).thinkMode), ctx: 'cm.train', timeout: 120000 }).then(function (full) {
         endBusy(ac);
         var o = AI.extractRobustJSON(full);
         if (o.correct === '无法辨认') {
@@ -19152,7 +19227,7 @@ function bind(el, next) {
       // 【轮2】浮窗流式
       var float = window.Components && Components.aiFloat ? Components.aiFloat('📈 AI 趋势分析') : null;
       if (float) float.status('⏳ 正在分析命题趋势…');
-      return AI.chatStream(sys, usr, function (txt) { if (float) float.content(txt); }, null, { cache: true, noThink: true, timeout: 300000 }).then(function (full) {
+      return AI.chatStream(sys, usr, function (txt) { if (float) float.content(txt); }, null, { cache: true, noThink: true, timeout: 300000, ctx: 'sprint.trend' }).then(function (full) {
         var result = AI.extractRobustJSON(full);
         if (!result || !result.prediction) throw new Error('AI 未返回有效趋势分析');
         result.generatedAt = new Date().toISOString();
@@ -19205,7 +19280,7 @@ function bind(el, next) {
       // 【轮2】浮窗流式
       var float = window.Components && Components.aiFloat ? Components.aiFloat('🧠 生成押题理由') : null;
       if (float) float.status('⏳ 正在为 Top10 考点生成押题理由…');
-      return AI.chatStream(sys, usr, function (txt) { if (float) float.content(txt); }, null, { cache: true, noThink: true, timeout: 300000 }).then(function (full) {
+      return AI.chatStream(sys, usr, function (txt) { if (float) float.content(txt); }, null, { cache: true, noThink: true, timeout: 300000, ctx: 'sprint.trend' }).then(function (full) {
         var result = AI.extractRobustJSON(full);
         if (!result || !result.reasons) throw new Error('AI 未返回有效押题理由');
         if (float) { float.done(); setTimeout(function () { float.close(); }, 800); }
@@ -19391,7 +19466,7 @@ function bind(el, next) {
       // 【轮2】浮窗流式：实时显示 AI 生成内容（可取消）
       var float = window.Components && Components.aiFloat ? Components.aiFloat('📝 AI 押题卷生成') : null;
       if (float) float.status('⏳ 正在按' + (subj === 'math' ? '数学' : subj === 'ctrl' ? '专业课' : subj === 'pol' ? '政治' : '英语') + '卷面结构组卷…');
-      var opts = { cache: false, noThink: !prefs.think, timeout: 300000, maxTokens: 16000 };
+      var opts = { cache: false, noThink: !prefs.think, timeout: 300000, maxTokens: 16000, ctx: 'sprint.gen' };
       // 【超难特训】强制启思考 + 不限 token + 延长超时，让 AI 充分推敲创新题
       if (prefs.diff === 'superhard') {
         opts.noThink = false;
@@ -19680,7 +19755,7 @@ function bind(el, next) {
       parPaint(p.qid, 'working', Math.round((Date.now() - t0) / 1000));
       // 【关键】maxTokens 16000：与 aiExam 一致——服务端默认 max_tokens 偏小，
       // choice 题（题干+4选项+答案+长解析）极易被截断 → 6 层提取失败
-      var opts = { cache: false, noThink: !prefs.think, timeout: 300000, maxTokens: 16000 };
+      var opts = { cache: false, noThink: !prefs.think, timeout: 300000, maxTokens: 16000, ctx: 'sprint.parallel' };
       if (prefs.diff === 'superhard') { opts.noThink = false; delete opts.maxTokens; opts.timeout = 600000; }
       AI.chatJSON(workerSystem(subj, p, bp, major), workerUser(subj, p, bp), null, opts).then(function (raw) {
         var q = normalizeParallelQ(raw, p);
@@ -19734,7 +19809,7 @@ function bind(el, next) {
     var payload = built.questions.map(function (q, i) {
       return (i + 1) + '. [' + q.diff + '·' + q.score + '分] ' + q.topicName + '\n题干：' + String(q.stem || '').slice(0, 80) + '\n答案：' + String(q.answer || '').slice(0, 60);
     }).join('\n\n');
-    return AI.chatJSON(chiefReviewSystem(subj, bp), '【整卷】\n' + payload, null, { noThink: false, timeout: 300000, cache: false }).then(function (rev) {
+    return AI.chatJSON(chiefReviewSystem(subj, bp), '【整卷】\n' + payload, null, { noThink: false, timeout: 300000, cache: false, ctx: 'sprint.chief' }).then(function (rev) {
       if (!rev) rev = { verdict: local.length ? 'minor' : 'ok', issues: [], summary: '' };
       var issues = (rev.issues || []).concat(local.map(function (x) { return { qid: 0, issue: x }; }));
       if (issues.length) parLog('总审查发现：' + issues.map(function (x) { return x.issue; }).join('；'));
@@ -20353,7 +20428,7 @@ function bind(el, next) {
     var usr = '请批判性复核这道题的原标准答案与原解析是否正确（不要默认正确，防 AI 幻觉）。\n'
       + '【题目】' + Tex.renderInline(q.stem || '') + '\n【考生答案】' + (r.answer || '(未答)') + '\n【原标准答案】' + (q.answer || '') + '\n【原解析】' + Tex.renderInline(q.solution || '')
       + '\n\n只输出 JSON：{"verdict":"correct|wrong|partial","reason":"≤30字","corrected":"仅 verdict≠correct 时给正确解答，否则空串"}';
-    AI.chatStream('你是考研复核专家，批判性复核这一道题。', usr, null, null, { noThink: false, timeout: 300000, cache: false }).then(function (full) {
+    AI.chatStream('你是考研复核专家，批判性复核这一道题。', usr, null, null, { noThink: false, timeout: 300000, cache: false, ctx: 'sprint.review' }).then(function (full) {
       slot.dataset.busy = ''; btn.disabled = false;
       var j = null; try { j = AI.extractRobustJSON(full); } catch (e) { }
       var verdict = j && j.verdict; var reason = (j && j.reason) || ''; var corrected = (j && j.corrected) || '';
@@ -20395,7 +20470,7 @@ function bind(el, next) {
       + '【各题】\n' + qs;
     AI.chatStream('你是考研命题评估专家，对整套卷做多维批判性评估。', usr, function (txt) {
       slot.innerHTML = '<div class="report" style="font-size:13px">' + Tex.renderInline(txt || '') + '<span class="ai-cursor"></span></div>';
-    }, null, { noThink: false, timeout: 600000, cache: false }).then(function (full) {
+    }, null, { noThink: false, timeout: 600000, cache: false, ctx: 'sprint.analyze' }).then(function (full) {
       slot.dataset.busy = '';
       var j = null; try { j = AI.extractRobustJSON(full); } catch (e) { }
       if (!j || !j.scores) {
@@ -20446,7 +20521,7 @@ function bind(el, next) {
       }).join('\n\n');
     AI.chatStream('你是考研复核专家，对每道题做批判性深度复核。', usr, function (txt) {
       slot.innerHTML = '<div class="report" style="font-size:13px">' + Tex.renderInline(txt || '') + '<span class="ai-cursor"></span></div>';
-    }, null, { noThink: false, timeout: 600000, cache: false }).then(function (full) {
+    }, null, { noThink: false, timeout: 600000, cache: false, ctx: 'sprint.analyze' }).then(function (full) {
       slot.dataset.busy = '';
       var json = null;
       try { json = AI.extractRobustJSON(full); } catch (e) { }
@@ -21754,7 +21829,7 @@ function bind(el, next) {
       buf = full || '';
       var out = document.getElementById('psy-rpt-out');
       if (out) { out.textContent = buf; }
-    }, null, { cache: false, noThink: false, timeout: 120000 }).then(function (full) {
+    }, null, { cache: false, noThink: false, timeout: 120000, ctx: 'mental.chat' }).then(function (full) {
       done = true;
       try {
         Store.update(function (s) { s.psy = s.psy || {}; s.psy.weeklyReport = { week: wk, content: full || buf, at: new Date().toISOString() }; });
@@ -21889,7 +21964,7 @@ function bind(el, next) {
       }
       var box = document.getElementById('psy-box');
       if (box) box.scrollTop = box.scrollHeight;
-    }, null, { cache: false, noThink: false, timeout: 180000, signal: ac.signal }).then(function (full) {
+    }, null, { cache: false, noThink: false, timeout: 180000, signal: ac.signal, ctx: 'mental.chat' }).then(function (full) {
       psyBusy = false; psyAc = null;
       // 存 AI 回复
       var t2 = psyThread() || { thread: [] };
@@ -23448,7 +23523,7 @@ function bind(el, next) {
     //          导致正式 JSON 输出被腰斩（这正是「开思考模式必失败」的根因）
     // maxTokens 8000：一次可能要输出 40+ 词条（含例句），默认预算不够
     AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl, {
-      cache: false, noThink: true, maxTokens: 8000
+      cache: false, noThink: true, maxTokens: 8000, ctx: 'word.gen', ctx: 'word.gen'
     }).then(function (arr) {
       var items = normalizeExtracted(arr);
       if (!items.length) throw new Error('AI 未提取到有效词条');
@@ -23748,7 +23823,7 @@ function bind(el, next) {
   function genMnemonic(card) {
     if (!card || !card.id) return Promise.reject(new Error('无词条'));
     if (!hasAI()) return Promise.reject(new Error('未配置 AI Key'));
-    return AI.chatJSON(mnemonicSystem(card), '单词：' + card.word + '（释义：' + card.meaning + '）', null, { cache: false, noThink: true, timeout: 90000 }).then(function (r) {
+    return AI.chatJSON(mnemonicSystem(card), '单词：' + card.word + '（释义：' + card.meaning + '）', null, { cache: false, noThink: true, timeout: 90000, ctx: 'word.mnemonic' }).then(function (r) {
       if (!r) throw new Error('AI 未返回有效助记');
       var data = {
         root: String(r.root || '').slice(0, 120),
@@ -25056,7 +25131,7 @@ function bind(el, next) {
     var slot = document.getElementById('es-result-slot');
     if (slot) slot.innerHTML = '<div class="card"><div class="card-title">✨ 整篇润色升级中…</div><div class="pm-ai-body" id="es-polish-stream"><div class="skl-line"></div><div class="skl-line"></div><div class="skl-line skl-w80"></div></div></div>';
     var topic = (el.querySelector('#es-topic') || {}).value || '';
-    AI.chatJSON(polishSystem(tk), (topic ? '作文题目：' + topic + '\n\n' : '') + '考生作文全文：\n' + originalText, null, { cache: false, noThink: true, maxTokens: 8000 }).then(function (r) {
+    AI.chatJSON(polishSystem(tk), (topic ? '作文题目：' + topic + '\n\n' : '') + '考生作文全文：\n' + originalText, null, { cache: false, noThink: true, maxTokens: 8000, ctx: 'essay.polish' }).then(function (r) {
       grading = false;
       if (!r || !r.polished) throw new Error('AI 未返回润色全文');
       // 持久化到最近一次批改记录（历史详情可回看润色稿）
@@ -25099,7 +25174,7 @@ function bind(el, next) {
     var topic = (el.querySelector('#es-topic') || {}).value || '';
     var sys = annotateSystem(tk);
     var usr = (topic ? '作文题目：' + topic + '\n\n' : '') + '考生作文全文：\n' + originalText;
-    AI.chatJSON(sys, usr, null, { cache: false, noThink: true, maxTokens: 8000 }).then(function (r) {
+    AI.chatJSON(sys, usr, null, { cache: false, noThink: true, maxTokens: 8000, ctx: 'essay.grade' }).then(function (r) {
       grading = false;
       if (slot) slot.innerHTML = annotateResultHtml(r, originalText, tk);
       // 绑定「返回普通批改」：恢复普通结果 + 重新挂载红笔入口
@@ -25604,6 +25679,7 @@ function bind(el, next) {
           + '<label class="check-row" style="margin-top:6px"><input type="checkbox" id="ai-thinking"' + (s.ai.thinkingMode === true ? ' checked' : '') + '><span class="box"></span><span>思考模式（开启后 AI 会先思考再回答，质量更高但稍慢；关闭可提速）</span></label>'
           + '<div class="add-row" style="margin-top:6px;align-items:center"><span class="muted-sm" style="white-space:nowrap">默认最大输出Token</span><input id="ai-maxtokens" class="input" type="number" min="0" value="' + (s.ai.maxTokens || '') + '" style="max-width:110px" placeholder="留空=服务端默认"><button class="btn btn-ghost" id="ai-maxtokens-save" style="font-size:12px">保存</button></div>'
           + '<div class="muted-sm" style="margin-top:4px">所有 AI 调用的默认最大输出长度；各功能显式指定的 maxTokens 仍优先生效。留空或0=使用服务端默认值。</div>'
+          + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-ghost" id="ai-modemodes" style="font-size:12px">⚙️ 单模块 AI 模式（逐个功能精细控制是否思考）</button></div>'
           + '<div class="muted-sm" id="ai-hint">' + U.esc((DB.AI_PRESETS[s.ai.preset] || DB.AI_PRESETS.deepseek).hint) + '</div>'
           + '<div class="btn-row" style="margin-top:10px">'
           + '<button class="btn btn-primary" id="ai-save">保存接口</button>'
@@ -26272,6 +26348,9 @@ function bind(el, next) {
       Store.update(s => { s.ai.maxTokens = (v > 0) ? v : undefined; });
       Toast.show(v > 0 ? '默认 maxTokens 已设为 ' + v : '已恢复服务端默认值', 'success');
     };
+    // ⚙️ 单模块 AI 模式：全屏子页，逐个功能精细控制思考模式（存 ai.moduleModes）
+    var mmBtn = el.querySelector('#ai-modemodes');
+    if (mmBtn) mmBtn.onclick = openModuleModes;
     var cacheClearBtn = el.querySelector('#ai-cache-clear');
     if (cacheClearBtn) cacheClearBtn.onclick = () => {
       AI.cacheClear();
@@ -26420,6 +26499,65 @@ function bind(el, next) {
         };
       });
     })();
+  }
+
+  // ⚙️ 单模块 AI 模式：注册表渲染（AI.AI_REGISTRY → 分组列表）
+  function mmListHtml(reg, modes, q) {
+    var groups = {};
+    reg.forEach(function (r) {
+      if (q && (r.module + r.name + r.ctx).indexOf(q) < 0) return;
+      (groups[r.module] = groups[r.module] || []).push(r);
+    });
+    var html = '';
+    Object.keys(groups).forEach(function (g) {
+      html += '<div class="mm-group"><div style="font-weight:500;font-size:13px;margin:10px 0 6px">' + g + '</div>';
+      html += groups[g].map(function (r) {
+        var cur = modes[r.ctx] || '';
+        var selOpts = [['global', '跟随全局'], ['think', '强制思考'], ['noThink', '强制不思考']]
+          .map(function (o) { return '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('');
+        var defTxt = r.def === 'think' ? '默认思考' : r.def === 'noThink' ? '默认不思考' : '默认跟随全局';
+        return '<div class="mm-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin:4px 0;flex-wrap:wrap">'
+          + '<div style="flex:1;min-width:150px"><b style="font-size:12.5px">' + r.name + '</b>'
+          + '<div class="muted-sm" style="font-size:11px">' + r.desc + ' · ' + defTxt + '</div></div>'
+          + '<select class="input mm-sel" data-ctx="' + r.ctx + '" style="width:112px;font-size:12px">' + selOpts + '</select></div>';
+      }).join('');
+      html += '</div>';
+    });
+    return html || '<div class="empty">无匹配项</div>';
+  }
+  // ⚙️ 单模块 AI 模式：全屏子页入口
+  function openModuleModes() {
+    if (typeof window.AI === 'undefined' || !window.AI || !AI.AI_REGISTRY) { Toast.warn('AI 模块未就绪'); return; }
+    var reg = AI.AI_REGISTRY;
+    var modes = Store.get().ai.moduleModes || {};
+    Modal.open({
+      title: '⚙️ 单模块 AI 模式（逐个功能精细控制）', wide: true, dismissable: true,
+      html: '<div class="mm-wrap">'
+        + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+        + '<input id="mm-q" class="input" placeholder="🔍 搜索模块 / 调用名…" style="flex:1;min-width:160px">'
+        + '<button class="btn btn-ghost btn-sm" id="mm-reset" style="font-size:12px">↺ 重置全部默认</button>'
+        + '</div>'
+        + '<div class="muted-sm" style="font-size:11.5px;margin-bottom:8px">优先级：此处配置 ＞ 功能内写死行为 ＞ 全局思考模式开关。配置立即生效，无需重启。</div>'
+        + '<div id="mm-list" style="max-height:58vh;overflow:auto">' + mmListHtml(reg, modes, '') + '</div>'
+        + '</div>',
+      actions: [{ label: '完成', kind: 'btn-primary' }]
+    });
+    var qEl = document.getElementById('mm-q');
+    if (qEl) qEl.oninput = function () { var l = document.getElementById('mm-list'); if (l) l.innerHTML = mmListHtml(reg, Store.get().ai.moduleModes || {}, qEl.value); };
+    var resetEl = document.getElementById('mm-reset');
+    if (resetEl) resetEl.onclick = function () {
+      Store.update(function (s) { s.ai.moduleModes = {}; });
+      var l = document.getElementById('mm-list');
+      var q2 = document.getElementById('mm-q');
+      if (l) l.innerHTML = mmListHtml(reg, {}, q2 ? q2.value : '');
+      Toast.show('已重置全部为默认', 'info');
+    };
+    document.querySelectorAll('.mm-sel').forEach(function (sel) {
+      sel.onchange = function () {
+        Store.update(function (s) { s.ai.moduleModes = s.ai.moduleModes || {}; s.ai.moduleModes[sel.getAttribute('data-ctx')] = sel.value; });
+        Toast.show('已保存「' + sel.getAttribute('data-ctx') + '」模式', 'info', 1200);
+      };
+    });
   }
 
   window.SettingsModule = { render };
@@ -29844,7 +29982,7 @@ function bind(el, next) {
     if (float) float.status('⏳ 正在为「' + (it.topic || '').slice(0, 20) + '」生成口诀…');
     const prompt = '为这道考研政治大题生成一句好记的背诵口诀（顺口溜/谐音/数字串联均可），10-25字。只输出JSON对象：{"card":"一句口诀"}。'
       + '考点：' + (it.topic || '') + '；要点：' + it.points.join('；');
-    AI.chatStream('你是考研政治记忆口诀大师，只输出JSON对象。', prompt, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 90000 }).then(function (full) {
+    AI.chatStream('你是考研政治记忆口诀大师，只输出JSON对象。', prompt, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 90000, ctx: 'pol.remember' }).then(function (full) {
       const r = AI.extractRobustJSON(full);
       const card = (r && r.card) ? String(r.card).trim() : '';
       if (!card) throw new Error('未返回口诀');
@@ -30020,7 +30158,7 @@ function bind(el, next) {
     const user = '考点：' + (it.topic || '') + '\n标准答案要点：\n' + (it.points || []).map(function (p, i) { return (i + 1) + '. ' + p; }).join('\n')
       + '\n考生默写：\n' + (text || '（未作答）').slice(0, 1200)
       + '\n请按语义对比评分（要点命中程度 + 表述完整度），只输出JSON：{"score":0到100的整数,"hit":["命中的要点"],"miss":["遗漏的要点"],"comment":"简评30字内"}。';
-    AI.chatStream(sys, user, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 120000 }).then(function (full) {
+    AI.chatStream(sys, user, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 120000, ctx: 'pol.recite' }).then(function (full) {
       const r = AI.extractRobustJSON(full);
       const score = U.clamp(Math.round(Number(r.score)), 0, 100);
       const hit = Array.isArray(r.hit) ? r.hit.map(String).filter(Boolean) : [];
@@ -30310,7 +30448,7 @@ function bind(el, next) {
     const float = window.Components && Components.aiFloat ? Components.aiFloat('💡 生成易混/模板提示') : null;
     if (float) float.status('⏳ 分析易混点与答题模板…');
     const prompt = '你是考研政治辅导专家。针对这道分析题，给出：①1-2个易混易错点（概念混淆、审题陷阱）；②一句答题模板（破题思路，如"是什么-为什么-怎么做"）。只输出JSON对象：{"hint":"易混点与模板，80字内"}。考点：' + (it.topic || '') + '；要点：' + (it.points || []).join('；');
-    AI.chatStream('你是考研政治辅导专家，只输出JSON对象。', prompt, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 90000 }).then(function (full) {
+    AI.chatStream('你是考研政治辅导专家，只输出JSON对象。', prompt, function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 90000, ctx: 'pol.remember' }).then(function (full) {
       const r = AI.extractRobustJSON(full);
       const hint = (r && r.hint) ? String(r.hint).trim() : '';
       if (!hint) throw new Error('未返回提示');
