@@ -19371,9 +19371,9 @@ function bind(el, next) {
 
   // ==================== 并行出卷系统（多 Agent 协作出卷） ====================
   // 总工程师规划 → 多出题员并行出题（智能并发 2~5 实时调配）→ 状态面板 → 失败重试 → 总审查
-  // 智能并发调度器：观测滑动窗口内 成功率/平均耗时，动态调并发（2 起步，最高 5）
-  function makeScheduler() {
-    var MIN = 2, MAX = 5, cur = 2, active = 0, wins = [], down = 0, SAMPLES = 8;
+  // 智能并发调度器：观测滑动窗口内 成功率/平均耗时，动态调并发（默认 2 起步，最高 5）
+  function makeScheduler(initial) {
+    var MIN = 2, MAX = 5, cur = initial || 2, active = 0, wins = [], down = 0, SAMPLES = 5;
     return {
       permit: function () { return active < cur; },
       enter: function () { active++; },
@@ -19386,8 +19386,9 @@ function bind(el, next) {
         if (wins.length >= SAMPLES) {
           var okN = wins.filter(function (w) { return w.ok; }).length;
           var avg = wins.reduce(function (a, w) { return a + w.ms; }, 0) / wins.length;
-          if (okN >= SAMPLES - 2 && avg < 12000 && cur < MAX) cur++;            // 稳快 → 升并发
-          else if (okN <= SAMPLES / 2 || avg > 30000) cur = Math.max(MIN, cur - 1); // 失败多/慢 → 降并发
+          // 思考模式每题 10-40s 属正常：成功率 4/5 且平均 <30s 就升档；失败多或 >60s 降档
+          if (okN >= SAMPLES - 1 && avg < 30000 && cur < MAX) cur++;
+          else if (okN <= 2 || avg > 60000) cur = Math.max(MIN, cur - 1);
           wins = [];
         }
         if (down >= 3) { cur = Math.max(MIN, cur - 1); down = 0; }               // 连续失败 → 立即降
@@ -19525,7 +19526,9 @@ function bind(el, next) {
   function runParallelQuestions(plan, subj, bp, major, prefs) {
     var questions = plan.questions || [];
     if (!questions.length) return Promise.reject(new Error('规划为空'));
-    var sched = makeScheduler();
+    // 按题量动态起步并发：题多起步高（12+题→4，6+题→3，小卷→2），后续按实时表现升降
+    var initialC = questions.length >= 12 ? 4 : questions.length >= 6 ? 3 : 2;
+    var sched = makeScheduler(initialC);
     parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched };
     Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
     parFab();
