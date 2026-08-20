@@ -19363,7 +19363,7 @@ function bind(el, next) {
         + '<label class="fld fld-full"><span>难度</span><select id="sp-cfg-diff" class="input">' + diffOpts + '</select></label>'
         + '<label class="fld fld-full"><span>题量</span><select id="sp-cfg-count" class="input">' + cntOpts + '</select></label>'
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px;padding-top:6px"><input type="checkbox" id="sp-cfg-think"' + (p.think ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⏳ 启用思考模式（出题质量更高，耗时/消耗约 3-5 倍）</span></label>'
-        + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="sp-cfg-parallel"' + (p.parallel ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⚡ 并发出卷（总工程师规划 → 多 AI 并行出题，智能并发最高 5 路，带实时状态面板）</span></label>'
+        + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="sp-cfg-parallel"' + (p.parallel ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⚡ 并发出卷（总工程师规划 → 多 AI 并行出题，智能并发最高 20 路，带实时状态面板）</span></label>'
         + '<div class="muted-sm" style="margin-top:6px">' + (p.parallel ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。' : 'AI 将按科目真题卷面结构组卷，优先覆盖你的薄弱考点。') + '</div>'
         + '</div>',
       actions: [
@@ -19504,13 +19504,13 @@ function bind(el, next) {
   }
 
   // ==================== 并行出卷系统（多 Agent 协作出卷） ====================
-  // 总工程师规划 → 多出题员并行出题（智能并发 2~5 实时调配）→ 状态面板 → 失败重试 → 总审查
+  // 总工程师规划 → 多出题员并行出题（智能并发 2~20 实时调配）→ 状态面板 → 失败重试 → 总审查
   // 智能并发调度器（快升探测版）：目标 = 尽快摸到最大并发、压短总出题时长
   //  - 每完成 2 个「快而稳」样本（平均 <30s）→ 立即 +1（冷却防抖，不等待样本攒满）
   //  - 任一失败 → 立即 -1（快速避险）；连续 2 失败 → 再 -1 到底
-  //  - 上限 5、下限 2；慢速成功（>30s）不升（说明 API 已饱和排队）
+  //  - 上限 20、下限 2；慢速成功（>30s）不升（说明 API 已饱和排队）
   function makeScheduler(initial, maxCon) {
-    var MAX = maxCon || 5, MIN = 2;
+    var MAX = maxCon || 20, MIN = 2;
     var cur = initial || 2, active = 0;
     var recent = [], sinceUp = 0, failStreak = 0;
     return {
@@ -19675,7 +19675,7 @@ function bind(el, next) {
     var stopBtn = doneN > 0
       ? '<button id="par-stop-do" class="btn btn-sm" style="background:#cf1322;color:#fff;border-color:#cf1322">⏹ 停止出题 · 开始做</button>'
       : '';
-    head.innerHTML = '<span class="tag" style="background:#096dd9;color:#fff">并发 ' + sched.concurrency() + '/5</span>'
+    head.innerHTML = '<span class="tag" style="background:#096dd9;color:#fff">并发 ' + sched.concurrency() + '/20</span>'
       + '<span class="tag">完成 ' + doneN + '/' + questions.length + '</span>'
       + '<span class="tag">已耗时 ' + elapsed + 's</span>'
       + etaTxt
@@ -19715,7 +19715,7 @@ function bind(el, next) {
     if (!fab) return;
     var running = parPanel && parPanel.doneN < parPanel.totalN;
     if (running) {
-      fab.textContent = '⚡ 并行组卷中 ' + parPanel.doneN + '/' + parPanel.totalN;
+      fab.textContent = '⚡ 并行组卷中 ' + parPanel.doneN + '/' + parPanel.totalN + ' · 并发 ' + (parPanel.sched ? parPanel.sched.concurrency() : '');
       fab.style.display = '';
     } else fab.style.display = 'none';
   }
@@ -19762,6 +19762,8 @@ function bind(el, next) {
       // 卡片动效
       var last = box.lastElementChild;
       if (last) { last.style.animation = 'cardIn .3s both'; }
+      // 轻提示（不打扰做题）：新题已追加
+      if (window.Toast) Toast.show('📝 已追加新题（共 ' + qn + ' 题）', 'info', 1500);
     } catch (e) { }
   }
   // 查看单题实时流式内容（判断是否卡住）—— 追加式增量更新，不全量重渲染
@@ -19823,8 +19825,8 @@ function bind(el, next) {
   function runParallelQuestions(plan, subj, bp, major, prefs) {
     var questions = plan.questions || [];
     if (!questions.length) return Promise.reject(new Error('规划为空'));
-    // 按题量动态起步并发：题多起步高（12+题→4，6+题→3，小卷→2），后续按实时表现升降
-    var initialC = questions.length >= 12 ? 4 : questions.length >= 6 ? 3 : 2;
+    // 按题量动态起步并发：题多起步高（≥30→8，≥15→6，≥6→4，小卷→3），后续快升到上限 20
+    var initialC = questions.length >= 30 ? 8 : questions.length >= 15 ? 6 : questions.length >= 6 ? 4 : 3;
     var sched = makeScheduler(initialC);
     parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched, subj: subj, bp: bp, major: major, prefs: prefs, examId: null, aborters: [], stopped: false };
     Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
@@ -19894,7 +19896,7 @@ function bind(el, next) {
         try { q = normalizeParallelQ(AI.extractRobustJSON(full), p); } catch (e) { q = null; }
         if (parPanel.stopped) { pump(); return; }
         if (q) { finish(i, q, null); }
-        else if (!retried[p.qid]) { retried[p.qid] = 1; sched.enter(); launch(i); }
+        else if ((retried[p.qid] || 0) < 2) { retried[p.qid] = (retried[p.qid] || 0) + 1; sched.enter(); launch(i); }
         else { finish(i, null, '解析失败'); }
       }).catch(function (e) {
         done = true;
@@ -19902,7 +19904,7 @@ function bind(el, next) {
         if (parPanel.stopped) { pump(); return; }   // 用户停止出题 → 静默忽略
         var ms = Date.now() - t0;
         sched.leave(); sched.observe(ms, false);
-        if (!retried[p.qid]) { retried[p.qid] = 1; sched.enter(); launch(i); }
+        if (!retried[p.qid] && !parPanel.stopped) { retried[p.qid] = 1; sched.enter(); launch(i); }
         else { finish(i, null, (e && e.message) || String(e)); }
       });
     }
