@@ -3356,7 +3356,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       // 整体解码会把 &lt;script&gt; 还原成 <script> 造成注入漏洞。公式内如需 & < > 请用 \lt \& 等命令。
       return '<span class="tx">' + seg(s) + '</span>';
     },
-    // 文本里混着 $..$ 公式：文本转义 + 公式渲染
+    // 文本里混着 $..$ / $..$ 公式：文本转义 + 行内公式渲染 + 块级公式居中
     renderInline(str) {
       try {
         if (str == null) return '';
@@ -3364,30 +3364,62 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         let s = String(str);
         s = decodeHtmlEntities(s); // 预解码 HTML 实体（上游可能已转义过一次）
         s = repairPipeLatex(s);    // 修复 AI 误用的 | 转义符（|frac → \frac），修复后 \command 才能被后续检测命中
-      // 无 $ 包裹但含公式特征 → 整段按公式渲染（AI常返回裸公式题干）
-      const greekNames = 'alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega|phi|rho|tau|xi|zeta|eta|kappa|nu|chi|psi';
-      const looksMath = /(\\[a-zA-Z]+|->|→|\^|_|∫|\[[^\]]+\]\s*\/|\)\s*\/\s*[\(a-zA-Z]|\d\s*\/\s*[\(\[]|[a-zA-Z]\s*\/\s*[\(\[]|-?\d+\s*\/\s*\d+|lim\s*[\(]|ln\s*\(|sin\s*\(|cos\s*\(|tan\s*\(|sqrt\s*\()/i.test(s)
-        || new RegExp('\\b(' + greekNames + ')\\b').test(s)
-        || /[⁰¹²³⁴⁵⁶⁷⁸⁹]/.test(s); // Unicode 上标数字（单独检测，避免正则解析问题）
-      if (s.indexOf(D) < 0 && looksMath) {
-        return '<span class="tx">' + seg(normalizeShorthand(s)) + '</span>';
-      }
-      const parts = s.split(/(\$[^$]+\$)/g);
-      return parts.map(function (p) {
-        if (p.length > 1 && p[0] === D && p[p.length - 1] === D) return Tex.render(p);
-        // 非公式段也可能夹带 LaTeX 命令/简写公式，做增强检测
-        // 覆盖：\命令、上下标、分数斜杠、Unicode上标、希腊字母名、积分求和等
-        if (looksMath && (
-          /\\[a-zA-Z]+/.test(p)                    // \Rightarrow \leq \sinh 等任意 LaTeX 命令
-          || /\\[a-zA-Z]*\{/.test(p)                // \frac{...} \boxed{...} 等带参命令
-          || /->|→/.test(p)                         // 箭头
-          || /\^|_/.test(p)                         // 上下标
-          || /\[\S+\]\s*\/|\d\s*\/\s*\(|[a-zA-Z]\s*\/\s*\(|-?\d+\s*\/\s*\d+/.test(p)  // 分数
-          || /[⁰¹²³⁴⁵⁶⁷⁸⁹]/.test(p)               // Unicode 上标数字
-          || /∫|∑|∏|∬|∭|∮/.test(p)                 // 大型算符
-        )) return '<span class="tx">' + seg(normalizeShorthand(p)) + '</span>';
-        return esc(p).replace(/\n/g, '<br>');
-      }).join('');
+
+        // ★ 提取 $..$ 块级公式：renderInline 不识别 $，会误拆成孤立 $，
+        // 导致矩阵/cases 等块级公式整段退化成裸文本。先占位保护，最后还原为居中块。
+        let blocks = [];
+        const DD = D + D;
+        if (s.indexOf(DD) >= 0) {
+          s = s.split(DD).map(function (part, idx) {
+            if (idx % 2 === 1) { // 奇数段为 $ 内公式
+              var ph = '\x00B' + blocks.length + '\x00';
+              blocks.push('<div style="margin:8px 0;text-align:center;overflow-x:auto">' + Tex.render(part.trim()) + '</div>');
+              return ph;
+            }
+            return part;
+          }).join('');
+        }
+
+        // 无 $ 包裹但含公式特征 → 整段按公式渲染（AI常返回裸公式题干）
+        const greekNames = 'alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega|phi|rho|tau|xi|zeta|eta|kappa|nu|chi|psi';
+        const looksMath = /(\\[a-zA-Z]+|->|→|\^|_|∫|\[[^\]]+\]\s*\/|\)\s*\/\s*[\(a-zA-Z]|\d\s*\/\s*[\(\[]|[a-zA-Z]\s*\/\s*[\(\[]|-?\d+\s*\/\s*\d+|lim\s*[\(]|ln\s*\(|sin\s*\(|cos\s*\(|tan\s*\(|sqrt\s*\()/i.test(s)
+          || new RegExp('\\b(' + greekNames + ')\\b').test(s)
+          || /[⁰¹²³⁴⁵⁶⁷⁸⁹]/.test(s); // Unicode 上标数字（单独检测，避免正则解析问题）
+
+        let out;
+        if (s.indexOf(D) < 0) {
+          if (blocks.length) {
+            // 只有 $ 块 + 周围纯文本：文本正常转义，块级公式稍后还原
+            out = esc(s).replace(/\n/g, '<br>');
+          } else if (looksMath) {
+            out = '<span class="tx">' + seg(normalizeShorthand(s)) + '</span>';
+          } else {
+            out = esc(s).replace(/\n/g, '<br>');
+          }
+        } else {
+          const parts = s.split(/(\$[^$]+\$)/g);
+          out = parts.map(function (p) {
+            if (p.length > 1 && p[0] === D && p[p.length - 1] === D) return Tex.render(p);
+            // 非公式段也可能夹带 LaTeX 命令/简写公式，做增强检测
+            // 覆盖：\命令、上下标、分数斜杠、Unicode上标、希腊字母名、积分求和等
+            if (looksMath && (
+              /\\[a-zA-Z]+/.test(p)                    // \Rightarrow \leq \sinh 等任意 LaTeX 命令
+              || /\\[a-zA-Z]*\{/.test(p)                // \frac{...} \boxed{...} 等带参命令
+              || /->|→/.test(p)                         // 箭头
+              || /\^|_/.test(p)                         // 上下标
+              || /\[\S+\]\s*\/|\d\s*\/\s*\(|[a-zA-Z]\s*\/\s*\(|-?\d+\s*\/\s*\d+/.test(p)  // 分数
+              || /[⁰¹²³⁴⁵⁶⁷⁸⁹]/.test(p)               // Unicode 上标数字
+              || /∫|∑|∏|∬|∭|∮/.test(p)                 // 大型算符
+            )) return '<span class="tx">' + seg(normalizeShorthand(p)) + '</span>';
+            return esc(p).replace(/\n/g, '<br>');
+          }).join('');
+        }
+
+        // 还原 $ 块级公式
+        if (blocks.length) {
+          out = out.replace(/\x00B(\d+)\x00/g, function (_, n) { return blocks[parseInt(n)] || ''; });
+        }
+        return out;
       } catch (e) {
         // 异常兜底：seg 内部错误时返回 esc 原文（避免整段渲染失败导致题面裸 LaTeX 显示）
         console.warn('[Tex] renderInline 异常', e);
@@ -3396,7 +3428,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     }
   };
   // 全局后处理：Tex.renderInline 输出端统一处理 Markdown **加粗**/*斜体*
-  // 这样 formatStem() / mistakes.js / dashboard.js 等所有调用方自动受益，无需逐个改
+  // 这样 mistakes.js / dashboard.js / sprint.js 等所有调用方自动受益，无需逐个改
   (function() {
     var _ri = Tex.renderInline;
     Tex.renderInline = function(s) {
