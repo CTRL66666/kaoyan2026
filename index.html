@@ -6847,7 +6847,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       + '<button class="cm-ai-float-x" aria-label="关闭">×</button></div>'
       + '<div class="cm-ai-float-b">'
       + '<div class="muted-sm cm-ai-float-status" id="ai-float-status">⏳ 正在连接模型…</div>'
-      + '<div class="cm-ai-float-think" id="ai-float-think" style="display:none"><div class="cm-ai-float-label">💭 思考过程</div><pre class="report" id="ai-float-think-t"></pre></div>'
+      + '<details class="cm-ai-float-think" id="ai-float-think" style="display:none"><summary class="cm-ai-float-label" style="cursor:pointer;user-select:none">💭 思考过程（点击展开/收起）</summary><pre class="report" id="ai-float-think-t"></pre></details>'
       + '<div class="cm-ai-float-content" id="ai-float-content" style="display:none"><div class="cm-ai-float-label">📝 生成内容</div><pre class="report" id="ai-float-content-t"></pre></div>'
       + '</div>';
     document.body.appendChild(panel);
@@ -19372,7 +19372,7 @@ function bind(el, next) {
     };
   }
   // ---------- 状态面板（题号网格可视化） ----------
-  var parPanel = null;   // {cells:{qid->el}, headEl, logEl, startTs, doneN, totalN}
+  var parPanel = null;   // {startTs, doneN, totalN, questions, cells:{qid->{status,ms,err}}, sched}
   function parPanelHtml(questions) {
     return '<div class="par-panel">'
       + '<div class="par-head" id="par-head" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px"></div>'
@@ -19388,6 +19388,8 @@ function bind(el, next) {
   }
   function parPaint(qid, status, ms, err) {
     if (!parPanel) return;
+    parPanel.cells[qid] = { status: status, ms: ms, err: err };
+    parFabUpdate();
     var cell = document.getElementById('par-cell-' + qid);
     if (!cell) return;
     var cls = 'par-' + status;
@@ -19417,13 +19419,54 @@ function bind(el, next) {
     log.insertAdjacentHTML('beforeend', '<div>· ' + U.esc(msg) + '</div>');
     log.scrollTop = log.scrollHeight;
   }
+  // 右下角悬浮入口：状态面板被关闭后仍可随时恢复查看
+  function parFab() {
+    var fab = document.getElementById('par-fab');
+    if (!fab) {
+      fab = document.createElement('button');
+      fab.id = 'par-fab';
+      fab.className = 'btn btn-sm btn-primary';
+      fab.style.cssText = 'position:fixed;right:14px;bottom:72px;z-index:9999;border-radius:20px;padding:8px 14px;box-shadow:0 2px 10px rgba(0,0,0,.2)';
+      fab.onclick = function () { parReopenPanel(); };
+      document.body.appendChild(fab);
+    }
+    return fab;
+  }
+  function parFabUpdate() {
+    var fab = document.getElementById('par-fab');
+    if (!fab) return;
+    var running = parPanel && parPanel.doneN < parPanel.totalN;
+    if (running) {
+      fab.textContent = '⚡ 并行组卷中 ' + parPanel.doneN + '/' + parPanel.totalN;
+      fab.style.display = '';
+    } else fab.style.display = 'none';
+  }
+  function parRemoveFab() {
+    var fab = document.getElementById('par-fab');
+    if (fab && fab.parentNode) fab.parentNode.removeChild(fab);
+  }
+  function parReopenPanel() {
+    if (!parPanel || !parPanel.questions || !parPanel.questions.length) return;
+    Modal.open({ title: '⚡ 并发出卷中', wide: true, dismissable: true, html: parPanelHtml(parPanel.questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
+    parRenderAll();
+  }
+  function parRenderAll() {
+    if (!parPanel) return;
+    parHead(parPanel.questions, parPanel.sched, parPanel.doneN, parPanel.startTs);
+    (parPanel.questions || []).forEach(function (p) {
+      var c = parPanel.cells[p.qid] || { status: 'queued' };
+      parPaint(p.qid, c.status, c.ms, c.err);
+    });
+  }
   // ---------- 并行出题主流程（规划 → 并行 → 重试 → 审查） ----------
   function runParallelQuestions(plan, subj, bp, major, prefs) {
     var questions = plan.questions || [];
     if (!questions.length) return Promise.reject(new Error('规划为空'));
-    Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
-    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length };
     var sched = makeScheduler();
+    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched };
+    Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
+    parFab();
+    parHead(questions, sched, 0, parPanel.startTs);
     var results = new Array(questions.length);
     var launched = new Array(questions.length).fill(false);
     var retried = {};
@@ -19530,11 +19573,23 @@ function bind(el, next) {
       var subj = prefs.subject !== 'auto' && SUBJ_ORDER.indexOf(prefs.subject) >= 0 ? prefs.subject : pickExamSubject(subjTopics);
       var bp = examBlueprint(subj);
       var major = (function () { try { return DB.getActiveMajor().name; } catch (e) { return '专业课'; } })();
-      // 阶段1：总工程师规划
+      // 阶段1：总工程师规划（流式：正文 + 思考过程可折叠查看）
       var float = window.Components && Components.aiFloat ? Components.aiFloat('🧠 总工程师规划') : null;
       if (float) float.status('正在规划每道题的题型/难度/方向/分值…');
       var plannerUser = '【薄弱考点（前10）】\n' + subjTopics[subj].slice(0, 10).map(function (t, i) { return (i + 1) + '. ' + t.name + '（押题分 ' + t.score + '）'; }).join('\n');
-      return AI.chatJSON(plannerSystem(subj, bp, prefs), plannerUser, null, { cache: false, noThink: !prefs.think, timeout: 300000 }).then(function (plan) {
+      var planPromise = new Promise(function (resolve, reject) {
+        AI.chatStream(plannerSystem(subj, bp, prefs), plannerUser, function (txt, reasoning) {
+          if (!float) return;
+          if (txt) float.content(txt);
+          if (reasoning) float.think(reasoning);
+        }, null, { cache: false, noThink: !prefs.think, timeout: 300000 }).then(function (full) {
+          try { resolve(AI.extractRobustJSON(full)); } catch (e) { reject(e); }
+        }).catch(function (e) {
+          if (float) { float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500); }
+          reject(e);
+        });
+      });
+      return planPromise.then(function (plan) {
         if (float) { float.done(); setTimeout(function () { float.close(); }, 600); }
         if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('总工程师规划失败，请重试');
         parLog('总工程师规划完成：' + plan.questions.length + ' 题，即将并行出题');
@@ -19550,7 +19605,7 @@ function bind(el, next) {
           return { built: built, review: review };
         });
       }).then(function (out) {
-        if (parPanel) { setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 800); }
+        if (parPanel) { parRemoveFab(); setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 800); }
         var exam = {
           id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
           questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
