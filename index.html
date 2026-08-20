@@ -3310,13 +3310,45 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     return obj;
   }
 
+  // ---------- 竖线转义修复（AI 误用 | 当 LaTeX 转义符） ----------
+  // 现象：AI 生成的 LaTeX 命令前缀是 | 而非 \（|frac |int |pi |sqrt |begin{vmatrix} …）
+  // 导致整段 LaTeX 退化成裸文本照显。这里把 |command 还原成 \command。
+  // 仅当 | 紧跟【已知 LaTeX 命令名】时转换；普通绝对值 |x| / |2| 的 | 不在命令集，不会误伤。
+  // 命令集 = GREEK ∪ SYMBOL ∪ FUNC ∪ 常用结构命令（按长度降序排，避免 frac 误匹配到 f 等短前缀）
+  var PIPE_CMD = (function () {
+    var set = {};
+    Object.keys(GREEK).forEach(function (k) { set[k] = 1; });
+    Object.keys(SYMBOL).forEach(function (k) { set[k] = 1; });
+    FUNC.forEach(function (k) { set[k] = 1; });
+    ['frac', 'dfrac', 'tfrac', 'sqrt', 'int', 'iint', 'iiint', 'oint', 'sum', 'prod',
+     'left', 'right', 'begin', 'end', 'text', 'mathrm', 'mathbf', 'mathit', 'mathcal', 'mathbb',
+     'mathrms', 'mathrmd', 'overline', 'bar', 'vec', 'hat', 'dot', 'boxed', 'displaystyle',
+     'textstyle', 'scriptstyle', 'scriptscriptstyle', 'operatorname', 'nabla', 'partial',
+     'boldsymbol', 'cdot', 'vdots', 'ddots', 'cdots', 'big', 'Big', 'bigg', 'Bigg',
+     'bigl', 'Bigl', 'biggl', 'Biggl', 'bigr', 'Bigr', 'biggr', 'Biggr',
+     'quad', 'qquad', 'times', 'cdot', 'geq', 'leq', 'neq', 'approx', 'equiv', 'infty',
+     'rightarrow', 'leftarrow', 'Rightarrow', 'Leftarrow', 'mapsto', 'sin', 'cos', 'tan'].forEach(function (k) { set[k] = 1; });
+    return set;
+  })();
+  var PIPE_CMD_RE = (function () {
+    var names = Object.keys(PIPE_CMD).sort(function (a, b) { return b.length - a.length; });
+    // (^|[^\\a-zA-Z]) 前置：避免把单词中间/字母后的 | 当转义；| 后必须是已知命令名且其后非字母
+    return new RegExp('(^|[^\\\\a-zA-Z])\\|(' + names.join('|') + ')(?![a-zA-Z])', 'g');
+  })();
+  function repairPipeLatex(s) {
+    if (typeof s !== 'string') return s;
+    return s.replace(PIPE_CMD_RE, function (m, pre, cmd) { return pre + '\\' + cmd; });
+  }
+
   const Tex = {
     repairMangledLatex: repairMangledLatex,
+    repairPipeLatex: repairPipeLatex,
     // 整段都是公式（可能带 $ 包裹）
     render(str) {
       if (str == null) return '';
       let s = String(str).trim();
       s = decodeHtmlEntities(s); // 预解码 HTML 实体
+      s = repairPipeLatex(s);    // 修复 AI 误用的 | 转义符（|frac → \frac）
       const m = s.match(/^\$+([\s\S]+?)\$+$/);
       if (m) s = m[1];
       s = normalizeShorthand(s);
@@ -3331,6 +3363,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         const D = String.fromCharCode(36); // 美元符号：用charCode避免源码字面量被shell展开
         let s = String(str);
         s = decodeHtmlEntities(s); // 预解码 HTML 实体（上游可能已转义过一次）
+        s = repairPipeLatex(s);    // 修复 AI 误用的 | 转义符（|frac → \frac），修复后 \command 才能被后续检测命中
       // 无 $ 包裹但含公式特征 → 整段按公式渲染（AI常返回裸公式题干）
       const greekNames = 'alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega|phi|rho|tau|xi|zeta|eta|kappa|nu|chi|psi';
       const looksMath = /(\\[a-zA-Z]+|->|→|\^|_|∫|\[[^\]]+\]\s*\/|\)\s*\/\s*[\(a-zA-Z]|\d\s*\/\s*[\(\[]|[a-zA-Z]\s*\/\s*[\(\[]|-?\d+\s*\/\s*\d+|lim\s*[\(]|ln\s*\(|sin\s*\(|cos\s*\(|tan\s*\(|sqrt\s*\()/i.test(s)
@@ -18766,6 +18799,11 @@ function bind(el, next) {
 (function () {
   'use strict';
 
+  // 【LaTeX 格式硬约束】防止 AI 误用 | 竖线当转义符（|frac |int |pi…），导致整段渲染退化
+  // 注入到所有出题/变式提示词；数据落库时另有 repairPipeLatex 兜底，双重保险
+  var LATEX_RULE = '【LaTeX 格式硬约束】所有数学公式必须用标准 LaTeX 反斜杠命令（如 \\frac{a}{b}、\\int_a^b、\\pi、\\sqrt{x}、\\sin x、\\begin{vmatrix}…\\end{vmatrix}、\\begin{cases}…\\end{cases}），'
+    + '**严禁用 | 竖线代替反斜杠**（禁止写 |frac、|int、|pi、|sqrt 等）。矩阵用 \\begin{vmatrix}/\\begin{bmatrix} 环境，分段函数用 \\begin{cases} 环境，公式用 $…$ 包裹。';
+
   // ==================== 五维评分引擎 ====================
   function leverageMap() {
     var cg = (window.DB && DB.CONCEPT_GRAPH) || [];
@@ -19460,7 +19498,8 @@ function bind(el, next) {
         + (bp.example ? '【参考命题示例】' + bp.example + '\n\n' : '\n')
         + '【输出格式】只输出一个合法 JSON 对象，**不要任何前言/后记/markdown 围栏/代码块标记**：\n'
         + '{"title":"押题卷标题","subject":"' + subj + '","timeLimit":' + bp.timeLimit + ',"questions":[{"stem":"题干（公式用 $...$ LaTeX）","type":"choice|fill|solve|essay","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"标准答案","solution":"完整解析（LaTeX）","diff":"easy|medium|hard","score":分值,"topicName":"对应考点"}]}\n'
-        + '硬约束：① 题目数量严格按上面结构；② 每题 score 总和 = ' + bp.totalScore + '；③ choice/fill 题 score 固定（小分），solve/essay 按结构分；④ 数组必须完整闭合（绝不能输出到一半被截断）；⑤ 字段可空字符串但不能省略引号。';
+        + '硬约束：① 题目数量严格按上面结构；② 每题 score 总和 = ' + bp.totalScore + '；③ choice/fill 题 score 固定（小分），solve/essay 按结构分；④ 数组必须完整闭合（绝不能输出到一半被截断）；⑤ 字段可空字符串但不能省略引号。\n'
+        + LATEX_RULE;
 
       var usr = '请为' + (subj === 'math' ? '数学' : subj === 'ctrl' ? '专业课（' + major + '）' : subj === 'pol' ? '政治' : '英语') + '生成押题卷。\n'
         + '考生薄弱考点（按优先级，按所属科目自动筛选前 10）：\n'
@@ -19491,7 +19530,7 @@ function bind(el, next) {
         var exam = {
           id: U.uid(), title: result.title || 'AI 押题卷', subject: result.subject || 'math',
           questions: result.questions.map(function (q) {
-            return { stem: q.stem || '', type: q.type || 'solve', options: q.options || [], answer: q.answer || '', solution: q.solution || '', diff: (q.diff === 'hard' ? 'hard' : 'medium'), score: q.score || 0, topicName: q.topicName || '' };
+            return { stem: Tex.repairPipeLatex(q.stem || ''), type: q.type || 'solve', options: (q.options || []).map(function (o) { return Tex.repairPipeLatex(String(o)); }), answer: Tex.repairPipeLatex(q.answer || ''), solution: Tex.repairPipeLatex(q.solution || ''), diff: (q.diff === 'hard' ? 'hard' : 'medium'), score: q.score || 0, topicName: q.topicName || '' };
           }),
           timeLimit: result.timeLimit || 180, createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null
         };
@@ -19565,7 +19604,8 @@ function bind(el, next) {
       + (bp.example ? '【参考命题示例】' + bp.example + '\n' : '')
       + '【真题风格硬要求】① 题干有信息密度，严禁一眼看出答案的直白题；② 选择题干扰项具迷惑性（符号/单位/概念张冠李戴/绝对化）；③ 解答题多步推导，solution 给完整步骤链；④ 创新设问（跨章节综合/反证/临界参数/条件隐蔽化），别出语料库套路题；⑤ solution 写"陷阱识别→正确思路→严密步骤"。\n'
       + '【输出】只输出 JSON：{"stem":"题干(公式用 $...$ LaTeX)","type":"' + p.type + '","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"标准答案","solution":"完整解析(LaTeX)","diff":"' + p.diff + '","score":' + p.score + ',"topicName":"' + p.topic + '"}'
-      + (p.type === 'choice' ? '（choice 必须给 4 个 options）' : p.type === 'fill' ? '（填空用 _____ 做空）' : '（解答题可无 options）') + '。只输出 JSON 本身，不要前言/后记。';
+      + (p.type === 'choice' ? '（choice 必须给 4 个 options）' : p.type === 'fill' ? '（填空用 _____ 做空）' : '（解答题可无 options）') + '。只输出 JSON 本身，不要前言/后记。\n'
+      + LATEX_RULE;
   }
   // 总审查提示词：整卷合理性审查
   function chiefReviewSystem(subj, bp) {
@@ -19589,9 +19629,9 @@ function bind(el, next) {
     if (!stem) return null;
     return {
       qid: o.qid || p.qid,                  // 保留题号（parPaint/边出边做都依赖 qid 定位）
-      stem: String(stem), type: o.type === 'choice' ? 'choice' : (p.type || 'solve'),
-      options: Array.isArray(o.options) ? o.options.slice(0, 4).map(String) : [],
-      answer: String(o.answer || ''), solution: String(o.solution || ''),
+      stem: Tex.repairPipeLatex(String(stem)), type: o.type === 'choice' ? 'choice' : (p.type || 'solve'),
+      options: Array.isArray(o.options) ? o.options.slice(0, 4).map(function (o2) { return Tex.repairPipeLatex(String(o2)); }) : [],
+      answer: Tex.repairPipeLatex(String(o.answer || '')), solution: Tex.repairPipeLatex(String(o.solution || '')),
       diff: o.diff === 'hard' ? 'hard' : 'medium',
       score: Number(o.score) || p.score || 0, topicName: String(o.topicName || p.topic || '')
     };
@@ -20230,7 +20270,8 @@ function bind(el, next) {
     var float = window.Components && Components.aiFloat ? Components.aiFloat('🔄 出变式题') : null;
     if (float) float.status('⏳ 正在生成「' + (q.topicName || '该考点') + '」同类变式…');
     var sys = '你是考研命题专家。基于原题生成 1 道**同考点、同题型**的变式题：换数据/换数字/换设问角度/换情境，但解题方法相同，难度不低于原题。\n'
-      + '只输出 JSON：{"stem":"题干（LaTeX）","type":"choice|solve","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"答案","solution":"解析","diff":"medium|hard","topicName":"考点名"}。不要任何多余文字。';
+      + '只输出 JSON：{"stem":"题干（LaTeX）","type":"choice|solve","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"答案","solution":"解析","diff":"medium|hard","topicName":"考点名"}。不要任何多余文字。\n'
+      + LATEX_RULE;
     var usr = '原题（考点：' + (q.topicName || '未标注') + '，难度：' + (q.diff || 'medium') + '）：\n' + q.stem
       + (q.options && q.options.length ? '\n选项：' + q.options.join(' | ') : '')
       + '\n答案：' + (q.answer || '')
@@ -20242,8 +20283,8 @@ function bind(el, next) {
         s.questionBank = s.questionBank || [];
         s.questionBank.unshift({
           id: U.uid(), examId: 'variant', qi: -1, subject: exam.subject,
-          stem: String(r.stem || ''), options: Array.isArray(r.options) ? r.options.slice(0, 4).map(String) : [],
-          answer: String(r.answer || ''), solution: String(r.solution || ''), diff: r.diff === 'hard' ? 'hard' : 'medium',
+          stem: Tex.repairPipeLatex(String(r.stem || '')), options: Array.isArray(r.options) ? r.options.slice(0, 4).map(function (o) { return Tex.repairPipeLatex(String(o)); }) : [],
+          answer: Tex.repairPipeLatex(String(r.answer || '')), solution: Tex.repairPipeLatex(String(r.solution || '')), diff: r.diff === 'hard' ? 'hard' : 'medium',
           score: q.score || 0, topicName: String(r.topicName || q.topicName || ''), addedAt: new Date().toISOString(),
           variantOf: examId + ':' + qi, source: 'variant'
         });
