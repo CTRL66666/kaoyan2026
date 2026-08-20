@@ -2102,6 +2102,22 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .sp-exam-opt.sp-opt-ans { border-color: var(--ok); color: var(--ok); }
 .sp-exam-opt.sp-opt-dim { opacity: .35; }
 .sp-scorecard .stat { background: var(--surface); }
+/* 押题卷单题头/导航 防竖排（移动端 flex-wrap 后子项宽度被压成单字） */
+.sp-exam-head > * { white-space: nowrap; flex-shrink: 0; }
+.cm-trainpage-nav > span[style*="flex:1"] { min-width: 0; }
+.cm-trainpage-nav > span[style*="flex:1"] > b,
+.cm-trainpage-nav > span[style*="flex:1"] > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 100%; vertical-align: bottom; }
+/* 移动端押题卷考试页：导航 + 单题头压缩 */
+@media (max-width: 540px) {
+  .cm-trainpage-nav { gap: 6px; padding: 8px 2px; }
+  .cm-trainpage-nav .btn-sm { padding: 4px 8px; font-size: 12px; }
+  .cm-trainpage-nav #sp-exam-timer { font-size: 13px; }
+  .sp-exam-head { gap: 3px !important; }
+  .sp-exam-head > * { font-size: 11.5px; }
+  .sp-exam-no { min-width: auto; }
+  .sp-scorecard .stat-num { font-size: 18px; }
+  .sp-scorecard .stat-label { font-size: 11px; }
+}
 
 /* 每日押题推荐卡 hover */
 .sp-daily-item { transition: border-color .12s, transform .12s; }
@@ -19635,7 +19651,7 @@ function bind(el, next) {
     var html = '<div class="cm-trainpage">'
       + '<div class="cm-trainpage-nav">'
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-back">← 返回智能押题</button>'
-      + '<span style="flex:1;min-width:0"><b>📝 ' + U.esc(exam.title) + '</b>'
+      + '<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b>📝 ' + U.esc(exam.title) + '</b>'
       + '<span class="muted-sm" style="margin-left:6px">' + qn + '题 · 满分' + totalScore + ' · ' + (done ? '已完成' : '限时' + (exam.timeLimit || 180) + '分钟') + '</span></span>'
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-print">🖨 打印试卷</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-dl" title="保存为独立 HTML 文件（公式已渲染，可随时打开再打印）">⬇️ 下载</button>'
