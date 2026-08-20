@@ -7489,17 +7489,23 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (c === '\u201C') { quote = '\u201D'; out += '"'; continue; }  // 中文“ ”
       if (c === '/' && s.charAt(i + 1) === '/') { while (i < s.length && s.charAt(i) !== '\n') i++; continue; }
       if (c === '/' && s.charAt(i + 1) === '*') { i += 2; while (i + 1 < s.length && !(s.charAt(i) === '*' && s.charAt(i + 1) === '/')) i++; i++; continue; }
+      // 裸键名补引号：{stem:"..."} → {"stem":"..."}（AI 偷懒常见；token 后必须紧跟冒号，避免误伤）
+      if (/[A-Za-z_$]/.test(c)) {
+        var km = s.slice(i).match(/^([A-Za-z_$][\w$]*)(\s*:)/);
+        if (km) { out += '"' + km[1] + '"' + km[2]; i += km[0].length - 1; continue; }
+      }
       out += c;
     }
     if (quote) out += '"';                          // 补上被截断的收尾引号
     return out.replace(/,\s*([}\]])/g, '$1');       // 去尾逗号
   }
 
-  // ── 数组截断抢救：逐个抽取顶层完整 {...}，能解析几个算几个 ──
-  // AI 输出被 max_tokens 截断时（单词本一次要 10+ 词条最常见），
-  // 整体 JSON 必然缺 ]，但前面的词条其实都是完整可用的，不该整批丢弃。
+  // ── 数组/对象元素抢救：逐个抽取完整 {...}，能解析几个算几个 ──
+  // AI 输出被 max_tokens 截断时（顶层对象内含数组最常见），顶层整体缺 } ，
+  // 但数组里的元素（以及后续完整对象）其实都是完整的，不该整批丢弃。
+  // 策略：不因"某个对象被截断"就 break，继续向后找所有完整对象（含内层元素）。
   function salvageObjects(s) {
-    var items = [], i = 0, n = s.length;
+    var items = [], i = 0, n = s.length, seen = {};
     while (i < n) {
       if (s.charAt(i) !== '{') { i++; continue; }
       var depth = 0, inStr = false, esc = false, end = -1;
@@ -7515,12 +7521,15 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         if (c === '{') depth++;
         else if (c === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
       }
-      if (end < 0) break;                    // 尾部是被截断的半个对象 → 丢弃
+      if (end < 0) { i++; continue; }     // 该对象被截断（含顶层截断）→ 跳过，继续找后面的完整对象
       var piece = s.slice(i, end), o = null;
       try { o = JSON.parse(piece); } catch (e) {
         try { o = JSON.parse(repairJsonSafely(piece)); } catch (e2) { o = null; }
       }
-      if (o && typeof o === 'object') items.push(o);
+      if (o && typeof o === 'object' && !Array.isArray(o)) {
+        var sig = JSON.stringify(o);
+        if (!seen[sig]) { seen[sig] = 1; items.push(o); }   // 去重（外层对象与内层元素同串）
+      }
       i = end;
     }
     return items;
@@ -7551,6 +7560,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 
   // 通用稳健 JSON 提取器（供 chatJSON 和各模块复用）
   function extractRobustJSON(raw) {
+    var failTrail = [];                       // 记录每层失败原因（便于精确诊断卡在哪一层）
+    var fail = function (layer, why) { failTrail.push('L' + layer + ':' + why); };
     var str = String(raw == null ? '' : raw).replace(/^\uFEFF/, '');
     str = str.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();   // 剥掉推理模型的思考块
 
@@ -7561,17 +7572,17 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     }
     if (best) {
       var t = best.trim();
-      try { return JSON.parse(t); } catch (e) {}
-      try { return JSON.parse(repairJsonSafely(t)); } catch (e) {}
+      try { return JSON.parse(t); } catch (e) { fail(1, '代码块直接解析失败(' + e.message.slice(0, 40) + ')'); }
+      try { return JSON.parse(repairJsonSafely(t)); } catch (e) { fail(1, '代码块修复后仍解析失败(' + e.message.slice(0, 40) + ')'); }
       str = t;   // 后续各层在代码块内容上继续尝试（去掉围栏与解说文字干扰）
-    }
+    } else fail(1, '无 markdown 代码块');
 
     // 第 2 层：括号计数找最外层 [{...}] 或 {...}
     var start = -1;
     for (var i = 0; i < str.length; i++) {
       if (str.charAt(i) === '[' || str.charAt(i) === '{') { start = i; break; }
     }
-    if (start === -1) throw new Error('AI未返回JSON（未找到 [ 或 {）');
+    if (start === -1) throw new Error('AI未返回JSON（L2失败：未找到 [ 或 {）。原始回复前200字：' + str.slice(0, 200));
     var isArr = str.charAt(start) === '[';
     var openChar = isArr ? '[' : '{';
     var closeChar = isArr ? ']' : '}';
@@ -7585,30 +7596,32 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (c === openChar) depth++;
       else if (c === closeChar) { depth--; if (depth === 0) { end = j + 1; break; } }
     }
+    if (end < 0) fail(2, '括号计数未找到匹配闭合（疑似截断或字符串引号错乱）');
 
     if (end > start) {
       var jsonStr = str.slice(start, end);
       // 第 3 层：直接解析
-      try { return JSON.parse(jsonStr); } catch (e) {}
+      try { return JSON.parse(jsonStr); } catch (e) { fail(3, e.message.slice(0, 50)); }
       // 第 4 层：安全修复后重试（不破坏 don't / it's 这类撇号）
-      try { return JSON.parse(repairJsonSafely(jsonStr)); } catch (e) {}
+      try { return JSON.parse(repairJsonSafely(jsonStr)); } catch (e) { fail(4, e.message.slice(0, 50)); }
     }
 
     // 第 4.5 层：截断修复（max_tokens 腰斩 → 括号计数找不到匹配闭合 end<0）
     // 先手术式补齐（保留合法 \n 等转义），再试 repairJsonSafely+补齐（修非法 \f \nabla 等转义）
     if (end < 0) {
       var trunc = str.slice(start);
-      try { return JSON.parse(closeTruncatedJson(trunc)); } catch (e) {}
-      try { return JSON.parse(closeTruncatedJson(repairJsonSafely(trunc))); } catch (e) {}
+      try { return JSON.parse(closeTruncatedJson(trunc)); } catch (e) { fail(4.5, '截断补齐后解析失败(' + e.message.slice(0, 40) + ')'); }
+      try { return JSON.parse(closeTruncatedJson(repairJsonSafely(trunc))); } catch (e) { fail(4.5, '截断补齐+修复后仍失败(' + e.message.slice(0, 40) + ')'); }
     }
 
-    // 第 5 层：数组元素级抢救（截断 / 中间某条格式坏掉 都能救回其余部分）
+    // 第 5 层：对象/数组元素抢救（顶层截断时救回内层完整元素）
     var salvaged = salvageObjects(str.slice(start));
     if (salvaged.length) {
       if (isArr) return salvaged;
       if (salvaged.length === 1) return salvaged[0];
       return salvaged;
     }
+    fail(5, '无任何完整可解析对象');
 
     // 第 6 层（终极兜底）：正则逐字段捞值，构造对象
     if (!isArr) {
@@ -7633,9 +7646,10 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       });
       // 如果捞到了关键字段就返回，否则抛出原始错误
       if (fields.w || fields.word || fields.question) return fields;
+      fail(6, '正则捞值未命中关键字段');
     }
 
-    throw new Error('AI未返回有效JSON（已尝试6层提取均失败）。原始回复前200字：' + str.slice(0, 200));
+    throw new Error('AI未返回有效JSON（6层提取均失败）。失败轨迹：' + failTrail.join('；') + '。原始回复前200字：' + str.slice(0, 200));
   }
 
   // 流式单接口一次请求（_noKwArgs：400 时的极简重试模式，此时非流式、整体返回）
@@ -19424,15 +19438,26 @@ function bind(el, next) {
       + '只输出 JSON：{"verdict":"ok|minor|major","issues":[{"qid":N,"issue":"问题描述(≤40字)"}],"summary":"总评(≤80字)"}\n'
       + '规则：① verdict=ok 表示无实质问题；minor 表示有小瑕疵不影响使用；major 表示有题目存在明显错误或整体失衡；② 只挑真问题，不要为凑数而列。';
   }
-  // 单题结果规范化（对齐现有 exam.questions 结构）
+  // 通用解包：AI 返回可能是 顶层数组 / 嵌套 data 层 / 字段别名——统一解成单题对象
+  function unwrapQuestionObj(raw) {
+    if (!raw) return null;
+    var o = raw;
+    if (Array.isArray(o)) o = o[0];                                          // 顶层数组 → 取首个
+    if (o && typeof o === 'object' && !o.stem && o.data && typeof o.data === 'object') o = o.data;  // 嵌套 data 解包
+    return (o && typeof o === 'object' && !Array.isArray(o)) ? o : null;
+  }
+  // 单题结果规范化（对齐现有 exam.questions 结构；兼容 stem/question 字段别名）
   function normalizeParallelQ(raw, p) {
-    if (!raw || typeof raw !== 'object' || !raw.stem) return null;
+    var o = unwrapQuestionObj(raw);
+    if (!o) return null;
+    var stem = o.stem || o.question || '';
+    if (!stem) return null;
     return {
-      stem: String(raw.stem || ''), type: raw.type === 'choice' ? 'choice' : (p.type || 'solve'),
-      options: Array.isArray(raw.options) ? raw.options.slice(0, 4).map(String) : [],
-      answer: String(raw.answer || ''), solution: String(raw.solution || ''),
-      diff: raw.diff === 'hard' ? 'hard' : 'medium',
-      score: Number(raw.score) || p.score || 0, topicName: String(raw.topicName || p.topic || '')
+      stem: String(stem), type: o.type === 'choice' ? 'choice' : (p.type || 'solve'),
+      options: Array.isArray(o.options) ? o.options.slice(0, 4).map(String) : [],
+      answer: String(o.answer || ''), solution: String(o.solution || ''),
+      diff: o.diff === 'hard' ? 'hard' : 'medium',
+      score: Number(o.score) || p.score || 0, topicName: String(o.topicName || p.topic || '')
     };
   }
   // ---------- 状态面板（题号网格可视化） ----------
