@@ -7423,16 +7423,12 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   // 底层走流式管线（SSE）：响应头先到即视为连接正常，30 秒超时只管“连不上”，
   // 之后可等待云端慢慢生成（长材料/图片识别不再被“30秒无响应”误杀）；
   // 厂商不支持流式时由 400 极简重试自动降级为非流式。
-  // 【重要】默认强制关闭思考模式（noThink）：
-  //   开启思考时模型先吐 reasoning_content，会吃掉服务端默认的 max_tokens 预算，
-  //   轮到正式 JSON 输出时往往被腰斩 → 表现为「AI未返回有效JSON / 解析失败」。
-  //   结构化提取本就不需要模型「思考」，故此处默认关闭；
-  //   确需思考的调用方可显式传 { noThink:false } 覆盖。
-  //   同时给一个较大的 maxTokens 兜底，避免长列表（如单词本一次几十条）被截断。
+  // 思考模式：统一交给 resolveThink 决策（单模块配置 > 显式 noThink > 局部 think > 全局开关 > 默认不思考）。
+  // 注意：开启思考时 reasoning_content 会占用输出预算，结构化 JSON 场景若发现截断，
+  // 可在「设置 → 单模块 AI 模式」把该功能设为「强制不思考」，或调大全局 maxTokens。
   function chatJSON(systemPrompt, userText, imageDataUrl, opts) {
     opts = opts || {};
     const o = Object.assign({}, opts);
-    if (o.noThink === undefined) o.noThink = true;
     // maxTokens 不再强制默认 4096：不传则不设 max_tokens，使用服务端默认（出卷子等大输出场景需要）
     return chatStream(systemPrompt, userText, null, imageDataUrl, o)
       .then(txt => extractRobustJSON(txt));
@@ -23523,7 +23519,7 @@ function bind(el, next) {
     //          导致正式 JSON 输出被腰斩（这正是「开思考模式必失败」的根因）
     // maxTokens 8000：一次可能要输出 40+ 词条（含例句），默认预算不够
     AI.chatJSON(EXTRACT_SYS, userText, imageDataUrl, {
-      cache: false, noThink: true, maxTokens: 8000, ctx: 'word.gen', ctx: 'word.gen'
+      cache: false, noThink: true, maxTokens: 8000, ctx: 'word.gen'
     }).then(function (arr) {
       var items = normalizeExtracted(arr);
       if (!items.length) throw new Error('AI 未提取到有效词条');
