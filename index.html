@@ -2038,6 +2038,13 @@ html[data-theme="night"] .gd-final { box-shadow: 0 0 0 3px rgba(240, 185, 90, .2
 .cm-ai-float-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin: 8px 0 4px; opacity: .8; }
 .cm-ai-float-think pre, .cm-ai-float-content pre { max-height: 160px; overflow: auto; font-size: 12px; white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 8px 10px; margin: 0; }
 .cm-ai-float-think pre { opacity: .72; }
+/* 浮窗叉掉后缩小成可拖拽小球（复用 cm-ai-float 面板，仅视觉切换） */
+.cm-ai-float { transition: width .18s, height .18s, border-radius .18s; }
+.cm-ai-float.ai-float-ball { width: 50px !important; max-width: 50px !important; min-height: 50px !important; max-height: 50px !important; border-radius: 50% !important; padding: 0 !important; cursor: grab; box-shadow: 0 2px 12px rgba(0,0,0,.28); overflow: hidden; }
+.cm-ai-float.ai-float-ball:active { cursor: grabbing; }
+.cm-ai-float.ai-float-ball .cm-ai-float-h, .cm-ai-float.ai-float-ball .cm-ai-float-b { display: none !important; }
+.cm-ai-float.ai-float-ball .ai-float-ball-ico { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; font-size: 22px; user-select: none; -webkit-user-select: none; }
+.ai-float-ball-ico { display: none; }
 /* 作答按钮行（判分 / 拍照判分 / 跳过） */
 .tr-q-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; align-items: center; }
 /* 跳过结果卡 */
@@ -6843,16 +6850,72 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     var panel = document.createElement('div');
     panel.id = 'ai-float';
     panel.className = 'cm-ai-float';
-    panel.innerHTML = '<div class="cm-ai-float-h"><span>' + title + '</span>'
-      + '<button class="cm-ai-float-x" aria-label="关闭">×</button></div>'
+    panel.innerHTML = '<div class="ai-float-ball-ico" title="单击展开 · 双击彻底关闭 · 可拖拽">💭</div>'
+      + '<div class="cm-ai-float-h"><span>' + title + '</span>'
+      + '<button class="cm-ai-float-x" aria-label="收起为小球">×</button></div>'
       + '<div class="cm-ai-float-b">'
       + '<div class="muted-sm cm-ai-float-status" id="ai-float-status">⏳ 正在连接模型…</div>'
       + '<details class="cm-ai-float-think" id="ai-float-think" style="display:none"><summary class="cm-ai-float-label" style="cursor:pointer;user-select:none">💭 思考过程（点击展开/收起）</summary><pre class="report" id="ai-float-think-t"></pre></details>'
       + '<div class="cm-ai-float-content" id="ai-float-content" style="display:none"><div class="cm-ai-float-label">📝 生成内容</div><pre class="report" id="ai-float-content-t"></pre></div>'
       + '</div>';
     document.body.appendChild(panel);
+    // ---- 可拖拽（球状态） + 单击展开 / 双击彻底关闭 ----
+    var dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    panel.addEventListener('mousedown', function (e) {
+      if (!panel.classList.contains('ai-float-ball')) return;
+      dragging = true; moved = false; sx = e.clientX; sy = e.clientY;
+      var r = panel.getBoundingClientRect(); ox = r.left; oy = r.top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true;
+      panel.style.left = (ox + dx) + 'px';
+      panel.style.top = (oy + dy) + 'px';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    });
+    document.addEventListener('mouseup', function () { dragging = false; });
+    panel.addEventListener('click', function () {
+      if (!panel.classList.contains('ai-float-ball') || moved) return;
+      expandFloat();
+    });
+    panel.addEventListener('dblclick', function () {
+      if (panel.classList.contains('ai-float-ball')) { panel.remove(); dragging = false; }
+    });
+    // 触屏拖拽 + 抬起展开
+    var tStart = null;
+    panel.addEventListener('touchstart', function (e) {
+      if (!panel.classList.contains('ai-float-ball')) return;
+      var t = e.touches[0];
+      tStart = { x: t.clientX, y: t.clientY, ox: panel.offsetLeft, oy: panel.offsetTop, moved: false };
+    }, { passive: true });
+    panel.addEventListener('touchmove', function (e) {
+      if (!tStart) return;
+      var t = e.touches[0], dx = t.clientX - tStart.x, dy = t.clientY - tStart.y;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) tStart.moved = true;
+      panel.style.left = (tStart.ox + dx) + 'px';
+      panel.style.top = (tStart.oy + dy) + 'px';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    }, { passive: true });
+    panel.addEventListener('touchend', function () {
+      if (tStart && !tStart.moved && panel.classList.contains('ai-float-ball')) expandFloat();
+      tStart = null;
+    }, { passive: true });
+    function collapseToBall() {
+      panel.classList.add('ai-float-ball');
+      panel.style.left = 'auto'; panel.style.top = 'auto'; panel.style.right = '16px'; panel.style.bottom = '24px';
+    }
+    function expandFloat() {
+      panel.classList.remove('ai-float-ball');
+      panel.style.left = 'auto'; panel.style.top = 'auto';
+      panel.style.right = (window.innerWidth < 420 ? 8 : 16) + 'px';
+      panel.style.bottom = '16px';
+    }
     var x = panel.querySelector('.cm-ai-float-x');
-    if (x) x.onclick = function () { panel.remove(); };
+    if (x) x.onclick = function () { collapseToBall(); };   // 叉掉 → 缩小成可拖拽小球
     return {
       status: function (txt) { var e = document.getElementById('ai-float-status'); if (e) e.textContent = txt; },
       content: function (txt) {
@@ -6867,7 +6930,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       },
       done: function () { var e = document.getElementById('ai-float-status'); if (e) e.textContent = '✓ 完成'; },
       fail: function (msg) { var e = document.getElementById('ai-float-status'); if (e) e.textContent = '⚠ ' + msg; },
-      close: function () { var p = document.getElementById('ai-float'); if (p && p.parentNode) p.parentNode.removeChild(p); }
+      close: function () { panel.remove(); dragging = false; tStart = null; }
     };
   }
   window.Components = { aiFloat: aiFloat, openAiFloat: aiFloat };
