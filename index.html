@@ -3324,6 +3324,24 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       // 整体解码会把 &lt;script&gt; 还原成 <script> 造成注入漏洞。公式内如需 & < > 请用 \lt \& 等命令。
       return '<span class="tx">' + seg(s) + '</span>';
     },
+    // 富文本 + LaTeX 统一渲染入口（特训营/押题卷/题库题面共用）：
+    // 先提取 $..$ 块级公式（renderInline 不识别 $，会误拆成行内 + 孤立 $），
+    // 用占位符保护 → 再 renderInline 行内 → 最后还原块级公式为独立居中块
+    formatStem(s) {
+      try {
+        if (s == null) return '';
+        var s2 = String(s), blocks = [];
+        s2 = s2.replace(/\$\$([\s\S]+?)\$\$/g, function (_, f) {
+          var ph = '\x00B' + blocks.length + '\x00';
+          blocks.push('<div style="margin:8px 0;text-align:center;overflow-x:auto">' + Tex.render(f.trim()) + '</div>');
+          return ph;
+        });
+        s2 = Tex.renderInline(s2);
+        return s2.replace(/\x00B(\d+)\x00/g, function (_, n) { return blocks[parseInt(n)] || ''; });
+      } catch (e) {
+        return esc(String(s == null ? '' : s)).replace(/\n/g, '<br>');
+      }
+    },
     // 文本里混着 $..$ 公式：文本转义 + 公式渲染
     renderInline(str) {
       try {
@@ -20124,10 +20142,10 @@ function bind(el, next) {
       + '<span class="tag tag-mod">' + (q.score || 0) + ' 分</span>'
       + (q.topicName ? '<span class="tag" style="background:#096dd9;color:#fff">' + U.esc(q.topicName) + '</span>' : '')
       + mark + '</div>'
-      + '<div class="report" style="margin-top:6px">' + Tex.renderInline(q.stem) + '</div>'
+      + '<div class="report" style="margin-top:6px">' + (window.Tex && Tex.formatStem ? Tex.formatStem(q.stem) : Tex.renderInline(q.stem)) + '</div>'
       + optsHtml
       + (r && r.comment ? '<div class="gd-teach" style="margin-top:6px">🏫 ' + Tex.renderInline(r.comment) + '</div>' : '')
-      + (done || answered ? '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(q.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(q.solution || '') + '</div></details>' : '')
+      + (done || answered ? '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + (window.Tex && Tex.formatStem ? Tex.formatStem(q.answer || '') : Tex.renderInline(q.answer || '')) + '<br><b>解析：</b>' + (window.Tex && Tex.formatStem ? Tex.formatStem(q.solution || '') : Tex.renderInline(q.solution || '')) + '</div></details>' : '')
       // 【新增】单题复核（思考模式）：AI 深度复核这一题的答案/解析，防 AI 幻觉
       + (done || answered ? '<div class="btn-row" style="margin-top:6px">'
         + '<button class="btn btn-sm btn-ghost sp-q-review" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px">🔍 复核此题（思考模式）</button>'
