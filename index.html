@@ -19614,6 +19614,14 @@ function bind(el, next) {
     cell.title = status === 'error' ? (err || '失败') : '';   // hover 看完整错误信息
     cell.style.borderLeftColor = status === 'done' ? 'var(--ok)' : status === 'error' ? 'var(--danger)' : status === 'working' ? '#096dd9' : 'var(--line)';
     cell.style.borderColor = status === 'done' ? 'var(--ok)' : status === 'error' ? 'var(--danger)' : status === 'working' ? '#096dd9' : '';
+    // 思考中 → 显示「👁 查看」按钮（实时流式内容，判断是否卡住）
+    var vb = cell.querySelector('.par-view');
+    if (status === 'working') {
+      if (!vb) {
+        cell.insertAdjacentHTML('beforeend', '<button class="btn par-view" style="font-size:10px;margin-top:3px;padding:1px 8px;line-height:1.4">👁 查看</button>');
+        cell.querySelector('.par-view').onclick = function (e) { e.stopPropagation(); parViewStream(qid); };
+      }
+    } else if (vb) { vb.remove(); }
   }
   // 边出边做：完成 N 题后头部出现「开始做题」入口；点击后把已完成题临时入库为 exam 并 openExam；之后每题完成会自动 push 到该 exam
   function parGoDoExam() {
@@ -19646,13 +19654,19 @@ function bind(el, next) {
     var goBtn = doneN > 0 && !parPanel.examId
       ? '<button id="par-go-do" class="btn btn-sm btn-gold" style="margin-left:auto">📝 开始做题（已有 ' + doneN + ' 题）</button>'
       : '';
+    var stopBtn = doneN > 0
+      ? '<button id="par-stop-do" class="btn btn-sm" style="background:#cf1322;color:#fff;border-color:#cf1322">⏹ 停止出题 · 开始做</button>'
+      : '';
     head.innerHTML = '<span class="tag" style="background:#096dd9;color:#fff">并发 ' + sched.concurrency() + '/5</span>'
       + '<span class="tag">完成 ' + doneN + '/' + questions.length + '</span>'
       + '<span class="tag">已耗时 ' + elapsed + 's</span>'
       + '<span class="tag">状态实时更新中…</span>'
-      + goBtn;
+      + goBtn
+      + stopBtn;
     var goEl = document.getElementById('par-go-do');
     if (goEl) goEl.onclick = parGoDoExam;
+    var stopEl = document.getElementById('par-stop-do');
+    if (stopEl) stopEl.onclick = parStopAndDo;
     var fill = document.getElementById('par-progress-fill');
     if (fill) fill.style.width = Math.round(doneN / questions.length * 100) + '%';
   }
@@ -19703,6 +19717,83 @@ function bind(el, next) {
       parPaint(p.qid, c.status, c.ms, c.err);
     });
   }
+  // 边出边做：新题完成后，若用户正在做题页 → 实时追加新题卡片（事件委托自动生效）
+  function parAppendToExam(examId, q) {
+    try {
+      if (!window.examSession || !examSession || examSession.id !== examId) return;
+      var st = Store.get();
+      var exam = ((st.sprintData || {}).mockExams || []).find(function (x) { return x.id === examId; });
+      if (!exam) return;
+      var qi = exam.questions.indexOf(q);
+      if (qi < 0) return;
+      var box = document.getElementById('sp-exam-qs');
+      if (!box) return;
+      box.insertAdjacentHTML('beforeend', examQCardHtml(exam, qi));
+      // 更新进度行 + 顶部题数
+      var qn = exam.questions.length;
+      var answeredN = (exam.results || []).filter(Boolean).length;
+      var pct = qn ? Math.round(answeredN / qn * 100) : 0;
+      var prog = document.querySelector('.sp-exam-progress');
+      if (prog) {
+        var t = prog.querySelector('.muted-sm'); if (t) t.textContent = '作答进度 ' + answeredN + '/' + qn;
+        var f = prog.querySelector('.pbar-fill'); if (f) f.style.width = pct + '%';
+      }
+      var nav = document.querySelector('.cm-trainpage-nav span[style*="flex:1"] .muted-sm');
+      if (nav) nav.textContent = qn + '题 · 满分' + exam.questions.reduce(function (a, x) { return a + (x.score || 0); }, 0) + ' · 已完成';
+      // 卡片动效
+      var last = box.lastElementChild;
+      if (last) { last.style.animation = 'cardIn .3s both'; }
+    } catch (e) { }
+  }
+  // 查看单题实时流式内容（判断是否卡住）
+  function parViewStream(qid) {
+    if (!parPanel) return;
+    var iv = null;
+    var win = Modal.open({
+      title: '👁 题' + qid + ' · 实时生成', wide: true, dismissable: true,
+      html: '<div id="par-stream-box">' + parStreamHtml(qid) + '</div>',
+      actions: [{ label: '关闭', kind: 'btn-ghost' }]
+    });
+    iv = setInterval(function () {
+      var box = document.getElementById('par-stream-box');
+      if (!box) { clearInterval(iv); return; }
+      box.innerHTML = parStreamHtml(qid);
+    }, 1200);
+  }
+  function parStreamHtml(qid) {
+    var c = parPanel.cells[qid] || {};
+    var s = c.stream || {};
+    var stTxt = c.status === 'working' ? '⏳ 思考/生成中' : c.status === 'done' ? '✅ 已完成' : c.status === 'error' ? '❌ 失败' : '⏳ 排队';
+    return '<div class="muted-sm" style="font-size:12px;margin-bottom:6px">状态：' + stTxt + ' · 每 1.2s 自动刷新</div>'
+      + (s.reasoning ? '<div style="font-size:12px"><b>💭 思考过程：</b><pre class="report" style="white-space:pre-wrap;max-height:180px;overflow:auto;background:var(--bg-muted)">' + U.esc(s.reasoning) + '</pre></div>' : '')
+      + (s.content ? '<div style="font-size:12px;margin-top:6px"><b>📝 生成内容：</b><pre class="report" style="white-space:pre-wrap;max-height:200px;overflow:auto;background:var(--bg-muted)">' + U.esc(s.content) + '</pre></div>' : '')
+      + (!s.reasoning && !s.content ? '<div class="empty" style="font-size:12px">尚未收到内容（排队中或思考进行中…）</div>' : '');
+  }
+  // 停止出题：中止所有进行中请求，载入已完成题目直接开始做
+  function parStopAndDo() {
+    if (!parPanel || parPanel.stopped) return;
+    parPanel.stopped = true;
+    (parPanel.aborters || []).forEach(function (ac) { try { ac.abort(); } catch (e) { } });
+    var doneQs = [];
+    (parPanel.questions || []).forEach(function (p) {
+      var c = parPanel.cells[p.qid];
+      if (c && c.q) doneQs.push(c.q);
+    });
+    if (!doneQs.length) { Toast.warn('还没有完成的题，再等一会'); parPanel.stopped = false; return; }
+    var examId = U.uid();
+    var exam = {
+      id: examId, title: '并行押题卷（已停止 · ' + doneQs.length + ' 题）', subject: parPanel.subj || 'math',
+      questions: doneQs, timeLimit: (parPanel.bp || {}).timeLimit || 180,
+      createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel', parallelStopped: true
+    };
+    Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
+    parRemoveFab();
+    parPanel.examId = null;   // 停止后不再增量入库
+    setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 100);
+    Toast.success('已停止出题，载入 ' + doneQs.length + ' 题开始作答');
+    if (currentEl) render(currentEl);
+    openExam(exam.id, currentEl || document.body);
+  }
   // ---------- 并行出题主流程（规划 → 并行 → 重试 → 审查） ----------
   function runParallelQuestions(plan, subj, bp, major, prefs) {
     var questions = plan.questions || [];
@@ -19710,7 +19801,7 @@ function bind(el, next) {
     // 按题量动态起步并发：题多起步高（12+题→4，6+题→3，小卷→2），后续按实时表现升降
     var initialC = questions.length >= 12 ? 4 : questions.length >= 6 ? 3 : 2;
     var sched = makeScheduler(initialC);
-    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched, subj: subj, bp: bp, major: major, prefs: prefs, examId: null };
+    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched, subj: subj, bp: bp, major: major, prefs: prefs, examId: null, aborters: [], stopped: false };
     Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
     parFab();
     parHead(questions, sched, 0, parPanel.startTs);
@@ -19720,19 +19811,21 @@ function bind(el, next) {
     var pending = questions.length;
     parHead(questions, sched, 0, parPanel.startTs);
     function finish(i, q, err) {
+      if (parPanel.stopped) { pump(); return; }          // 已停止出题 → 忽略后续完成
       pending--;
       parPanel.doneN++;
       parHead(questions, sched, parPanel.doneN, parPanel.startTs);
       if (q) {
         results[i] = q;
         parPaint(q.qid || questions[i].qid, 'done', Math.round((Date.now() - parPanel.startTs) / 1000) - 0, null, q);
-        // 边出边做：用户已中途进入做题 → 增量入库当前题
+        // 边出边做：用户已中途进入做题 → 增量入库当前题 + 动态追加到当前做题页
         if (parPanel.examId) {
           var eId = parPanel.examId;
           Store.update(function (s) {
             var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === eId; });
             if (ex && !ex.questions.some(function (qq) { return qq.qid === q.qid; })) ex.questions.push(q);
           });
+          parAppendToExam(eId, q);                       // 若正在做题页 → 实时追加新题卡片
         }
       } else {
         results[i] = null;
@@ -19755,14 +19848,33 @@ function bind(el, next) {
       // choice 题（题干+4选项+答案+长解析）极易被截断 → 6 层提取失败
       var opts = { cache: false, noThink: !prefs.think, timeout: 300000, maxTokens: 16000, ctx: 'sprint.parallel' };
       if (prefs.diff === 'superhard') { opts.noThink = false; delete opts.maxTokens; opts.timeout = 600000; }
-      AI.chatJSON(workerSystem(subj, p, bp, major), workerUser(subj, p, bp), null, opts).then(function (raw) {
-        var q = normalizeParallelQ(raw, p);
+      // 流式收集（供「👁 查看」实时看思考/生成内容，判断是否卡住）+ AbortController（支持停止出题）
+      var ac = new AbortController();
+      parPanel.aborters.push(ac);
+      opts.signal = ac.signal;
+      var stream = { reasoning: '', content: '' };
+      var done = false;
+      AI.chatStream(workerSystem(subj, p, bp, major), workerUser(subj, p, bp), function (txt, reasoning) {
+        if (done) return;
+        if (reasoning) stream.reasoning += reasoning;
+        if (txt) stream.content += txt;
+        var cell = parPanel.cells[p.qid];
+        if (cell) cell.stream = { reasoning: stream.reasoning, content: stream.content };
+      }, null, opts).then(function (full) {
+        done = true;
+        var ai2 = parPanel.aborters.indexOf(ac); if (ai2 >= 0) parPanel.aborters.splice(ai2, 1);
         var ms = Date.now() - t0;
-        sched.leave(); sched.observe(ms, !!q);
+        sched.leave(); sched.observe(ms, true);
+        var q = null;
+        try { q = normalizeParallelQ(AI.extractRobustJSON(full), p); } catch (e) { q = null; }
+        if (parPanel.stopped) { pump(); return; }
         if (q) { finish(i, q, null); }
         else if (!retried[p.qid]) { retried[p.qid] = 1; sched.enter(); launch(i); }
         else { finish(i, null, '解析失败'); }
       }).catch(function (e) {
+        done = true;
+        var ai2 = parPanel.aborters.indexOf(ac); if (ai2 >= 0) parPanel.aborters.splice(ai2, 1);
+        if (parPanel.stopped) { pump(); return; }   // 用户停止出题 → 静默忽略
         var ms = Date.now() - t0;
         sched.leave(); sched.observe(ms, false);
         if (!retried[p.qid]) { retried[p.qid] = 1; sched.enter(); launch(i); }
@@ -19781,6 +19893,7 @@ function bind(el, next) {
     pump();
     return new Promise(function (resolve, reject) {
       var check = setInterval(function () {
+        if (parPanel && parPanel.stopped) { clearInterval(check); reject(new Error('__stopped__')); return; }   // 用户手动停止 → 结束后台 promise
         if (pending === 0) {
           clearInterval(check);
           var builtQ = results.filter(function (q2) { return q2; });
@@ -19889,6 +20002,7 @@ function bind(el, next) {
         return exam;
       });
     }).catch(function (e) {
+      if (e && e.message === '__stopped__') return;   // 用户主动停止 → 静默（已在做题页）
       Toast.warn('并行组卷失败：' + (e.message || e));
       if (currentEl) render(currentEl);
     });
