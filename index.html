@@ -622,11 +622,13 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 .tx-idx { font-size: .6em; }
 .tx-over { text-decoration: overline; }
 
-/* 分段函数 cases 环境 */
-.tx-cases { display: inline-flex; align-items: flex-start; vertical-align: middle; margin: .15em 0; }
-.tx-cases::before { content: '{'; font-size: 1.4em; line-height: 1.05; margin-right: .2em; font-family: "Cambria Math", Georgia, serif; }
-.tx-case-row { display: block; text-align: left; line-height: 1.6; }
+/* 分段函数 / 联立方程 cases 环境 */
+.tx-cases { display: inline-flex; align-items: stretch; vertical-align: middle; margin: .15em .1em; }
+.tx-cases-brace { width: .6em; flex: 0 0 auto; align-self: stretch; display: block; overflow: visible; }
+.tx-cases-body { display: block; padding: 0 .1em; }
+.tx-case-row { display: block; text-align: left; line-height: 1.6; white-space: nowrap; }
 .tx-case-cond { margin-right: .5em; color: #555; min-width: 2em; display: inline-block; }
+.tx-case-eq { display: inline-block; }
 .tx-case-val { }
 
 /* \left / \right 定界符 */
@@ -2902,7 +2904,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         if (cmd === 'begin') {
           const g = readGroup(s, i + m[0].length);
           const envName = g[0];
-          // 分段函数
+          // 分段函数 / 联立方程（花括号左对齐多行）
           if (envName === 'cases') {
             // 向前扫描匹配的 \end{cases}（线性 O(n)）
             const bodyStart = i + m[0].length + g[1];
@@ -2910,13 +2912,23 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
             const body = s.slice(bodyStart, j);
             // 切行/列（尊重嵌套环境）
             const rows2d = parseMatrixBody(body);
-            let casesHtml = '<span class="tx-cases">';
+            // 左花括号：SVG 路径，preserveAspectRatio=none 按容器高度自动撑满，
+            // vector-effect=non-scaling-stroke 保证线宽恒定（不被纵向拉伸变粗）。
+            // 旧方案用 content:'{' 画固定大小花括号，多行联立方程时只在顶部露一小截 → 渲染差。
+            const braceSvg = '<svg class="tx-cases-brace" viewBox="0 0 10 24" preserveAspectRatio="none" aria-hidden="true"><path d="M8,1 C5,1 2,4 2,8 C2,10 5,11 8,12 C5,13 2,14 2,16 C2,20 5,23 8,23" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>';
+            let casesHtml = '<span class="tx-cases">' + braceSvg + '<span class="tx-cases-body">';
             rows2d.forEach(function (cells) {
               const cond = cells[0] || '';
               const val = cells[1] || '';
-              casesHtml += '<span class="tx-case-row"><span class="tx-case-cond">' + seg(normalizeShorthand(cond)) + '</span><span class="tx-case-val">' + seg(normalizeShorthand(val)) + '</span></span>';
+              if (val) {
+                // 分段函数：cond 为函数值，val 为条件（灰显）
+                casesHtml += '<span class="tx-case-row"><span class="tx-case-cond">' + seg(normalizeShorthand(cond)) + '</span><span class="tx-case-val">' + seg(normalizeShorthand(val)) + '</span></span>';
+              } else {
+                // 联立方程：整行是一个等式（无 &），直接渲染整行
+                casesHtml += '<span class="tx-case-row"><span class="tx-case-eq">' + seg(normalizeShorthand(cond)) + '</span></span>';
+              }
             });
-            casesHtml += '</span>';
+            casesHtml += '</span></span>';
             out += casesHtml;
             i = j + ('\\end{cases}'.length); continue;
           }
