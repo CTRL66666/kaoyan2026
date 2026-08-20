@@ -2985,8 +2985,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         }
         // \displaystyle / \textstyle / \scriptstyle / \scriptscriptstyle —— 样式切换，静默消费
         if (cmd === 'displaystyle' || cmd === 'textstyle' || cmd === 'scriptstyle' || cmd === 'scriptscriptstyle') { i += m[0].length; continue; }
-        // 未知命令：原样输出名字
-        out += esc(cmd); i += m[0].length; continue;
+        // 未知命令：当作函数名斜体渲染（避免整段 LaTeX 因单个未知命令回退到原文导致「渲染不佳」）
+        out += '<span class="tx-fn">' + esc(cmd) + '</span>'; i += m[0].length; continue;
       }
       // 上标 ^ / ^{..} / ^\cmd（如 x^\alpha）或 ^circ（裸写法）
       if (c === '^') {
@@ -19764,29 +19764,35 @@ function bind(el, next) {
       if (last) { last.style.animation = 'cardIn .3s both'; }
     } catch (e) { }
   }
-  // 查看单题实时流式内容（判断是否卡住）
+  // 查看单题实时流式内容（判断是否卡住）—— 追加式增量更新，不全量重渲染
+  // 旧版每 1.2s box.innerHTML = parStreamHtml(qid) 在内容增长时 KaTeX 重扫 + 字符串拼接导致卡顿（滚雪球）
+  // 新版：打开时渲染一次，后续 setInterval 800ms 仅 append stream 新增 chunk 到 textContent（不重置 innerHTML，不触发数学渲染）
   function parViewStream(qid) {
     if (!parPanel) return;
-    var iv = null;
-    var win = Modal.open({
-      title: '👁 题' + qid + ' · 实时生成', wide: true, dismissable: true,
-      html: '<div id="par-stream-box">' + parStreamHtml(qid) + '</div>',
-      actions: [{ label: '关闭', kind: 'btn-ghost' }]
-    });
-    iv = setInterval(function () {
-      var box = document.getElementById('par-stream-box');
-      if (!box) { clearInterval(iv); return; }
-      box.innerHTML = parStreamHtml(qid);
-    }, 1200);
-  }
-  function parStreamHtml(qid) {
     var c = parPanel.cells[qid] || {};
     var s = c.stream || {};
     var stTxt = c.status === 'working' ? '⏳ 思考/生成中' : c.status === 'done' ? '✅ 已完成' : c.status === 'error' ? '❌ 失败' : '⏳ 排队';
-    return '<div class="muted-sm" style="font-size:12px;margin-bottom:6px">状态：' + stTxt + ' · 每 1.2s 自动刷新</div>'
-      + (s.reasoning ? '<div style="font-size:12px"><b>💭 思考过程：</b><pre class="report" style="white-space:pre-wrap;max-height:180px;overflow:auto;background:var(--bg-muted)">' + U.esc(s.reasoning) + '</pre></div>' : '')
-      + (s.content ? '<div style="font-size:12px;margin-top:6px"><b>📝 生成内容：</b><pre class="report" style="white-space:pre-wrap;max-height:200px;overflow:auto;background:var(--bg-muted)">' + U.esc(s.content) + '</pre></div>' : '')
-      + (!s.reasoning && !s.content ? '<div class="empty" style="font-size:12px">尚未收到内容（排队中或思考进行中…）</div>' : '');
+    var html = '<div class="muted-sm" style="font-size:12px;margin-bottom:8px">状态：' + stTxt + ' · 800ms 增量刷新（显示原文，不触发数学渲染）</div>'
+      + '<div style="margin-bottom:6px"><b>💭 思考：</b><pre id="par-view-reasoning" class="report" style="white-space:pre-wrap;max-height:200px;overflow:auto;background:var(--bg-muted);margin:4px 0;font-size:12px"></pre></div>'
+      + '<div><b>📝 生成：</b><pre id="par-view-content" class="report" style="white-space:pre-wrap;max-height:240px;overflow:auto;background:var(--bg-muted);margin:4px 0;font-size:12px"></pre></div>';
+    Modal.open({ title: '👁 题' + qid + ' · 实时生成', wide: true, dismissable: true, html: html, actions: [{ label: '关闭', kind: 'btn-ghost' }] });
+    var rEl = document.getElementById('par-view-reasoning');
+    var cEl = document.getElementById('par-view-content');
+    if (rEl) rEl.textContent = s.reasoning || '';
+    if (cEl) cEl.textContent = s.content || '';
+    var lastR = (s.reasoning || '').length, lastC = (s.content || '').length;
+    var MAX_DISP = 30000;    // 单段最多显示 3 万字符，防内存爆
+    var iv = setInterval(function () {
+      var rNow = document.getElementById('par-view-reasoning');
+      var cNow = document.getElementById('par-view-content');
+      if (!rNow || !cNow) { clearInterval(iv); return; }     // 弹窗已关闭 → 停轮询
+      var ss = ((parPanel.cells || {})[qid] || {}).stream || {};
+      var r = ss.reasoning || '', c = ss.content || '';
+      if (r.length > lastR) { rNow.textContent += r.slice(lastR); rNow.scrollTop = rNow.scrollHeight; lastR = r.length; }
+      if (c.length > lastC) { cNow.textContent += c.slice(lastC); cNow.scrollTop = cNow.scrollHeight; lastC = c.length; }
+      if (rNow.textContent.length > MAX_DISP) rNow.textContent = rNow.textContent.slice(-MAX_DISP);
+      if (cNow.textContent.length > MAX_DISP) cNow.textContent = cNow.textContent.slice(-MAX_DISP);
+    }, 800);
   }
   // 停止出题：中止所有进行中请求，载入已完成题目直接开始做
   function parStopAndDo() {
