@@ -2109,6 +2109,16 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 .sp-exam-opt.sp-opt-ans { border-color: var(--ok); color: var(--ok); }
 .sp-exam-opt.sp-opt-dim { opacity: .35; }
 .sp-scorecard .stat { background: var(--surface); }
+/* 并行出卷面板视觉：进度条 + 卡片状态色 + 思考中脉冲 + 日志折叠 */
+.par-cell { cursor: default; }
+.par-cell.par-done { background: linear-gradient(135deg, rgba(82,196,26,.07), rgba(82,196,26,.02)); }
+.par-cell.par-error { background: rgba(207,18,18,.05); }
+.par-cell.par-working { background: rgba(9,109,217,.06); animation: parPulse 1.5s ease-in-out infinite; }
+.par-cell:hover { transform: translateY(-1px); box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+@keyframes parPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(9,109,217,.25); } 50% { box-shadow: 0 0 0 6px rgba(9,109,217,0); } }
+.par-progress-fill { background: linear-gradient(90deg, #096dd9, #52c41a); }
+.par-log-wrap summary { list-style: none; }
+.par-log-wrap summary::-webkit-details-marker { display: none; }
 /* 押题卷单题头/导航 防竖排（移动端 flex-wrap 后子项宽度被压成单字） */
 .sp-exam-head > * { white-space: nowrap; flex-shrink: 0; }
 .cm-trainpage-nav > span[style*="flex:1"] { min-width: 0; }
@@ -6915,7 +6925,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       panel.style.bottom = '16px';
     }
     var x = panel.querySelector('.cm-ai-float-x');
-    if (x) x.onclick = function () { collapseToBall(); };   // 叉掉 → 缩小成可拖拽小球
+    if (x) x.onclick = function (e) { e.stopPropagation(); collapseToBall(); };   // 叉掉 → 缩小成可拖拽小球（stopPropagation 防 panel.click 冒泡触发 expand 互相抵消）
     return {
       status: function (txt) { var e = document.getElementById('ai-float-status'); if (e) e.textContent = txt; },
       content: function (txt) {
@@ -7489,6 +7499,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (c === '\u201C') { quote = '\u201D'; out += '"'; continue; }  // 中文“ ”
       if (c === '/' && s.charAt(i + 1) === '/') { while (i < s.length && s.charAt(i) !== '\n') i++; continue; }
       if (c === '/' && s.charAt(i + 1) === '*') { i += 2; while (i + 1 < s.length && !(s.charAt(i) === '*' && s.charAt(i + 1) === '/')) i++; i++; continue; }
+      // 字符串外控制字符也丢弃：AI 流式拼接常混入 0x07/0x0B/0x0C 等，JSON.parse 会报 "Bad control character"
+      if (c < ' ' && c !== '\n' && c !== '\r' && c !== '\t') continue;
       // 裸键名补引号：{stem:"..."} → {"stem":"..."}（AI 偷懒常见；token 后必须紧跟冒号，避免误伤）
       if (/[A-Za-z_$]/.test(c)) {
         var km = s.slice(i).match(/^([A-Za-z_$][\w$]*)(\s*:)/);
@@ -19479,6 +19491,7 @@ function bind(el, next) {
     var stem = o.stem || o.question || '';
     if (!stem) return null;
     return {
+      qid: o.qid || p.qid,                  // 保留题号（parPaint/边出边做都依赖 qid 定位）
       stem: String(stem), type: o.type === 'choice' ? 'choice' : (p.type || 'solve'),
       options: Array.isArray(o.options) ? o.options.slice(0, 4).map(String) : [],
       answer: String(o.answer || ''), solution: String(o.solution || ''),
@@ -19490,20 +19503,23 @@ function bind(el, next) {
   var parPanel = null;   // {startTs, doneN, totalN, questions, cells:{qid->{status,ms,err}}, sched}
   function parPanelHtml(questions) {
     return '<div class="par-panel">'
-      + '<div class="par-head" id="par-head" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px"></div>'
-      + '<div class="par-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:6px">'
+      + '<div class="par-head" id="par-head" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px"></div>'
+      + '<div class="par-progress" style="height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:8px 0 12px"><div class="par-progress-fill" id="par-progress-fill" style="height:100%;width:0%;transition:width .4s"></div></div>'
+      + '<div class="par-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px">'
       + questions.map(function (p) {
-        return '<div class="par-cell par-queued" id="par-cell-' + p.qid + '" style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-muted)">'
+        return '<div class="par-cell par-queued" id="par-cell-' + p.qid + '" style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-muted);border-left:3px solid var(--line);transition:all .25s">'
           + '<div style="display:flex;justify-content:space-between;align-items:center"><b>题' + p.qid + '</b><span style="font-size:10px;opacity:.7">' + (p.diff === 'hard' ? '压轴' : '中档') + '·' + p.score + '分</span></div>'
           + '<div class="par-cell-topic" style="margin:2px 0;font-size:11px;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + U.esc(p.topic) + '</div>'
           + '<div class="par-cell-status" style="font-size:11px;color:var(--text-muted)">⏳ 排队</div></div>';
       }).join('') + '</div>'
-      + '<div class="par-log" id="par-log" style="margin-top:8px;font-size:12px;max-height:120px;overflow:auto"></div>'
+      + '<details class="par-log-wrap" style="margin-top:12px"><summary style="cursor:pointer;padding:6px 10px;background:var(--bg-muted);border-radius:4px;font-size:12px;user-select:none">📋 出题日志（点击展开/收起）</summary>'
+      + '<div class="par-log" id="par-log" style="margin-top:6px;font-size:12px;max-height:140px;overflow:auto;padding:4px 8px"></div>'
+      + '</details>'
       + '</div>';
   }
-  function parPaint(qid, status, ms, err) {
+  function parPaint(qid, status, ms, err, q) {
     if (!parPanel) return;
-    parPanel.cells[qid] = { status: status, ms: ms, err: err };
+    parPanel.cells[qid] = { status: status, ms: ms, err: err, q: q || (parPanel.cells[qid] || {}).q };
     parFabUpdate();
     var cell = document.getElementById('par-cell-' + qid);
     if (!cell) return;
@@ -19513,19 +19529,49 @@ function bind(el, next) {
     if (!stEl) return;
     var map = { working: '⏳ 思考中' + (ms ? ' ' + ms + 's' : ''), done: '✅ 完成 ' + (ms || 0) + 's', error: '❌ ' + U.esc((err || '失败').slice(0, 14)), queued: '⏳ 排队' };
     stEl.textContent = map[status] || status;
-    if (status === 'done') cell.style.borderColor = 'var(--ok)';
-    else if (status === 'error') cell.style.borderColor = 'var(--danger)';
-    else if (status === 'working') cell.style.borderColor = '#096dd9';
+    cell.style.borderLeftColor = status === 'done' ? 'var(--ok)' : status === 'error' ? 'var(--danger)' : status === 'working' ? '#096dd9' : 'var(--line)';
+    cell.style.borderColor = status === 'done' ? 'var(--ok)' : status === 'error' ? 'var(--danger)' : status === 'working' ? '#096dd9' : '';
+  }
+  // 边出边做：完成 N 题后头部出现「开始做题」入口；点击后把已完成题临时入库为 exam 并 openExam；之后每题完成会自动 push 到该 exam
+  function parGoDoExam() {
+    if (!parPanel || parPanel.examId) return;
+    var doneQs = [];
+    (parPanel.questions || []).forEach(function (p) {
+      var c = parPanel.cells[p.qid];
+      if (c && c.q) doneQs.push(c.q);
+    });
+    if (!doneQs.length) { Toast.warn('还没有完成的题'); return; }
+    var examId = U.uid();
+    var subj = parPanel.subj || 'math';
+    var bp = parPanel.bp || { timeLimit: 180 };
+    var exam = {
+      id: examId, title: '出题中…（' + doneQs.length + '/' + parPanel.totalN + ' 题）', subject: subj,
+      questions: doneQs, timeLimit: bp.timeLimit, createdAt: new Date().toISOString(),
+      completedAt: null, score: null, duration: null, builtBy: 'parallel', parallelPending: true
+    };
+    Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
+    parPanel.examId = examId;
+    parHead(parPanel.questions, parPanel.sched, parPanel.doneN, parPanel.startTs);
+    Toast.success('已进入做题，剩余题会陆续追加到卷面');
+    openExam(examId, currentEl || document.querySelector('.par-panel') || document.body);
   }
   function parHead(questions, sched, doneN, startTs) {
     if (!parPanel) return;
     var head = document.getElementById('par-head');
     if (!head) return;
     var elapsed = Math.round((Date.now() - startTs) / 1000);
+    var goBtn = doneN > 0 && !parPanel.examId
+      ? '<button id="par-go-do" class="btn btn-sm btn-gold" style="margin-left:auto">📝 开始做题（已有 ' + doneN + ' 题）</button>'
+      : '';
     head.innerHTML = '<span class="tag" style="background:#096dd9;color:#fff">并发 ' + sched.concurrency() + '/5</span>'
       + '<span class="tag">完成 ' + doneN + '/' + questions.length + '</span>'
       + '<span class="tag">已耗时 ' + elapsed + 's</span>'
-      + '<span class="tag">状态实时更新中…</span>';
+      + '<span class="tag">状态实时更新中…</span>'
+      + goBtn;
+    var goEl = document.getElementById('par-go-do');
+    if (goEl) goEl.onclick = parGoDoExam;
+    var fill = document.getElementById('par-progress-fill');
+    if (fill) fill.style.width = Math.round(doneN / questions.length * 100) + '%';
   }
   function parLog(msg) {
     if (!parPanel) return;
@@ -19580,7 +19626,7 @@ function bind(el, next) {
     // 按题量动态起步并发：题多起步高（12+题→4，6+题→3，小卷→2），后续按实时表现升降
     var initialC = questions.length >= 12 ? 4 : questions.length >= 6 ? 3 : 2;
     var sched = makeScheduler(initialC);
-    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched };
+    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched, subj: subj, bp: bp, major: major, prefs: prefs, examId: null };
     Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
     parFab();
     parHead(questions, sched, 0, parPanel.startTs);
@@ -19595,7 +19641,15 @@ function bind(el, next) {
       parHead(questions, sched, parPanel.doneN, parPanel.startTs);
       if (q) {
         results[i] = q;
-        parPaint(q.qid, 'done', Math.round((Date.now() - parPanel.startTs) / 1000) - 0, null);
+        parPaint(q.qid || questions[i].qid, 'done', Math.round((Date.now() - parPanel.startTs) / 1000) - 0, null, q);
+        // 边出边做：用户已中途进入做题 → 增量入库当前题
+        if (parPanel.examId) {
+          var eId = parPanel.examId;
+          Store.update(function (s) {
+            var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === eId; });
+            if (ex && !ex.questions.some(function (qq) { return qq.qid === q.qid; })) ex.questions.push(q);
+          });
+        }
       } else {
         results[i] = null;
         parPaint(questions[i].qid, 'error', 0, err || '失败');
@@ -19723,7 +19777,21 @@ function bind(el, next) {
         });
       }).then(function (out) {
         if (parPanel) { parRemoveFab(); setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 800); }
-        var exam = {
+        // 边出边做分支：用户已中途进入 → 更新该 exam（不重复开）；否则新建入库 + openExam
+        var pendingExamId = parPanel && parPanel.examId;
+        var exam = null;
+        if (pendingExamId) {
+          Store.update(function (s) {
+            var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === pendingExamId; });
+            if (ex) { ex.title = out.built.title || ex.title; ex.timeLimit = out.built.timeLimit || ex.timeLimit; delete ex.parallelPending; exam = ex; }
+          });
+          if (exam) {
+            Toast.success('出题完成：' + exam.title + '（' + exam.questions.length + '题·已追加到当前卷面）');
+            if (currentEl) render(currentEl);
+            return exam;
+          }
+        }
+        exam = {
           id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
           questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
           createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel'
