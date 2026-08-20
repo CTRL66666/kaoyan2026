@@ -19507,13 +19507,13 @@ function bind(el, next) {
       + '<div class="par-progress" style="height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:8px 0 12px"><div class="par-progress-fill" id="par-progress-fill" style="height:100%;width:0%;transition:width .4s"></div></div>'
       + '<div class="par-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px">'
       + questions.map(function (p) {
-        return '<div class="par-cell par-queued" id="par-cell-' + p.qid + '" style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-muted);border-left:3px solid var(--line);transition:all .25s">'
+        return '<div class="par-cell par-queued" id="par-cell-' + p.qid + '" style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-muted);border-left:3px solid var(--line);transition:all .25s" data-err="">'
           + '<div style="display:flex;justify-content:space-between;align-items:center"><b>题' + p.qid + '</b><span style="font-size:10px;opacity:.7">' + (p.diff === 'hard' ? '压轴' : '中档') + '·' + p.score + '分</span></div>'
           + '<div class="par-cell-topic" style="margin:2px 0;font-size:11px;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + U.esc(p.topic) + '</div>'
-          + '<div class="par-cell-status" style="font-size:11px;color:var(--text-muted)">⏳ 排队</div></div>';
+          + '<div class="par-cell-status" style="font-size:11px;color:var(--text-muted);white-space:normal;word-break:break-all">⏳ 排队</div></div>';
       }).join('') + '</div>'
-      + '<details class="par-log-wrap" style="margin-top:12px"><summary style="cursor:pointer;padding:6px 10px;background:var(--bg-muted);border-radius:4px;font-size:12px;user-select:none">📋 出题日志（点击展开/收起）</summary>'
-      + '<div class="par-log" id="par-log" style="margin-top:6px;font-size:12px;max-height:140px;overflow:auto;padding:4px 8px"></div>'
+      + '<details class="par-log-wrap" open style="margin-top:12px"><summary style="cursor:pointer;padding:6px 10px;background:var(--bg-muted);border-radius:4px;font-size:12px;user-select:none">📋 出题日志（默认展开 · 点击折叠）</summary>'
+      + '<div class="par-log" id="par-log" style="margin-top:6px;font-size:12px;max-height:160px;overflow:auto;padding:4px 8px"></div>'
       + '</details>'
       + '</div>';
   }
@@ -19527,8 +19527,9 @@ function bind(el, next) {
     cell.className = 'par-cell ' + cls;
     var stEl = cell.querySelector('.par-cell-status');
     if (!stEl) return;
-    var map = { working: '⏳ 思考中' + (ms ? ' ' + ms + 's' : ''), done: '✅ 完成 ' + (ms || 0) + 's', error: '❌ ' + U.esc((err || '失败').slice(0, 14)), queued: '⏳ 排队' };
+    var map = { working: '⏳ 思考中' + (ms ? ' ' + ms + 's' : ''), done: '✅ 完成 ' + (ms || 0) + 's', error: '❌ ' + U.esc((err || '失败').slice(0, 60)) + ((err && err.length > 60) ? '…' : ''), queued: '⏳ 排队' };
     stEl.textContent = map[status] || status;
+    cell.title = status === 'error' ? (err || '失败') : '';   // hover 看完整错误信息
     cell.style.borderLeftColor = status === 'done' ? 'var(--ok)' : status === 'error' ? 'var(--danger)' : status === 'working' ? '#096dd9' : 'var(--line)';
     cell.style.borderColor = status === 'done' ? 'var(--ok)' : status === 'error' ? 'var(--danger)' : status === 'working' ? '#096dd9' : '';
   }
@@ -19573,11 +19574,12 @@ function bind(el, next) {
     var fill = document.getElementById('par-progress-fill');
     if (fill) fill.style.width = Math.round(doneN / questions.length * 100) + '%';
   }
-  function parLog(msg) {
+  function parLog(msg, isError) {
     if (!parPanel) return;
     var log = document.getElementById('par-log');
     if (!log) return;
-    log.insertAdjacentHTML('beforeend', '<div>· ' + U.esc(msg) + '</div>');
+    var style = isError ? ' style="color:var(--danger);font-weight:500;white-space:normal;word-break:break-all"' : '';
+    log.insertAdjacentHTML('beforeend', '<div' + style + '>· ' + U.esc(msg) + '</div>');
     log.scrollTop = log.scrollHeight;
   }
   // 右下角悬浮入口：状态面板被关闭后仍可随时恢复查看
@@ -19653,7 +19655,7 @@ function bind(el, next) {
       } else {
         results[i] = null;
         parPaint(questions[i].qid, 'error', 0, err || '失败');
-        parLog('题' + questions[i].qid + ' 失败：' + (err || '解析失败'));
+        parLog('题' + questions[i].qid + ' 失败：' + (err || '解析失败'), true);   // 错误行红色高亮（details 默认展开，用户能直接看到完整轨迹）
       }
       pump();
       if (pending === 0) {
