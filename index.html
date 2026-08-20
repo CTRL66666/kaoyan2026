@@ -19766,35 +19766,37 @@ function bind(el, next) {
       if (window.Toast) Toast.show('📝 已追加新题（共 ' + qn + ' 题）', 'info', 1500);
     } catch (e) { }
   }
-  // 查看单题实时流式内容（判断是否卡住）—— 追加式增量更新，不全量重渲染
-  // 旧版每 1.2s box.innerHTML = parStreamHtml(qid) 在内容增长时 KaTeX 重扫 + 字符串拼接导致卡顿（滚雪球）
-  // 新版：打开时渲染一次，后续 setInterval 800ms 仅 append stream 新增 chunk 到 textContent（不重置 innerHTML，不触发数学渲染）
+  // 查看单题实时流式内容（判断是否卡住）—— 防卡死设计
+  //  - stream 是 parts 数组（worker 端 O(1) push），这里只取「最近 8K 字符」显示（lastN 从尾部拼，O(块数)）
+  //  - textContent 全量赋值 8K 纯文本 <1ms（不触发 HTML/KaTeX 解析）
+  //  - 每 1s 刷新；弹窗关闭（isConnected false）自动停
+  function lastN(parts, max) {
+    if (!parts || !parts.length) return '';
+    var out = '', i = parts.length - 1;
+    while (i >= 0 && out.length < max) { out = parts[i] + out; i--; }
+    return out.length > max ? out.slice(out.length - max) : out;
+  }
   function parViewStream(qid) {
     if (!parPanel) return;
     var c = parPanel.cells[qid] || {};
-    var s = c.stream || {};
     var stTxt = c.status === 'working' ? '⏳ 思考/生成中' : c.status === 'done' ? '✅ 已完成' : c.status === 'error' ? '❌ 失败' : '⏳ 排队';
-    var html = '<div class="muted-sm" style="font-size:12px;margin-bottom:8px">状态：' + stTxt + ' · 800ms 增量刷新（显示原文，不触发数学渲染）</div>'
+    var html = '<div class="muted-sm" style="font-size:12px;margin-bottom:8px">状态：' + stTxt + ' · 显示最近 8K 字符 · 1s 刷新（原文，不触发数学渲染）</div>'
       + '<div style="margin-bottom:6px"><b>💭 思考：</b><pre id="par-view-reasoning" class="report" style="white-space:pre-wrap;max-height:200px;overflow:auto;background:var(--bg-muted);margin:4px 0;font-size:12px"></pre></div>'
       + '<div><b>📝 生成：</b><pre id="par-view-content" class="report" style="white-space:pre-wrap;max-height:240px;overflow:auto;background:var(--bg-muted);margin:4px 0;font-size:12px"></pre></div>';
     Modal.open({ title: '👁 题' + qid + ' · 实时生成', wide: true, dismissable: true, html: html, actions: [{ label: '关闭', kind: 'btn-ghost' }] });
     var rEl = document.getElementById('par-view-reasoning');
     var cEl = document.getElementById('par-view-content');
-    if (rEl) rEl.textContent = s.reasoning || '';
-    if (cEl) cEl.textContent = s.content || '';
-    var lastR = (s.reasoning || '').length, lastC = (s.content || '').length;
-    var MAX_DISP = 30000;    // 单段最多显示 3 万字符，防内存爆
-    var iv = setInterval(function () {
-      var rNow = document.getElementById('par-view-reasoning');
-      var cNow = document.getElementById('par-view-content');
-      if (!rNow || !cNow) { clearInterval(iv); return; }     // 弹窗已关闭 → 停轮询
-      var ss = ((parPanel.cells || {})[qid] || {}).stream || {};
-      var r = ss.reasoning || '', c = ss.content || '';
-      if (r.length > lastR) { rNow.textContent += r.slice(lastR); rNow.scrollTop = rNow.scrollHeight; lastR = r.length; }
-      if (c.length > lastC) { cNow.textContent += c.slice(lastC); cNow.scrollTop = cNow.scrollHeight; lastC = c.length; }
-      if (rNow.textContent.length > MAX_DISP) rNow.textContent = rNow.textContent.slice(-MAX_DISP);
-      if (cNow.textContent.length > MAX_DISP) cNow.textContent = cNow.textContent.slice(-MAX_DISP);
-    }, 800);
+    function tick() {
+      if (!rEl || !cEl || !rEl.isConnected) { clearInterval(iv); return; }   // 弹窗已关闭 → 停
+      var s = ((parPanel.cells || {})[qid] || {}).stream;
+      if (!s) return;
+      rEl.textContent = lastN(s.rParts, 8000);
+      cEl.textContent = lastN(s.cParts, 8000);
+      rEl.scrollTop = rEl.scrollHeight;
+      cEl.scrollTop = cEl.scrollHeight;
+    }
+    tick();
+    var iv = setInterval(tick, 1000);
   }
   // 停止出题：中止所有进行中请求，载入已完成题目直接开始做
   function parStopAndDo() {
@@ -19876,17 +19878,30 @@ function bind(el, next) {
       var opts = { cache: false, noThink: !prefs.think, timeout: 300000, maxTokens: 16000, ctx: 'sprint.parallel' };
       if (prefs.diff === 'superhard') { opts.noThink = false; delete opts.maxTokens; opts.timeout = 600000; }
       // 流式收集（供「👁 查看」实时看思考/生成内容，判断是否卡住）+ AbortController（支持停止出题）
+      // 【防卡死】用数组累积 chunks（push O(1)），绝不用字符串 += （长思考内容时 O(n²) 雪球卡死主线程）；
+      // 超长时裁剪最老块，只保留最近 ~2 万字符。
       var ac = new AbortController();
       parPanel.aborters.push(ac);
       opts.signal = ac.signal;
-      var stream = { reasoning: '', content: '' };
+      var stream = { rParts: [], cParts: [], rLen: 0, cLen: 0, MAX: 20000 };
       var done = false;
+      function pushStream(cell, parts, lenKey, chunk) {
+        if (!chunk) return;
+        parts.push(chunk);
+        stream[lenKey] += chunk.length;
+        if (stream[lenKey] > stream.MAX) {                       // 裁剪最老块
+          while (stream[lenKey] > stream.MAX && parts.length > 1) {
+            stream[lenKey] -= (parts[0] || '').length;
+            parts.shift();
+          }
+        }
+      }
       AI.chatStream(workerSystem(subj, p, bp, major), workerUser(subj, p, bp), function (txt, reasoning) {
         if (done) return;
-        if (reasoning) stream.reasoning += reasoning;
-        if (txt) stream.content += txt;
+        if (reasoning) pushStream(stream, stream.rParts, 'rLen', reasoning);
+        if (txt) pushStream(stream, stream.cParts, 'cLen', txt);
         var cell = parPanel.cells[p.qid];
-        if (cell) cell.stream = { reasoning: stream.reasoning, content: stream.content };
+        if (cell) cell.stream = stream;                          // 同引用赋值（O(1)）
       }, null, opts).then(function (full) {
         done = true;
         var ai2 = parPanel.aborters.indexOf(ac); if (ai2 >= 0) parPanel.aborters.splice(ai2, 1);
