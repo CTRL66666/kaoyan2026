@@ -19505,27 +19505,36 @@ function bind(el, next) {
 
   // ==================== 并行出卷系统（多 Agent 协作出卷） ====================
   // 总工程师规划 → 多出题员并行出题（智能并发 2~5 实时调配）→ 状态面板 → 失败重试 → 总审查
-  // 智能并发调度器：观测滑动窗口内 成功率/平均耗时，动态调并发（默认 2 起步，最高 5）
-  function makeScheduler(initial) {
-    var MIN = 2, MAX = 5, cur = initial || 2, active = 0, wins = [], down = 0, SAMPLES = 5;
+  // 智能并发调度器（快升探测版）：目标 = 尽快摸到最大并发、压短总出题时长
+  //  - 每完成 2 个「快而稳」样本（平均 <30s）→ 立即 +1（冷却防抖，不等待样本攒满）
+  //  - 任一失败 → 立即 -1（快速避险）；连续 2 失败 → 再 -1 到底
+  //  - 上限 5、下限 2；慢速成功（>30s）不升（说明 API 已饱和排队）
+  function makeScheduler(initial, maxCon) {
+    var MAX = maxCon || 5, MIN = 2;
+    var cur = initial || 2, active = 0;
+    var recent = [], sinceUp = 0, failStreak = 0;
     return {
       permit: function () { return active < cur; },
       enter: function () { active++; },
       leave: function () { active--; },
       concurrency: function () { return cur; },
       observe: function (ms, ok) {
-        wins.push({ ms: ms, ok: ok });
-        if (wins.length > SAMPLES) wins.shift();
-        if (ok) down = 0; else down++;
-        if (wins.length >= SAMPLES) {
-          var okN = wins.filter(function (w) { return w.ok; }).length;
-          var avg = wins.reduce(function (a, w) { return a + w.ms; }, 0) / wins.length;
-          // 思考模式每题 10-40s 属正常：成功率 4/5 且平均 <30s 就升档；失败多或 >60s 降档
-          if (okN >= SAMPLES - 1 && avg < 30000 && cur < MAX) cur++;
-          else if (okN <= 2 || avg > 60000) cur = Math.max(MIN, cur - 1);
-          wins = [];
+        if (ok) {
+          recent.push(ms);
+          if (recent.length > 4) recent.shift();
+          failStreak = 0;
+          sinceUp++;
+          if (cur < MAX && sinceUp >= 2 && recent.length >= 2) {
+            var avg = recent.reduce(function (a, b) { return a + b; }, 0) / recent.length;
+            if (avg < 30000) { cur++; sinceUp = 0; recent = []; }   // 快而稳 → 升档
+          }
+        } else {
+          failStreak++;
+          recent = [];
+          if (cur > MIN) cur--;                                     // 失败立即降 1
+          if (failStreak >= 2) { cur = Math.max(MIN, cur - 1); failStreak = 0; }
+          sinceUp = 0;
         }
-        if (down >= 3) { cur = Math.max(MIN, cur - 1); down = 0; }               // 连续失败 → 立即降
       }
     };
   }
@@ -19651,6 +19660,15 @@ function bind(el, next) {
     var head = document.getElementById('par-head');
     if (!head) return;
     var elapsed = Math.round((Date.now() - startTs) / 1000);
+    // 预计剩余：按当前完成速率外推（已耗时/已完成 → 剩余题量所需秒数）
+    var etaTxt = '';
+    var remain = questions.length - doneN;
+    if (remain > 0 && doneN > 0 && elapsed > 2) {
+      var rate = doneN / elapsed;                       // 题/秒
+      var etaSec = Math.round(remain / rate);
+      var m = Math.floor(etaSec / 60), s2 = etaSec % 60;
+      etaTxt = '<span class="tag" style="background:#2f9560;color:#fff">⏱ 预计剩余 ' + (m > 0 ? m + '分' : '') + s2 + '秒</span>';
+    }
     var goBtn = doneN > 0 && !parPanel.examId
       ? '<button id="par-go-do" class="btn btn-sm btn-gold" style="margin-left:auto">📝 开始做题（已有 ' + doneN + ' 题）</button>'
       : '';
@@ -19660,6 +19678,7 @@ function bind(el, next) {
     head.innerHTML = '<span class="tag" style="background:#096dd9;color:#fff">并发 ' + sched.concurrency() + '/5</span>'
       + '<span class="tag">完成 ' + doneN + '/' + questions.length + '</span>'
       + '<span class="tag">已耗时 ' + elapsed + 's</span>'
+      + etaTxt
       + '<span class="tag">状态实时更新中…</span>'
       + goBtn
       + stopBtn;
