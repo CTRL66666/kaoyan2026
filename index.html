@@ -612,7 +612,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
  * ============================================================ */
 .tx { font-family: "Cambria Math", Georgia, "Times New Roman", serif; font-size: 1.05em; }
 .tx i { font-style: italic; }
-.tx-fn { font-style: normal; }
+.tx-fn { font-style: italic; font-family: "Cambria Math", Georgia, "Times New Roman", serif; }   /* 函数名斜体 serif（\f \sin 等）—— 让用户视觉看出 LaTeX 已渲染而非裸文本 */
 .tx sup, .tx sub { font-size: .72em; line-height: 0; }
 .tx-frac { display: inline-flex; flex-direction: column; vertical-align: middle; text-align: center; margin: 0 .15em; }
 .tx-frac .tx-num { padding: 0 .3em; border-bottom: 1.2px solid currentColor; line-height: 1.3; }
@@ -3326,10 +3326,11 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     },
     // 文本里混着 $..$ 公式：文本转义 + 公式渲染
     renderInline(str) {
-      if (str == null) return '';
-      const D = String.fromCharCode(36); // 美元符号：用charCode避免源码字面量被shell展开
-      let s = String(str);
-      s = decodeHtmlEntities(s); // 预解码 HTML 实体（上游可能已转义过一次）
+      try {
+        if (str == null) return '';
+        const D = String.fromCharCode(36); // 美元符号：用charCode避免源码字面量被shell展开
+        let s = String(str);
+        s = decodeHtmlEntities(s); // 预解码 HTML 实体（上游可能已转义过一次）
       // 无 $ 包裹但含公式特征 → 整段按公式渲染（AI常返回裸公式题干）
       const greekNames = 'alpha|beta|gamma|delta|theta|lambda|mu|pi|sigma|omega|phi|rho|tau|xi|zeta|eta|kappa|nu|chi|psi';
       const looksMath = /(\\[a-zA-Z]+|->|→|\^|_|∫|\[[^\]]+\]\s*\/|\)\s*\/\s*[\(a-zA-Z]|\d\s*\/\s*[\(\[]|[a-zA-Z]\s*\/\s*[\(\[]|-?\d+\s*\/\s*\d+|lim\s*[\(]|ln\s*\(|sin\s*\(|cos\s*\(|tan\s*\(|sqrt\s*\()/i.test(s)
@@ -3354,6 +3355,11 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         )) return '<span class="tx">' + seg(normalizeShorthand(p)) + '</span>';
         return esc(p).replace(/\n/g, '<br>');
       }).join('');
+      } catch (e) {
+        // 异常兜底：seg 内部错误时返回 esc 原文（避免整段渲染失败导致题面裸 LaTeX 显示）
+        console.warn('[Tex] renderInline 异常', e);
+        return esc(String(str == null ? '' : str));
+      }
     }
   };
   // 全局后处理：Tex.renderInline 输出端统一处理 Markdown **加粗**/*斜体*
@@ -20007,14 +20013,14 @@ function bind(el, next) {
         parLog('总工程师规划完成：' + plan.questions.length + ' 题，即将并行出题');
         return plan;
       }).then(function (plan) {
-        // 阶段2：并行出题（状态面板已内含）
-        return runParallelQuestions(plan, subj, bp, major, prefs);
-      }).then(function (built) {
-        // 阶段3：总审查
-        parLog('全部题目出题完毕，总工程师开始审查…');
-        return chiefReview(built, subj, bp, plan).then(function (review) {
-          if (review.verdict === 'ok') parLog('总审查通过（' + built.questions.length + ' 题均合理）');
-          return { built: built, review: review };
+        // 阶段2+3 合并：plan 闭包内调 chiefReview（避免上 then 的 plan 不可见 → ReferenceError）
+        return runParallelQuestions(plan, subj, bp, major, prefs).then(function (built) {
+          // 阶段3：总审查
+          parLog('全部题目出题完毕，总工程师开始审查…');
+          return chiefReview(built, subj, bp, plan).then(function (review) {
+            if (review.verdict === 'ok') parLog('总审查通过（' + built.questions.length + ' 题均合理）');
+            return { built: built, review: review };
+          });
         });
       }).then(function (out) {
         if (parPanel) { parRemoveFab(); setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 800); }
