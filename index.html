@@ -7500,6 +7500,31 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     return out.replace(/,\s*([}\]])/g, '$1');       // 去尾逗号
   }
 
+  // 值内裸引号修复：AI 常在字符串值里输出未转义的双引号（如 f"(x)、"重点"），
+  // 导致引号状态错乱 → 括号计数/截断补齐/元素抢救全部跑偏（表现为"6层提取失败"）。
+  // 上下文感知：字符串内遇到 " 时，若其后紧跟的不是合法 JSON 结构符（, } ] : { [ 或结尾），
+  // 则视为"值内的裸引号"而非闭合 → 转义成 \"。
+  function repairBareQuotes(s) {
+    var out = '', inStr = false, esc = false, i = 0, n = s.length;
+    while (i < n) {
+      var c = s.charAt(i);
+      if (esc) { out += c; esc = false; i++; continue; }
+      if (c === '\\') { out += c; esc = true; i++; continue; }
+      if (c === '"') {
+        if (!inStr) { inStr = true; out += c; i++; continue; }
+        var j = i + 1;
+        while (j < n && (s.charAt(j) === ' ' || s.charAt(j) === '\t')) j++;
+        var nx = j < n ? s.charAt(j) : '';
+        if (nx === ',' || nx === '}' || nx === ']' || nx === ':' || nx === '{' || nx === '[' || nx === '') {
+          inStr = false; out += c; i++; continue;
+        }
+        out += '\\"'; i++; continue;   // 值内裸引号 → 转义，保持字符串状态
+      }
+      out += c; i++;
+    }
+    return out;
+  }
+
   // ── 数组/对象元素抢救：逐个抽取完整 {...}，能解析几个算几个 ──
   // AI 输出被 max_tokens 截断时（顶层对象内含数组最常见），顶层整体缺 } ，
   // 但数组里的元素（以及后续完整对象）其实都是完整的，不该整批丢弃。
@@ -7564,6 +7589,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     var fail = function (layer, why) { failTrail.push('L' + layer + ':' + why); };
     var str = String(raw == null ? '' : raw).replace(/^\uFEFF/, '');
     str = str.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();   // 剥掉推理模型的思考块
+    str = repairBareQuotes(str);                                   // 第 0 层：先修值内裸引号（防引号状态错乱）
 
     // 第 1 层：markdown 代码块（取最长的一块，避免命中回复里的小示例）
     var best = null, reFence = /```(?:json|JSON)?\s*([\s\S]*?)```/g, mf;
