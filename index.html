@@ -7877,21 +7877,23 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     { ctx: 'mk.deep', module: '错题本', name: '深度分析', desc: '错题深度复盘', def: 'noThink' },
     { ctx: 'tutor.think', module: 'AI 督学', name: '智能督学', desc: '教练督学 / 全智能督学', def: 'global' }
   ];
-  // 统一思考决策：ctx 模块配置（用户最高优先级）> 显式 noThink > 局部 think > 全局 thinkingMode > 默认不思考
+  // 统一思考决策：
+  // ① 单模块配置：think/noThink 直接定；forceGlobal 只认全局开关；global=不干预（跳过本层，从②继续）
+  // ② 显式 noThink > ③ 局部 think > ④ 全局 thinkingMode > ⑤ 默认不思考
   function resolveThink(opts) {
     opts = opts || {};
-    // 1. 设置页「单模块 AI 模式」的用户配置（明确指定即直接采用，覆盖一切写死行为）
     var ctxKey = opts.ctx;
     if (ctxKey) {
       var mm = null;
       try { mm = (Store.get().ai.moduleModes || {})[ctxKey]; } catch (e) { }
       if (mm === 'think') return true;
       if (mm === 'noThink') return false;
-      if (mm === 'global') {
-        var ag = Store.get().ai;
-        if (ag.thinkingMode === true || ag.thinkingMode === false) return ag.thinkingMode;
+      if (mm === 'forceGlobal') {
+        var af = Store.get().ai;
+        if (af.thinkingMode === true || af.thinkingMode === false) return af.thinkingMode;
         return false;
       }
+      // mm === 'global'（跟随全局 = 不干预）→ 跳过本层，落到 ② 继续正常决策
     }
     // 2. 调用方显式写死的 noThink（如心理必思考、结构化提取防截断）
     if (opts.noThink !== undefined) return !opts.noThink;
@@ -26509,7 +26511,7 @@ function bind(el, next) {
       html += '<div class="mm-group"><div style="font-weight:500;font-size:13px;margin:10px 0 6px">' + g + '</div>';
       html += groups[g].map(function (r) {
         var cur = modes[r.ctx] || '';
-        var selOpts = [['global', '跟随全局'], ['think', '强制思考'], ['noThink', '强制不思考']]
+        var selOpts = [['global', '跟随全局（默认）'], ['forceGlobal', '仅跟随全局开关'], ['think', '强制思考'], ['noThink', '强制不思考']]
           .map(function (o) { return '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('');
         var defTxt = r.def === 'think' ? '默认思考' : r.def === 'noThink' ? '默认不思考' : '默认跟随全局';
         return '<div class="mm-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin:4px 0;flex-wrap:wrap">'
@@ -26533,7 +26535,7 @@ function bind(el, next) {
         + '<input id="mm-q" class="input" placeholder="🔍 搜索模块 / 调用名…" style="flex:1;min-width:160px">'
         + '<button class="btn btn-ghost btn-sm" id="mm-reset" style="font-size:12px">↺ 重置全部默认</button>'
         + '</div>'
-        + '<div class="muted-sm" style="font-size:11.5px;margin-bottom:8px">优先级：此处配置 ＞ 功能内写死行为 ＞ 全局思考模式开关。配置立即生效，无需重启。</div>'
+        + '<div class="muted-sm" style="font-size:11.5px;margin-bottom:8px">优先级：强制思考/不思考 ＞ 仅跟随全局开关 ＞ 跟随全局（=不干预，按功能默认与全局依次决定）。配置立即生效。</div>'
         + '<div id="mm-list" style="max-height:58vh;overflow:auto">' + mmListHtml(reg, modes, '') + '</div>'
         + '</div>',
       actions: [{ label: '完成', kind: 'btn-primary' }]
