@@ -2848,6 +2848,13 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       const c = s[i];
       // 反斜杠命令
       if (c === '\\') {
+        // ★ 双反斜杠 \\ 归一化（消灭「孤立 \ 显示成 |」的顽疾）：
+        //   \\int → 跳过第一个 \，第二个 \ 走正常命令解析（JSON 转义残留最常见：\\pi \\sin \\frac）
+        //   孤立 \\（后非字母，如行分隔符）→ 输出 <br>（LaTeX 语义 = 换行）
+        if (s[i + 1] === '\\') {
+          if (/[a-zA-Z]/.test(s[i + 2] || '')) { i++; continue; }
+          out += '<br>'; i += 2; continue;
+        }
         const m = s.slice(i).match(/^\\([a-zA-Z]+|.)/);
         if (!m) { i++; continue; }
         const cmd = m[1];
