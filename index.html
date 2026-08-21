@@ -19803,7 +19803,7 @@ function bind(el, next) {
     PAR_STAGE = { name: name, label: label || name, color: color || '#096dd9' };
     var head = document.getElementById('par-head');
     if (head) {
-      var stageHtml = '<span class="tag" style="background:' + (color || '#096dd9') + ';color:#fff">' + (label || name) + '</span>';
+      var stageHtml = '<span class="tag" style="background:' + (color || '#096dd9') + ';color:#fff;padding:2px 10px;font-size:12px;font-weight:500">' + (label || name) + '</span>';
       // 保留出题统计标签，替换"状态实时更新中…"
       head.innerHTML = head.innerHTML.replace(/<span class="tag">状态实时更新中…<\/span>/, stageHtml);
     }
@@ -19830,7 +19830,7 @@ function bind(el, next) {
       var pct = total ? Math.round(cur / total * 100) : 0;
       head.innerHTML = head.innerHTML.replace(
         /<span class="tag">完成[^<]*<\/span>/,
-        '<span class="tag">' + (label || '阶段') + ' ' + cur + '/' + total + '（' + pct + '%）</span>'
+        '<span class="tag tag-warn">' + (label || '阶段') + ' ' + cur + '/' + total + '（' + pct + '%）</span>'
       );
     }
   }
@@ -19869,7 +19869,7 @@ function bind(el, next) {
       var rate = doneN / elapsed;                       // 题/秒
       var etaSec = Math.round(remain / rate);
       var m = Math.floor(etaSec / 60), s2 = etaSec % 60;
-      etaTxt = '<span class="tag" style="background:#2f9560;color:#fff">⏱ 预计剩余 ' + (m > 0 ? m + '分' : '') + s2 + '秒</span>';
+      etaTxt = '<span class="tag tag-ok">⏱ 预计剩余 ' + (m > 0 ? m + '分' : '') + s2 + '秒</span>';
     }
     var goBtn = doneN > 0 && !parPanel.examId
       ? '<button id="par-go-do" class="btn btn-sm btn-gold" style="margin-left:auto">📝 开始做题（已有 ' + doneN + ' 题）</button>'
@@ -19877,9 +19877,9 @@ function bind(el, next) {
     var stopBtn = doneN > 0
       ? '<button id="par-stop-do" class="btn btn-sm" style="background:#cf1322;color:#fff;border-color:#cf1322">⏹ 停止出题 · 开始做</button>'
       : '';
-    head.innerHTML = '<span class="tag" style="background:#096dd9;color:#fff">并发 ' + sched.concurrency() + '/20</span>'
-      + '<span class="tag">完成 ' + doneN + '/' + questions.length + '</span>'
-      + '<span class="tag">已耗时 ' + elapsed + 's</span>'
+    head.innerHTML = '<span class="tag tag-new">并发 ' + sched.concurrency() + '/20</span>'
+      + '<span class="tag tag-warn">完成 ' + doneN + '/' + questions.length + '</span>'
+      + '<span class="tag tag-warn">已耗时 ' + elapsed + 's</span>'
       + etaTxt
       + '<span class="tag">状态实时更新中…</span>'
       + goBtn
@@ -19907,9 +19907,12 @@ function bind(el, next) {
     parClosePanel();
     var panel = document.createElement('div');
     panel.id = 'par-fixed-panel';
-    panel.style.cssText = 'position:fixed;right:16px;bottom:16px;width:430px;max-width:calc(100vw - 32px);max-height:76vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.18);z-index:10000;padding:12px 14px';
-    panel.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
-      + '<b id="par-panel-title" style="font-size:13px">⚡ 并发出卷中</b>'
+    // 【修复透明】panel 局部 <style> 兜底：.tag 默认深灰+浅灰在白色 panel 上几乎不可见；.btn-ghost 透明背景在浅色场景也褪色。
+    // 这里给 panel 作用域内的 .tag/.btn 一个明确的浅灰底+深色字基线，避免依赖全局主题变量在子文档树里被解析成低对比度。
+    panel.style.cssText = 'position:fixed;right:16px;bottom:16px;width:430px;max-width:calc(100vw - 32px);max-height:76vh;overflow:auto;background:#ffffff;color:#1a1a1a;border:1px solid #d9d9d9;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.18);z-index:10000;padding:12px 14px';
+    panel.innerHTML = '<style>#par-fixed-panel .tag{background:#f0f0f0;color:#1a1a1a;border:1px solid #d0d0d0;padding:2px 8px;border-radius:10px;font-size:11px;display:inline-block;line-height:1.5}#par-fixed-panel .btn-ghost{background:#ffffff;color:#1a1a1a;border:1px solid #d0d0d0}#par-fixed-panel .btn{color:#1a1a1a;font-weight:500}</style>'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+      + '<b id="par-panel-title" style="font-size:13px;color:#1a1a1a">⚡ 并发出卷中</b>'
       + '<span style="flex:1"></span>'
       + '<button class="btn btn-sm btn-ghost" id="par-panel-min">📌 后台继续</button>'
       + '<button class="btn btn-sm btn-ghost" id="par-panel-close" title="收起为右下角悬浮入口">—</button>'
@@ -20278,22 +20281,124 @@ function bind(el, next) {
     return Promise.all(tasks).then(function () { return built; });
   }
   // 展示总审查报告（弹窗 + 按题分组 + 显眼 + 答案复核结果）
-  function showChiefReport(exam, review) {
-    var verify = exam.answerVerify || null;
-    var qs = exam.questions;
-    var vRows = '';
-    if (verify && verify.verified) {
-      var vStats = verify.stats || {};
-      vRows = '<div style="background:#E8F8F5;border:1px solid #A3E4D7;border-radius:8px;padding:10px 12px;margin:8px 0">'
-        + '<div style="font-weight:500;margin-bottom:4px">🔍 答案并行复核（每题 2 路独立求解）</div>'
-        + '<div style="font-size:12px;margin-bottom:6px">一致 <b style="color:#1E8449">' + (vStats.agree || 0) + '</b> · 争议 <b style="color:#CB4335">' + (vStats.dispute || 0) + '</b> · 失败 <b>' + (vStats.failed || 0) + '</b> / 共 ' + (vStats.total || 0) + '</div>'
-        + verify.verified.filter(function (r) { return r && r.dispute; }).slice(0, 6).map(function (r) {
-          return '<div style="background:#FDEDEC;border:1px solid #F5B7B1;border-radius:6px;padding:6px 10px;margin:4px 0;font-size:12.5px">'
-            + '<b>⚠️ 题 ' + r.qid + '</b>（' + U.esc(r.topic || '') + '）：路1=' + U.esc(r.answer1 || '?') + ' vs 路2=' + U.esc(r.answer2 || '?') + '</div>';
-        }).join('')
-        + (vStats.dispute > 6 ? '<div class="muted-sm" style="font-size:11px">…其余 ' + (vStats.dispute - 6) + ' 争议题见各题卡片（🔍 复核按钮）</div>' : '')
-        + '</div>';
+  // 【收尾工程师闭环】用户可对单题多次优化（上限 5 次），每次带具体意见重写；保留 originalStem 可还原
+  function optimizeSingleQuestion(exam, qIdx) {
+    var q = exam.questions[qIdx];
+    if (!q) return;
+    var count = q.optimizeCount || 0;
+    if (count >= 5) { Toast.warn('此题已优化到 5 次上限（防滥用），可点 🔁 还原原题 重置'); return; }
+    // 首次优化时备份原题
+    if (!q.originalStem) {
+      q.originalStem = q.stem;
+      q.originalAnswer = q.answer;
+      q.originalSolution = q.solution;
+      q.opinionHistory = q.opinionHistory || [];
     }
+    var history = q.opinionHistory || [];
+    var lastOpinion = history.length ? history[history.length - 1] : '';
+    var html = '<div class="card">'
+      + '<div style="font-weight:500;margin-bottom:8px">🔧 优化此题（第 ' + (count + 1) + '/5 次）</div>'
+      + '<div class="muted-sm" style="margin-bottom:4px">当前题干：</div>'
+      + '<div class="report" style="padding:10px;background:#f7f7f7;border-radius:6px;margin-bottom:12px;max-height:180px;overflow:auto;font-size:13px;line-height:1.6">' + Tex.renderInline(q.stem || '') + '</div>'
+      + (lastOpinion ? '<div class="muted-sm" style="margin-bottom:8px;font-size:12px">📝 上次意见：<span style="color:#666">' + U.esc(lastOpinion) + '</span></div>' : '')
+      + '<div style="margin-bottom:6px;font-size:13px;font-weight:500">本次优化意见（必填，越具体 AI 越准）：</div>'
+      + '<textarea id="opt-opinion" class="input" rows="3" placeholder="例：解法太套路希望加反证 · 选项 A 数值有误请核对 · 压轴题创新角度不足希望加临界参数讨论 · 太简单希望加多步推导 · 题干歧义需明确..."></textarea>'
+      + '<div class="muted-sm" style="margin-top:8px;font-size:11.5px">📋 历次意见：' + (history.length ? history.length + ' 条 · 提交后累计' : '暂无') + '</div>'
+      + '</div>';
+    Modal.open({
+      title: '🔧 优化此题 · ' + (q.topicName || '未标注') + ' · ' + (q.score || 0) + '分',
+      wide: true, dismissable: true,
+      html: html,
+      actions: [
+        { label: '取消', kind: 'btn-ghost' },
+        { label: '🔁 还原原题', kind: 'btn-ghost',
+          onClick: function (close) {
+            if (!q.originalStem) { Toast.warn('此題未优化过，无原始题'); close(); return; }
+            if (!confirm('确认还原到原题？优化记录将清空。')) { return; }
+            q.stem = q.originalStem; q.answer = q.originalAnswer; q.solution = q.originalSolution;
+            q.optimizeCount = 0; q.opinionHistory = [];
+            Store.update(function (s) {
+              var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === exam.id; });
+              if (ex) { ex.questions = exam.questions; ex.chiefReview = exam.chiefReview; }
+            });
+            close();
+            Toast.success('已还原原题');
+            showChiefReport(exam, exam.chiefReview);
+            if (currentEl) render(currentEl);
+          }
+        },
+        { label: '🔧 应用本次意见', kind: 'btn-primary',
+          onClick: function (close) {
+            var opinion = ((document.getElementById('opt-opinion') || {}).value || '').trim();
+            if (!opinion) { Toast.warn('请输入优化意见'); return; }
+            close();
+            doOptimizeQuestion(exam, qIdx, opinion);
+          }
+        }
+      ]
+    });
+  }
+
+  function doOptimizeQuestion(exam, qIdx, opinion) {
+    var q = exam.questions[qIdx];
+    if (!q) return;
+    var subj = exam.subject || 'math';
+    var bp = examBlueprint(subj);
+    var sys = '你是考研命题优化专家（严格模式）。对原题按用户反馈意见做**完整重写**（不是小修小补），保持题型/分值/考点大致不变（除非用户意见明确要求改）。\n'
+      + '【硬约束】① 解法必须考纲内（不超纲）② 压轴题需新角度（反证/构造/参数讨论/条件隐蔽等）③ 题干无歧义 ④ 答案正确完整 ⑤ solution 含考纲内解法大纲。\n'
+      + '只输出 JSON：{"stem":"新题干","type":"choice|solve","options":[...],"answer":"新答案","solution":"含考纲内解法大纲","diff":"...","score":N,"topicName":"..."}。不要任何多余文字。';
+    var usr = '原题（仅参考，绝不照抄）：' + String(q.stem || '').slice(0, 300) + '\n当前答案：' + String(q.answer || '').slice(0, 100) + '\n当前解析：' + String(q.solution || '').slice(0, 100) + '\n本次意见：' + opinion + '\n历次意见：' + (q.opinionHistory || []).map(function (o, i) { return (i + 1) + '. ' + o; }).join('\n');
+    Toast.show('🔧 正在按意见重写此题（' + (q.optimizeCount + 1) + '/5 次）…', 'info', 2500);
+    AI.chatJSON(sys, usr, null, { noThink: false, timeout: 180000, cache: false, ctx: 'sprint.optimize' }).then(function (nr) {
+      if (nr && nr.stem) {
+        var fixM = function (s) { return Tex.repairMangledLatex ? Tex.repairMangledLatex(s) : s; };
+        q.stem = Tex.repairPipeLatex(fixM(nr.stem));
+        if (Array.isArray(nr.options)) q.options = nr.options.map(function (o) { return Tex.repairPipeLatex(fixM(String(o))); });
+        q.answer = Tex.repairPipeLatex(fixM(String(nr.answer || '')));
+        q.solution = Tex.repairPipeLatex(fixM(String(nr.solution || '')));
+        q.optimizeCount = (q.optimizeCount || 0) + 1;
+        q.opinionHistory = (q.opinionHistory || []).concat([opinion]);
+        // 同步 chiefReview.questions[qi]
+        var rq = ((exam.chiefReview || {}).questions || []).find(function (x) { return x.qid === qIdx + 1; });
+        if (rq) { rq.optimized = true; rq.optimizeCount = q.optimizeCount; rq.lastOpinion = opinion; }
+        // 保护：若用户已答此题 → 清空旧作答（避免旧题面对错判断混乱）
+        // 不重置 exam.completedAt——只清此题的 results，renderExamPage 会自然减少 answeredN 并重算分数
+        if (exam.results && qIdx < exam.results.length && exam.results[qIdx] != null) {
+          exam.results[qIdx] = null;
+          Toast.show('⚠ 此题旧作答已清（题面已更新），请重新作答（不影响其它题）', 'info', 2500);
+        }
+        // 持久化
+        Store.update(function (s) {
+          var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === exam.id; });
+          if (ex) { ex.questions = exam.questions; ex.chiefReview = exam.chiefReview; }
+        });
+        Toast.success('✓ 已按意见重写（累计 ' + q.optimizeCount + '/5 次）');
+        // 重新打开报告让用户立即看到新题
+        setTimeout(function () { showChiefReport(exam, exam.chiefReview); }, 300);
+        if (currentEl) render(currentEl);
+      } else { Toast.warn('AI 重写返回为空，请原题或换个意见'); }
+    }).catch(function (e) { Toast.warn('重写失败：' + (e.message || e)); });
+  }
+
+  function showChiefReport(exam, review) {
+    // 暴露当前 exam 给单题优化按钮（row 内 onclick 调全局 __spOpt(qIdx)）
+    window.__spCurrentExam = exam;
+    window.__spOpt = function (qIdx) { try { optimizeSingleQuestion(exam, qIdx); } catch (e) { Toast.warn('打开优化失败：' + e.message); } };
+    window.__spRestore = function (qIdx) {
+      var q = exam.questions[qIdx];
+      if (!q || !q.originalStem) { Toast.warn('此題未优化过，无原始题'); return; }
+      if (!confirm('确认还原到原题？优化记录将清空。')) return;
+      q.stem = q.originalStem; q.answer = q.originalAnswer; q.solution = q.originalSolution;
+      q.optimizeCount = 0; q.opinionHistory = [];
+      Store.update(function (s) {
+        var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === exam.id; });
+        if (ex) { ex.questions = exam.questions; ex.chiefReview = exam.chiefReview; }
+      });
+      Toast.success('已还原原题');
+      showChiefReport(exam, exam.chiefReview);
+      if (currentEl) render(currentEl);
+    };
+    var qs = exam.questions;
     var rows = (review.questions || []).map(function (rq) {
       var i = (rq.qid || 1) - 1;
       var q = qs[i];
@@ -20303,10 +20408,20 @@ function bind(el, next) {
       var sol = rq['解法大纲'] || '—';
       var syl = rq['考纲自检'] || '—';
       var probs = (rq.problems || []).map(function (p) { return '<li>' + U.esc(p) + '</li>'; }).join('');
+      var optCount = q.optimizeCount || 0;
+      var statusTag = rq.needsRewrite
+        ? '<span style="background:#E74C3C;color:#fff;font-size:11px;padding:1px 8px;border-radius:4px">总审查已自动微调</span>'
+        : '<span style="background:#27AE60;color:#fff;font-size:11px;padding:1px 8px;border-radius:4px">通过</span>';
+      var optTag = optCount > 0
+        ? '<span style="background:#9b59b6;color:#fff;font-size:11px;padding:1px 8px;border-radius:4px">已优化 ' + optCount + '/5 次</span>'
+        : '';
+      var restoreBtn = optCount > 0
+        ? '<button class="btn btn-sm" onclick="__spRestore(' + i + ')" style="background:#fff;border:1px solid #d0d0d0;color:#1a1a1a;font-size:11px">🔁 还原原题</button>'
+        : '';
       return '<div style="border:1px solid #e5e5e5;border-radius:8px;padding:10px 12px;margin:6px 0">'
-        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
-        + '<b>题 ' + rq.qid + '</b> <span style="font-size:12px;background:' + ((q.diff === 'hard') ? '#FFE4E1' : '#F0F0F0') + ';padding:1px 8px;border-radius:4px">' + tag + ' · ' + (q.score || 0) + '分</span>'
-        + (rq.needsRewrite ? '<span style="background:#E74C3C;color:#fff;font-size:11px;padding:1px 8px;border-radius:4px">已微调重写</span>' : '<span style="background:#27AE60;color:#fff;font-size:11px;padding:1px 8px;border-radius:4px">通过</span>')
+        + '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">'
+        + '<div><b>题 ' + rq.qid + '</b> <span style="font-size:12px;background:' + ((q.diff === 'hard') ? '#FFE4E1' : '#F0F0F0') + ';padding:1px 8px;border-radius:4px">' + tag + ' · ' + (q.score || 0) + '分</span> ' + statusTag + ' ' + optTag + '</div>'
+        + '<div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="__spOpt(' + i + ')" style="background:#722ed1;color:#fff;border-color:#722ed1;font-size:11px">🔧 优化此题</button>' + restoreBtn + '</div>'
         + '</div>'
         + '<div class="muted-sm"><b>创新角度：</b>' + U.esc(ang) + ' &nbsp; <b>考纲：</b>' + U.esc(syl) + '</div>'
         + '<div class="muted-sm"><b>解法大纲：</b>' + U.esc(sol) + '</div>'
@@ -20317,11 +20432,17 @@ function bind(el, next) {
       ? '<div style="background:#FFF3CD;border:1px solid #FFE69C;border-radius:8px;padding:10px 12px;margin:8px 0"><b>⚠️ 整卷级硬校验：</b><ul style="margin:4px 0 0 18px;padding:0">' + review.localIssues.map(function (s) { return '<li>' + U.esc(s) + '</li>'; }).join('') + '</ul></div>'
       : '';
     var summary = review.summary ? '<div class="muted-sm" style="margin:6px 0">' + U.esc(review.summary) + '</div>' : '';
+    var optimizeHint = '<div style="background:#F4ECF7;border:1px solid #D7BDE2;border-radius:8px;padding:10px 12px;margin:8px 0;color:#5B2C6F;font-size:12.5px">💡 <b>收尾工程师闭环：</b>每题都可点 <b style="color:#fff;background:#722ed1;padding:1px 6px;border-radius:4px">🔧 优化此题</b> 按你的具体意见重写（每题最多 5 次，可还原原题）。优化会同步更新题目/答案/解析并在考试页立即生效。</div>';
     Modal.open({
       title: '🧠 总工程师审查报告 · ' + (review.verdict === 'ok' ? '✅ 通过' : review.verdict === 'minor' ? '⚠️ 轻瑕' : '🔴 重大') + ' · ' + (review.hardPct || 0) + '% hard（目标 ' + (review.targetHardPct || 0) + '%）',
       wide: true, dismissable: true,
-      html: vRows + summary + localBox + rows + (review.needsRewrite && review.needsRewrite.length ? '<div class="muted-sm" style="margin-top:6px">🔄 已自动微调 ' + review.needsRewrite.length + ' 道题（创新角度/解法大纲/答案已重生成）</div>' : ''),
-      actions: [{ label: '了解' }]
+      html: summary + localBox + optimizeHint + rows + (review.needsRewrite && review.needsRewrite.length ? '<div class="muted-sm" style="margin-top:6px">🔄 已自动微调 ' + review.needsRewrite.length + ' 道题（创新角度/解法大纲/答案已重生成）</div>' : ''),
+      actions: [
+        { label: '了解', kind: 'btn-ghost' },
+        { label: '✍ 开始作答 →', kind: 'btn-primary',
+          onClick: function (close) { close(); openExam(exam.id, currentEl || document.body); }
+        }
+      ]
     });
   }
   // 答案并行复核 · 核心 2 路独立求解对比逻辑（被 verifyAnswersParallel / doReviewExam 共用）
@@ -20446,24 +20567,19 @@ function bind(el, next) {
               parStage('rewrite', '🔧 总工程师微调中', '#d46b08');
               parLog('总工程师微调：' + review.needsRewrite.length + ' 题按审查反馈重写…');
               return applyReviewAdjustments(built, review, subj, bp, major, prefs, plan).then(function () {
-                parLog('总工程师微调完成');
-                return { built: built, review: review };
-              });
+                    parLog('总工程师微调完成');
+                    return { built: built, review: review };
+                  });
             }
             return { built: built, review: review };
-          });
-        }).then(function (out) {
-          // 阶段4：答案并行复核（每题 2 路 AI 独立求解 + 对比，可视化每路状态）
-          if (parPanel && parPanel.stopped) return out;
-          parStage('verify', '🔍 答案并行复核中', '#08979c');
-          parLog('总审查通过，开始答案并行复核（每题 2 路独立求解）…');
-          return verifyAnswersParallel(out.built, subj, bp).then(function (verify) {
-            out.verify = verify;
-            return out;
           });
         });
       }).then(function (out) {
         if (parPanel) { parPanel.flowDone = true; parRemoveFab(); parClosePanel(); }
+        // 【收尾工程师闭环】总审查+微调完成后，给每题打 `optimizable:true` 标记，让用户可在考试页「🔧 优化此题」入口里循环重写单题（不自动批答案）
+        try {
+          (out.built.questions || []).forEach(function (q) { q.optimizable = true; q.optimizeCount = q.optimizeCount || 0; });
+        } catch (e) {}
         // 统一「更新既有卷面」：pendingExamId（出题完成已预入库）或 examId（边出边做已入库）→ 补全审查/复核结果；
         // 理论兜底都没有 → 新建。
         var wasInExam = !!(parPanel && parPanel.examId);   // 边出边做：用户已在考试页，不再重复 openExam
@@ -20477,7 +20593,7 @@ function bind(el, next) {
               ex.timeLimit = out.built.timeLimit || ex.timeLimit;
               ex.questions = out.built.questions;
               ex.chiefReview = out.review;              // 保存总审查结果（考试页顶部按钮随时打开报告）
-              ex.answerVerify = out.verify || null;     // 保存答案并行复核结果
+              // 答案并行复核字段 out.verify 已移除——并发出卷不再自动做；用户可手动触发整卷分析里的「AI 答案复核」按钮写入
               ex.pendingStage = undefined;
               delete ex.parallelPending;
               exam = ex;
@@ -20489,18 +20605,17 @@ function bind(el, next) {
             id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
             questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
             createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel',
-            chiefReview: out.review, answerVerify: out.verify || null
+            chiefReview: out.review
+            // 【说明】out.verify (答案并行复核) 已移除——并发出卷不再自动做；如需手动复核，调用整卷分析的「AI 答案复核」按钮（复用 crossCheckAnswers 核心做单次手动复核，结果写到 exam.answerVerify 字段，与这里独立）
           };
           Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
         }
-        // 显眼提示：Toast 弹一个长一点的（4 秒），文案带审查/复核结果
+        // 显眼提示：Toast 弹一个长一点的（4 秒），文案带审查结果（不再含答案复核）
         var nRewrite = (out.review.needsRewrite || []).length;
-        var vStats = (out.verify && out.verify.stats) || null;
-        var vTxt = vStats ? ' · 🔍 答案复核 ' + vStats.agree + '/' + vStats.total + ' 一致' + (vStats.dispute ? '（' + vStats.dispute + ' 争议）' : '') : '';
         Toast.show(
           '🧠 ' + exam.title + ' · ' + exam.questions.length + '题 · ' + out.review.hardPct + '% hard · ' +
           (out.review.verdict === 'ok' ? '✅ 审查通过' : out.review.verdict === 'minor' ? '⚠️ ' + nRewrite + '题已微调' : '🔴 ' + nRewrite + '题已微调·建议复核') +
-          (nRewrite ? '（已自动重写）' : '') + vTxt + (wasInExam ? '（已追加到当前卷面）' : ''),
+          (nRewrite ? '（已自动重写）' : '') + ' · 🔧 进入考试页可对单题循环优化' + (wasInExam ? '（已追加到当前卷面）' : ''),
           out.review.verdict === 'ok' ? 'success' : 'info', 4500
         );
         if (currentEl) render(currentEl);
@@ -20598,6 +20713,11 @@ function bind(el, next) {
       + optsHtml
       + (r && r.comment ? '<div class="gd-teach" style="margin-top:6px">🏫 ' + Tex.renderInline(r.comment) + '</div>' : '')
       + (done || answered ? '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(q.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(q.solution || '') + '</div></details>' : '')
+      // 【收尾工程师闭环】用户可在答题时按需优化此题（仅 AI 押题卷 optimizable 标记开启）
+      + (q.optimizable && q.optimizeCount < 5
+        ? '<button class="btn btn-sm sp-optimize-q" data-exam="' + examId + '" data-qi="' + qi + '" style="background:#722ed1;color:#fff;border-color:#722ed1;font-size:11px;margin-top:6px">🔧 优化此题</button>'
+          + (q.optimizeCount > 0 ? '<span class="tag" style="background:#9b59b6;color:#fff;font-size:10.5px;margin-left:4px">已优化 ' + q.optimizeCount + '/5</span>' : '')
+        : (q.optimizable && q.optimizeCount >= 5 ? '<span class="tag" style="background:#cf1322;color:#fff;font-size:10.5px;margin-top:6px">已到上限（用 🔁 还原原题 重置）</span>' : ''))
       // 【新增】单题复核（思考模式）：AI 深度复核这一题的答案/解析，防 AI 幻觉
       + (done || answered ? '<div class="btn-row" style="margin-top:6px">'
         + '<button class="btn btn-sm btn-ghost sp-q-review" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px">🔍 复核此题（思考模式）</button>'
@@ -20988,6 +21108,14 @@ function bind(el, next) {
       }
       if (t.classList.contains('sp-to-bank')) { addQuestionToBank(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
       if (t.classList.contains('sp-to-mistake')) { addQuestionToMistakes(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
+      if (t.classList.contains('sp-optimize-q')) {
+        var exId = t.getAttribute('data-exam');
+        var qIdxOpt = parseInt(t.getAttribute('data-qi'), 10);
+        var st2 = Store.get();
+        var examOpt = ((st2.sprintData || {}).mockExams || []).find(function (x) { return x.id === exId; });
+        if (examOpt) optimizeSingleQuestion(examOpt, qIdxOpt);
+        return;
+      }
       if (t.classList.contains('sp-q-raw')) {
         var qiRaw = t.getAttribute('data-qi');
         var cardRaw = t.closest('.sp-exam-card');
