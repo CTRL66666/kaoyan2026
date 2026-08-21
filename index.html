@@ -2714,8 +2714,15 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ',
     nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ',
     upsilon: 'υ', phi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+    // 变体希腊字母（考研高频）
+    varepsilon: 'ε', vartheta: 'θ', varrho: 'ρ', varphi: 'φ', varkappa: 'κ',
+    varpi: 'ϖ', varsigma: 'ς', varGamma: 'Γ', varDelta: 'Δ', varTheta: 'Θ',
+    varLambda: 'Λ', varXi: 'Ξ', varPi: 'Π', varSigma: 'Σ', varUpsilon: 'Υ',
+    varPhi: 'Φ', varPsi: 'Ψ', varOmega: 'Ω',
+    // 大写
     Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ',
-    Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω'
+    Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+    Upsilon: 'Υ', Nu: 'Ν', Mu: 'Μ', Eta: 'Η', Iota: 'Ι', Kappa: 'Κ', Chi: 'Χ'
   };
   const SYMBOL = {
     to: '→', rightarrow: '→', leftarrow: '←', infty: '∞', pm: '±', mp: '∓',
@@ -2985,11 +2992,18 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
           i = j2 + endTag2.length; continue;
         }
         if (cmd === 'end') { const eg = readGroup(s, i + m[0].length); i += m[0].length + eg[1]; continue; } // 跳过 \end{...}
-        // 字体命令（带 {group}）：\mathrm / \text / \mathbf / \mathit / \mathcal / \mathbb
-        if (cmd === 'text' || cmd === 'mathrm' || cmd === 'mathbf' || cmd === 'mathit' || cmd === 'mathcal' || cmd === 'mathbb') {
+        // 字体命令（带 {group}）：\mathrm / \text / \mathbf / \mathit / \mathcal / \mathbb / \boldsymbol
+        if (cmd === 'text' || cmd === 'mathrm' || cmd === 'mathbf' || cmd === 'mathit' || cmd === 'mathcal' || cmd === 'mathbb' || cmd === 'boldsymbol') {
           const g = readGroup(s, i + m[0].length);
-          const cls = cmd === 'mathbf' ? ' style="font-weight:bold"' : cmd === 'mathit' ? ' style="font-style:italic"' : cmd === 'mathcal' ? ' style="font-family:cursive"' : cmd === 'mathbb' ? ' style="font-family:serif;font-weight:bold"' : '';
+          // \boldsymbol{ξ} → 粗体+斜体（数学粗体）；\mathbf → 仅粗体；\mathit → 斜体；\mathcal → 手写体
+          const cls = (cmd === 'boldsymbol') ? ' style="font-weight:bold;font-style:italic"' : cmd === 'mathbf' ? ' style="font-weight:bold"' : cmd === 'mathit' ? ' style="font-style:italic"' : cmd === 'mathcal' ? ' style="font-family:cursive"' : cmd === 'mathbb' ? ' style="font-family:serif;font-weight:bold"' : '';
           out += '<span class="tx-fn"' + cls + '>' + seg(normalizeShorthand(g[0])) + '</span>';
+          i += m[0].length + g[1]; continue;
+        }
+        // \operatorname{rank} —— 罗马体算子名（考研高频：rank/tr/det/sgn/adj 等）
+        if (cmd === 'operatorname') {
+          const g = readGroup(s, i + m[0].length);
+          out += '<span class="tx-fn">' + esc(g[0]) + '</span>';
           i += m[0].length + g[1]; continue;
         }
         // \mathrmd（正体微分 d，考研常用简写：\oint_\Gamma f(x)\mathrmd x）
