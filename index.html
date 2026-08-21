@@ -20203,7 +20203,10 @@ function bind(el, next) {
     var log = plog || parLog;
     log('总审查微调：' + review.needsRewrite.length + ' 题重写中…');
     var tasks = review.needsRewrite.slice(0, 4).map(function (rq) {  // 单轮最多 4 题（避免总时间失控）
-      var orig = built.questions.find(function (q) { return i = built.questions.indexOf(q); return q && (q.id === rq.qid || built.questions.indexOf(q) + 1 === rq.qid); });
+      // qid 是 1-based（总审查 prompt 里题目按 1 开始编号），built.questions 是 0-based 数组
+      // 修复：用 (qid-1) 直接索引，避免之前 find 回调里 `return i = ...` 立即返回导致永远命中第 2 题
+      var qi = (Number(rq.qid) || 1) - 1;
+      var orig = built.questions[qi] || built.questions[qi + 1] || null;  // 兜底：qid 若为 0-based 则 +1 补偿
       if (!orig) return Promise.resolve(null);
       var problemsTxt = (rq.problems || []).concat(review.localIssues || []).join('；') || '压轴题需创新+解法考纲内+答案正确';
       var sysRewrite = '你是考研命题专家（严格模式）。' + (prefs && prefs.diff === 'superhard' ? '【超难特训】100% hard·创新·考纲内解法。' : '【压轴题】创新设问+考纲内解法。')
@@ -20319,8 +20322,13 @@ function bind(el, next) {
     var qs = built.questions || [];
     if (!qs.length) return Promise.resolve({ verified: [], stats: { total: 0, agree: 0, dispute: 0, failed: 0 } });
     parStageProgress(0, qs.length, '🔍 复核');
+    var vDone = 0, vDoneSet = {};
     return crossCheckAnswers(qs, function (i, text, cls) {
-      if (i >= 0) parCellStatus(i + 1, text, cls === 'dispute' ? '#cf1322' : cls === 'agree' ? 'var(--ok)' : '#08979c');
+      if (i >= 0) {
+        if (!vDoneSet[i]) { vDoneSet[i] = 1; vDone++; }
+        parStageProgress(vDone, qs.length, '🔍 复核');
+        parCellStatus(i + 1, text, cls === 'dispute' ? '#cf1322' : cls === 'agree' ? 'var(--ok)' : '#08979c');
+      }
     }, 'sprint.verify').then(function (verified) {
       var stats = { total: qs.length, agree: 0, dispute: 0, failed: 0 };
       verified.forEach(function (r) { if (r && r.agree) stats.agree++; else if (r && r.dispute) stats.dispute++; else if (r) stats.failed++; });
@@ -21079,20 +21087,23 @@ function bind(el, next) {
     var qs = exam.questions || [];
     // === 阶段 A：每题 2 路独立求解对比（实时进度） ===
     var phase = 'A';
-    var pendingReview = qs.length;
+    var doneCount = 0;   // 已完成复核题数（crossCheckAnswers 回调里递增，替代从不递减的 pendingReview）
+    var doneSet = {};    // 防重复计数（同一题可能回调多次？不会，但保险）
     function reviewProgress(i, text, cls) {
       // 渲染实时面板
       var total = qs.length;
-      var done = total - pendingReview;
       if (i >= 0) {
+        if (!doneSet[i]) { doneSet[i] = 1; doneCount++; }
         var cell = slot.querySelector('.rv-cell-' + (i + 1));
         if (cell) { cell.textContent = text; cell.style.background = cls === 'dispute' ? '#FDEDEC' : cls === 'agree' ? '#EAF3DE' : '#E6F1FB'; cell.style.color = cls === 'dispute' ? '#A93226' : cls === 'agree' ? '#27500A' : '#0C447C'; }
         parLog('题 ' + (i + 1) + ' 复核：' + text);
+      } else if (i === -1) {
+        doneCount = total;  // 全部完成
       }
       var progressBar = slot.querySelector('.rv-progress-fill');
       var progressTxt = slot.querySelector('.rv-progress-txt');
-      if (progressBar) progressBar.style.width = total ? Math.round(done / total * 100) + '%' : '0%';
-      if (progressTxt) progressTxt.textContent = '🔍 答案并行复核中 ' + done + '/' + total;
+      if (progressBar) progressBar.style.width = total ? Math.round(doneCount / total * 100) + '%' : '0%';
+      if (progressTxt) progressTxt.textContent = '🔍 答案并行复核中 ' + doneCount + '/' + total;
     }
     // 初始面板
     var grid = qs.map(function (q, i) {
