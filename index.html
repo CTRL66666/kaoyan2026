@@ -19796,6 +19796,42 @@ function bind(el, next) {
       }
     } else if (vb) { vb.remove(); }
   }
+  // 阶段可视化：出题 → 总审查 → 复核 → 完成（面板头部 + 每题格子状态）
+  var PAR_STAGE = null;   // {name, label, color}
+  function parStage(name, label, color) {
+    if (!parPanel) return;
+    PAR_STAGE = { name: name, label: label || name, color: color || '#096dd9' };
+    var head = document.getElementById('par-head');
+    if (head) {
+      var stageHtml = '<span class="tag" style="background:' + (color || '#096dd9') + ';color:#fff">' + (label || name) + '</span>';
+      // 保留出题统计标签，替换"状态实时更新中…"
+      head.innerHTML = head.innerHTML.replace(/<span class="tag">状态实时更新中…<\/span>/, stageHtml);
+    }
+    // 标题更新
+    var modalTitle = document.querySelector('.modal-title, .cm-modal-title, .modal .card-title');
+    if (modalTitle && modalTitle.textContent.indexOf('并发出卷') >= 0) {
+      modalTitle.textContent = '⚡ ' + (label || name);
+    }
+  }
+  function parCellStatus(qid, text, color) {
+    var cell = document.getElementById('par-cell-' + qid);
+    if (!cell) return;
+    var stEl = cell.querySelector('.par-cell-status');
+    if (stEl) { stEl.textContent = text; stEl.style.color = color || ''; }
+  }
+  // 阶段专用：出题面板进入「总审查/复核」时隐藏出题操作按钮、显示阶段进度条
+  function parStageProgress(cur, total, label) {
+    var fill = document.getElementById('par-progress-fill');
+    if (fill) fill.style.width = total ? Math.round(cur / total * 100) + '%' : '0%';
+    var head = document.getElementById('par-head');
+    if (head) {
+      var pct = total ? Math.round(cur / total * 100) : 0;
+      head.innerHTML = head.innerHTML.replace(
+        /<span class="tag">完成[^<]*<\/span>/,
+        '<span class="tag">' + (label || '阶段') + ' ' + cur + '/' + total + '（' + pct + '%）</span>'
+      );
+    }
+  }
   // 边出边做：完成 N 题后头部出现「开始做题」入口；点击后把已完成题临时入库为 exam 并 openExam；之后每题完成会自动 push 到该 exam
   function parGoDoExam() {
     if (!parPanel || parPanel.examId) return;
@@ -20191,9 +20227,23 @@ function bind(el, next) {
     });
     return Promise.all(tasks).then(function () { return built; });
   }
-  // 展示总审查报告（弹窗 + 按题分组 + 显眼）
+  // 展示总审查报告（弹窗 + 按题分组 + 显眼 + 答案复核结果）
   function showChiefReport(exam, review) {
+    var verify = exam.answerVerify || null;
     var qs = exam.questions;
+    var vRows = '';
+    if (verify && verify.verified) {
+      var vStats = verify.stats || {};
+      vRows = '<div style="background:#E8F8F5;border:1px solid #A3E4D7;border-radius:8px;padding:10px 12px;margin:8px 0">'
+        + '<div style="font-weight:500;margin-bottom:4px">🔍 答案并行复核（每题 2 路独立求解）</div>'
+        + '<div style="font-size:12px;margin-bottom:6px">一致 <b style="color:#1E8449">' + (vStats.agree || 0) + '</b> · 争议 <b style="color:#CB4335">' + (vStats.dispute || 0) + '</b> · 失败 <b>' + (vStats.failed || 0) + '</b> / 共 ' + (vStats.total || 0) + '</div>'
+        + verify.verified.filter(function (r) { return r && r.dispute; }).slice(0, 6).map(function (r) {
+          return '<div style="background:#FDEDEC;border:1px solid #F5B7B1;border-radius:6px;padding:6px 10px;margin:4px 0;font-size:12.5px">'
+            + '<b>⚠️ 题 ' + r.qid + '</b>（' + U.esc(r.topic || '') + '）：路1=' + U.esc(r.answer1 || '?') + ' vs 路2=' + U.esc(r.answer2 || '?') + '</div>';
+        }).join('')
+        + (vStats.dispute > 6 ? '<div class="muted-sm" style="font-size:11px">…其余 ' + (vStats.dispute - 6) + ' 争议题见各题卡片（🔍 复核按钮）</div>' : '')
+        + '</div>';
+    }
     var rows = (review.questions || []).map(function (rq) {
       var i = (rq.qid || 1) - 1;
       var q = qs[i];
@@ -20220,8 +20270,83 @@ function bind(el, next) {
     Modal.open({
       title: '🧠 总工程师审查报告 · ' + (review.verdict === 'ok' ? '✅ 通过' : review.verdict === 'minor' ? '⚠️ 轻瑕' : '🔴 重大') + ' · ' + (review.hardPct || 0) + '% hard（目标 ' + (review.targetHardPct || 0) + '%）',
       wide: true, dismissable: true,
-      html: summary + localBox + rows + (review.needsRewrite && review.needsRewrite.length ? '<div class="muted-sm" style="margin-top:6px">🔄 已自动微调 ' + review.needsRewrite.length + ' 道题（创新角度/解法大纲/答案已重生成）</div>' : ''),
+      html: vRows + summary + localBox + rows + (review.needsRewrite && review.needsRewrite.length ? '<div class="muted-sm" style="margin-top:6px">🔄 已自动微调 ' + review.needsRewrite.length + ' 道题（创新角度/解法大纲/答案已重生成）</div>' : ''),
       actions: [{ label: '了解' }]
+    });
+  }
+  // 阶段4：答案并行复核 —— 每题 2 路 AI 独立求解，对比结果，标记一致/争议
+  // 复用智能并发调度：并发 2~4 路，逐题推进；每路输出答案+解析，对比后 highligh 争议题
+  function verifyAnswersParallel(built, subj, bp) {
+    var qs = built.questions || [];
+    if (!qs.length) return Promise.resolve({ verified: [], stats: { total: 0, agree: 0, dispute: 0, failed: 0 } });
+    var results = [];
+    var pending = qs.length;
+    var idx = 0;
+    var MAX_CON = 4, MIN_CON = 2, cur = 2, active = 0;
+    var startedAt = Date.now();
+    // 面板：把题目格子切成"复核中/一致/争议"三态可视化
+    var totalN = qs.length;
+    function cellState(qi, text, cls) {
+      parCellStatus(qi + 1, text, cls === 'dispute' ? '#cf1322' : cls === 'agree' ? 'var(--ok)' : '#08979c');
+      var cell = document.getElementById('par-cell-' + (qi + 1));
+      if (cell) {
+        cell.style.borderLeftColor = cls === 'dispute' ? '#cf1322' : cls === 'agree' ? 'var(--ok)' : '#08979c';
+      }
+    }
+    function doneOne() {
+      pending--;
+      parStageProgress(totalN - pending, totalN, '🔍 复核');
+      if (pending === 0) {
+        var stats = { total: totalN, agree: 0, dispute: 0, failed: 0 };
+        results.forEach(function (r) { if (r.agree) stats.agree++; else if (r.dispute) stats.dispute++; else stats.failed++; });
+        parLog('答案复核完成：' + stats.agree + ' 题一致 / ' + stats.dispute + ' 题争议 / ' + stats.failed + ' 题失败');
+      }
+    }
+    function launch(i) {
+      var q = qs[i];
+      cellState(i, '⏳ 复核中', 'verify');
+      var sys = '你是独立阅卷 AI（第 ' + (i % 2 + 1) + ' 路）。请**独立**求解下面这题的答案（不要参考任何提示），只输出最终答案 + 关键步骤（≤4步）。\n'
+        + '规则：① 按考纲方法独立计算 ② 只输出 {"answer":"最终答案","steps":"关键步骤(≤120字)"} ③ 若题干有歧义/条件不足，输出 {"error":"原因"}';
+      var usr = '【题目 ' + (i + 1) + '】' + String(q.stem || '').slice(0, 200)
+        + (q.options && q.options.length ? '\n选项：' + q.options.join(' | ') : '');
+      return AI.chatJSON(sys, usr, null, { noThink: false, timeout: 120000, cache: false, ctx: 'sprint.verify.' + (i % 2) }).then(function (r1) {
+        // 第二路（不同 ctx 避免缓存）
+        return AI.chatJSON(sys, usr, null, { noThink: true, timeout: 120000, cache: false, ctx: 'sprint.verify.' + (i % 2) + 'b' }).then(function (r2) {
+          var a1 = r1 && r1.answer ? String(r1.answer).trim() : null;
+          var a2 = r2 && r2.answer ? String(r2.answer).trim() : null;
+          var agree = a1 && a2 && (a1 === a2 || Math.abs(parseFloat(a1) - parseFloat(a2)) < 1e-9);
+          var dispute = (a1 && a2 && !agree) || (a1 && !a2) || (!a1 && a2);
+          results[i] = {
+            qid: i + 1, topic: q.topicName || '',
+            answer1: a1, answer2: a2, steps1: r1 && r1.steps || '', steps2: r2 && r2.steps || '',
+            agree: agree, dispute: dispute, error: (!r1 && !r2) ? '双路失败' : ''
+          };
+          cellState(i, agree ? '✅ 一致' : dispute ? '⚠️ 争议' : '❌ 失败', agree ? 'agree' : 'dispute');
+          parLog('题 ' + (i + 1) + ' 复核：' + (agree ? '一致' : dispute ? '⚠️ 争议（' + (a1 || '?') + ' vs ' + (a2 || '?') + '）' : '失败'));
+          active--;
+          doneOne();
+          pump();
+        });
+      }).catch(function () {
+        results[i] = { qid: i + 1, topic: q.topicName || '', answer1: null, answer2: null, steps1: '', steps2: '', agree: false, dispute: false, error: '复核失败' };
+        cellState(i, '❌ 失败', 'dispute');
+        parLog('题 ' + (i + 1) + ' 复核失败');
+        active--;
+        doneOne();
+        pump();
+      });
+    }
+    function pump() {
+      while (active < cur && idx < qs.length) {
+        active++;
+        launch(idx++);
+      }
+    }
+    pump();
+    return new Promise(function (resolve) {
+      var check = setInterval(function () {
+        if (pending === 0) { clearInterval(check); resolve({ verified: results, stats: { total: totalN, agree: results.filter(r => r && r.agree).length, dispute: results.filter(r => r && r.dispute).length, failed: results.filter(r => r && r.error).length } }); }
+      }, 300);
     });
   }
   // 并行出卷总入口
@@ -20263,11 +20388,13 @@ function bind(el, next) {
         // 阶段2+3 合并：plan 闭包内调 chiefReview（避免上 then 的 plan 不可见 → ReferenceError）
         return runParallelQuestions(plan, subj, bp, major, prefs).then(function (built) {
           // 阶段3：总审查（结构化 + 自动重写有问题的题 + 显眼展示报告）
+          parStage('review', '🧠 总审查中', '#722ed1');
           parLog('全部题目出题完毕，总工程师开始审查…');
           return chiefReview(built, subj, bp, plan, prefs).then(function (review) {
             parLog('总审查：verdict=' + review.verdict + ' · ' + (review.hardPct || 0) + '% hard（目标 ' + (review.targetHardPct || 0) + '%）· ' + (review.summary || ''));
             // 阶段3.5：总工程师微调（自动重写 needsRewrite 的题）
             if (review.needsRewrite && review.needsRewrite.length) {
+              parStage('rewrite', '🔧 总工程师微调中', '#d46b08');
               parLog('总工程师微调：' + review.needsRewrite.length + ' 题按审查反馈重写…');
               return applyReviewAdjustments(built, review, subj, bp, major, prefs, plan).then(function () {
                 parLog('总工程师微调完成');
@@ -20275,6 +20402,15 @@ function bind(el, next) {
               });
             }
             return { built: built, review: review };
+          });
+        }).then(function (out) {
+          // 阶段4：答案并行复核（每题 2 路 AI 独立求解 + 对比，可视化每路状态）
+          if (parPanel && parPanel.stopped) return out;
+          parStage('verify', '🔍 答案并行复核中', '#08979c');
+          parLog('总审查通过，开始答案并行复核（每题 2 路独立求解）…');
+          return verifyAnswersParallel(out.built, subj, bp).then(function (verify) {
+            out.verify = verify;
+            return out;
           });
         });
       }).then(function (out) {
@@ -20297,15 +20433,18 @@ function bind(el, next) {
           id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
           questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
           createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel',
-          chiefReview: out.review  // 保存总审查结果（用于稍后随时打开报告）
+          chiefReview: out.review,  // 保存总审查结果（用于稍后随时打开报告）
+          answerVerify: out.verify || null  // 保存答案并行复核结果
         };
         Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
         // 显眼提示：Toast 弹一个长一点的（4 秒），文案带"看报告"按钮
         var nRewrite = (out.review.needsRewrite || []).length;
+        var vStats = (out.verify && out.verify.stats) || null;
+        var vTxt = vStats ? ' · 🔍 答案复核 ' + vStats.agree + '/' + vStats.total + ' 一致' + (vStats.dispute ? '（' + vStats.dispute + ' 争议）' : '') : '';
         Toast.show(
           '🧠 ' + exam.title + ' · ' + exam.questions.length + '题 · ' + out.review.hardPct + '% hard · ' +
           (out.review.verdict === 'ok' ? '✅ 审查通过' : out.review.verdict === 'minor' ? '⚠️ ' + nRewrite + '题已微调' : '🔴 ' + nRewrite + '题已微调·建议复核') +
-          (nRewrite ? '（已自动重写）' : ''),
+          (nRewrite ? '（已自动重写）' : '') + vTxt,
           out.review.verdict === 'ok' ? 'success' : 'info', 4500
         );
         // 总审查报告按钮：在主区显示（考试页顶部加按钮）
