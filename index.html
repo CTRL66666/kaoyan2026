@@ -19473,10 +19473,10 @@ function bind(el, next) {
     Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.examPref = Object.assign(examPref(), patch); });
   }
   // 【修复】解析层强制按难度档重新分配每题 diff（用户实际反馈：选了强化仍全部是 hard → AI 过度偏向）
-  //  mix（标准）→ medium 60% + hard 40%；hard（强化）→ medium 30% + hard 70%
+  //  mix（标准）→ medium 60% + hard 40%；hard（强化）→ medium 30% + hard 70%；superhard → 100% hard
   // 策略：保留 AI 已标的 hard；不足则从 medium 升；过多则把多余的 hard 降到 medium
   function forceDiff(qs, mode) {
-    var ratio = mode === 'hard' ? 0.7 : 0.4; // hard 占比
+    var ratio = mode === 'hard' ? 0.7 : (mode === 'superhard' ? 1.0 : 0.4); // hard 占比
     var targetHard = Math.round(qs.length * ratio);
     var hardIdx = [];
     qs.forEach(function (q, i) { if (q.diff === 'hard') hardIdx.push(i); else q.diff = 'medium'; });
@@ -19711,11 +19711,23 @@ function bind(el, next) {
       + (p.type === 'choice' ? '（choice 必须给 4 个 options）' : p.type === 'fill' ? '（填空用 _____ 做空）' : '（解答题可无 options）') + '。只输出 JSON 本身，不要前言/后记。\n'
       + LATEX_RULE;
   }
-  // 总审查提示词：整卷合理性审查
-  function chiefReviewSystem(subj, bp) {
-    return '你是考研命题总审查官。对一套并行生成的押题卷做整体合理性审查（题干/答案/解析的严谨性、难度分布、考点覆盖、有无重复或雷同、分数分配）。\n'
-      + '只输出 JSON：{"verdict":"ok|minor|major","issues":[{"qid":N,"issue":"问题描述(≤40字)"}],"summary":"总评(≤80字)"}\n'
-      + '规则：① verdict=ok 表示无实质问题；minor 表示有小瑕疵不影响使用；major 表示有题目存在明显错误或整体失衡；② 只挑真问题，不要为凑数而列。';
+  // 总审查提示词：结构化输出（每题问题 + 整卷 verdict + 总结），便于自动重出
+  function chiefReviewSystem(subj, bp, prefs) {
+    var mode = (prefs && prefs.diff) || 'mix';
+    var isSuper = mode === 'superhard';
+    var hardPct = isSuper ? 100 : (mode === 'hard' ? 70 : 40);
+    var hardDesc = isSuper
+      ? '【超难特训】必须 100% hard。压轴题硬要求：① 创新设问角度（反证/构造/参数讨论/条件隐蔽/反直觉陷阱，不要模板化）② 解法必须考纲内（不超纲），用 2-3 步常规方法可解 ③ 题面与历年真题无 80% 相似。'
+      : (mode === 'hard' ? '70% hard / 30% medium。' : '40% hard / 60% medium。');
+    return '你是考研命题总工程师，对刚并行生成的押题卷做**深度审查**（不是走形式）。\n'
+      + '【难度分布硬约束】' + hardDesc + '检查每题 diff 标注与卷面设定比例偏差。\n'
+      + '【每题结构化审查】对每题必须逐项检查：'
+      + '① 题干严谨性（无歧义/无遗漏条件/无模板化痕迹） ② 答案正确性（独立可验） ③ 解法考纲内性（是否超纲、是否可用标准方法做） ④ hard 压轴题创新性（与历年真题/常见题型库的差异点）\n'
+      + '【输出格式（严格 JSON）】\n'
+      + '{"verdict":"ok|minor|major","hardPct":实际 hard 百分比,"summary":"整卷总评(≤60字)","questions":[{"qid":N,"diff":"easy|medium|hard","创新角度":"<反证构造|参数讨论|条件隐蔽|综合迁移|反直觉|常规(无创新)>","解法大纲":"<2-3步考纲内方法简述>","考纲自检":"<完全考纲内|轻微超纲:xxx>","problems":["<问题1(≤30字)>"],"needsRewrite":true|false}]}\n'
+      + '【判定】verdict=ok：所有 hard 题都有创新角度+解法考纲内+答案正确+比例合规；minor：有 ≤2 题需小幅改写；major：>2 题需重写或有 hard 题模板化/超纲。\n'
+      + '【needsRewrite=true 的题】必须填创新角度+解法大纲+problems（重生时 AI 据此改进）。\n'
+      + '【极重要】只输出 JSON，禁止前言后记；problems 列真实问题（无问题可空数组）。';
   }
   // 通用解包：AI 返回可能是 顶层数组 / 嵌套 data 层 / 字段别名——统一解成单题对象
   function unwrapQuestionObj(raw) {
@@ -20100,27 +20112,116 @@ function bind(el, next) {
   function workerUser(subj, p, bp) {
     return '请按你的任务精制这一道题（题' + p.qid + '：' + p.topic + '）。';
   }
-  // 总审查（本地硬校验 + AI 深度审查）
-  function chiefReview(built, subj, bp, plan) {
-    var local = [];
+  // 总审查（本地硬校验 + AI 深度结构化审查）
+  function chiefReview(built, subj, bp, plan, prefs) {
+    // === 本地硬校验（不依赖 AI，立即拿到） ===
+    var localIssues = [];
+    if (built.questions.length < plan.questions.length) localIssues.push('实出 ' + built.questions.length + ' 题，规划 ' + plan.questions.length + ' 题');
     var hardN = built.questions.filter(function (q) { return q.diff === 'hard'; }).length;
-    if (built.questions.length < plan.questions.length) local.push('实出 ' + built.questions.length + ' 题，规划 ' + plan.questions.length + ' 题');
-    if (plan.questions.filter(function (p) { return p.diff === 'hard'; }).length && hardN === 0) local.push('整卷无 hard 题');
+    var totalN = built.questions.length;
+    if (plan.questions.filter(function (p) { return p.diff === 'hard'; }).length && hardN === 0) localIssues.push('整卷无 hard 题');
     var totalScore = built.questions.reduce(function (a, q) { return a + (q.score || 0); }, 0);
-    if (Math.abs(totalScore - bp.totalScore) > 10) local.push('总分 ' + totalScore + ' ≠ 卷面 ' + bp.totalScore);
+    if (Math.abs(totalScore - bp.totalScore) > 10) localIssues.push('总分 ' + totalScore + ' ≠ 卷面 ' + bp.totalScore);
     var topics = built.questions.map(function (q) { return q.topicName; });
     var dup = topics.filter(function (t, i) { return t && topics.indexOf(t) < i; });
-    if (dup.length) local.push('考点重复：' + dup.join('、'));
+    if (dup.length) localIssues.push('考点重复：' + dup.join('、'));
+    // 难度比例硬校验（按 prefs.diff 模式）
+    var targetHardPct = prefs && prefs.diff === 'superhard' ? 100 : (prefs && prefs.diff === 'hard' ? 70 : 40);
+    var actualHardPct = totalN ? Math.round(hardN / totalN * 100) : 0;
+    var diffOff = Math.abs(actualHardPct - targetHardPct);
+    if (diffOff > 10) localIssues.push('难度比例偏差：实际 ' + actualHardPct + '% hard，设定 ' + targetHardPct + '% hard（差 ' + diffOff + '%）');
+
+    // === AI 深度结构化审查 ===
     var payload = built.questions.map(function (q, i) {
-      return (i + 1) + '. [' + q.diff + '·' + q.score + '分] ' + q.topicName + '\n题干：' + String(q.stem || '').slice(0, 80) + '\n答案：' + String(q.answer || '').slice(0, 60);
+      return (i + 1) + '. [' + (q.diff || 'medium') + '·' + (q.score || 0) + '分] ' + (q.topicName || '?') + '\n题干：' + String(q.stem || '').slice(0, 100) + '\n答案：' + String(q.answer || '').slice(0, 60) + '\n解析：' + String(q.solution || '').slice(0, 60);
     }).join('\n\n');
-    return AI.chatJSON(chiefReviewSystem(subj, bp), '【整卷】\n' + payload, null, { noThink: false, timeout: 300000, cache: false, ctx: 'sprint.chief' }).then(function (rev) {
-      if (!rev) rev = { verdict: local.length ? 'minor' : 'ok', issues: [], summary: '' };
-      var issues = (rev.issues || []).concat(local.map(function (x) { return { qid: 0, issue: x }; }));
-      if (issues.length) parLog('总审查发现：' + issues.map(function (x) { return x.issue; }).join('；'));
-      return { verdict: rev.verdict || (issues.length ? 'minor' : 'ok'), issues: issues, summary: rev.summary || '' };
+    return AI.chatJSON(chiefReviewSystem(subj, bp, prefs), '【整卷 ' + totalN + ' 题 / 设定 ' + targetHardPct + '% hard】\n' + payload, null, { noThink: false, timeout: 300000, cache: false, ctx: 'sprint.chief' }).then(function (rev) {
+      rev = rev || {};
+      // 把本地硬校验合并到对应题目（qid=0 表示整卷级）
+      var aiQs = (rev.questions || []).map(function (q) {
+        if (!q.problems) q.problems = [];
+        return q;
+      });
+      // 整卷级 issues 合并
+      var allProblems = { 0: localIssues.map(function (s) { return s; }) };
+      (rev.questions || []).forEach(function (q) { allProblems[q.qid] = (allProblems[q.qid] || []).concat(q.problems || []); });
+      // needsRewrite 列表
+      var needsRewrite = (rev.questions || []).filter(function (q) { return q.needsRewrite; }).map(function (q) { return q; });
+      if (needsRewrite.length) parLog('总审查标记 ' + needsRewrite.length + ' 题需重写：' + needsRewrite.map(function (q) { return '题' + q.qid; }).join('、'));
+      return {
+        verdict: rev.verdict || (localIssues.length ? 'minor' : 'ok'),
+        hardPct: typeof rev.hardPct === 'number' ? rev.hardPct : actualHardPct,
+        targetHardPct: targetHardPct,
+        summary: rev.summary || '',
+        questions: aiQs,
+        needsRewrite: needsRewrite,
+        localIssues: localIssues
+      };
     }).catch(function () {
-      return { verdict: local.length ? 'minor' : 'ok', issues: local.map(function (x) { return { qid: 0, issue: x }; }), summary: '' };
+      return { verdict: localIssues.length ? 'minor' : 'ok', hardPct: actualHardPct, targetHardPct: targetHardPct, summary: '', questions: [], needsRewrite: [], localIssues: localIssues };
+    });
+  }
+  // 应用总审查微调：对 needsRewrite 的题调 AI 重新生成（带具体问题反馈），限制最多 2 轮
+  function applyReviewAdjustments(built, review, subj, bp, major, prefs, pMap, plog) {
+    if (!review.needsRewrite || !review.needsRewrite.length) return Promise.resolve(built);
+    var log = plog || parLog;
+    log('总审查微调：' + review.needsRewrite.length + ' 题重写中…');
+    var tasks = review.needsRewrite.slice(0, 4).map(function (rq) {  // 单轮最多 4 题（避免总时间失控）
+      var orig = built.questions.find(function (q) { return i = built.questions.indexOf(q); return q && (q.id === rq.qid || built.questions.indexOf(q) + 1 === rq.qid); });
+      if (!orig) return Promise.resolve(null);
+      var problemsTxt = (rq.problems || []).concat(review.localIssues || []).join('；') || '压轴题需创新+解法考纲内+答案正确';
+      var sysRewrite = '你是考研命题专家（严格模式）。' + (prefs && prefs.diff === 'superhard' ? '【超难特训】100% hard·创新·考纲内解法。' : '【压轴题】创新设问+考纲内解法。')
+        + '对原题做**完整重写**（不是小修小补），按反馈问题逐条改进。' + (rq['创新角度'] ? '原题创新角度不足，新题必须采用类似「' + rq['创新角度'] + '」角度。' : '')
+        + (rq['解法大纲'] ? '解法大纲：' + rq['解法大纲'] : '解法大纲：考纲内 2-3 步常规方法。')
+        + '原题问题：' + problemsTxt + '\n'
+        + '只输出 JSON：{"stem":"新题干","type":"choice|solve","options":[...如choice],"answer":"新答案","solution":"含考纲内解法大纲的解析","diff":"hard","score":' + (orig.score || 0) + ',"topicName":"' + (orig.topicName || '') + '"}';
+      var usrRewrite = '原题（仅参考，绝不照抄）：' + String(orig.stem || '').slice(0, 150) + '\n请输出新题 JSON。';
+      return AI.chatJSON(sysRewrite, usrRewrite, null, { noThink: false, timeout: 180000, cache: false, ctx: 'sprint.rewrite' }).then(function (nr) {
+        if (nr && nr.stem) {
+          var fixM = function (s) { return Tex.repairMangledLatex ? Tex.repairMangledLatex(s) : s; };
+          orig.stem = Tex.repairPipeLatex(fixM(nr.stem));
+          if (Array.isArray(nr.options)) orig.options = nr.options.map(function (o) { return Tex.repairPipeLatex(fixM(String(o))); });
+          orig.answer = Tex.repairPipeLatex(fixM(String(nr.answer || '')));
+          orig.solution = Tex.repairPipeLatex(fixM(String(nr.solution || '')));
+          log('总审查微调：题 ' + (built.questions.indexOf(orig) + 1) + ' 已重写');
+          return orig;
+        }
+        return null;
+      }).catch(function () { return null; });
+    });
+    return Promise.all(tasks).then(function () { return built; });
+  }
+  // 展示总审查报告（弹窗 + 按题分组 + 显眼）
+  function showChiefReport(exam, review) {
+    var qs = exam.questions;
+    var rows = (review.questions || []).map(function (rq) {
+      var i = (rq.qid || 1) - 1;
+      var q = qs[i];
+      if (!q) return '';
+      var tag = (q.diff || 'medium') === 'hard' ? '压轴' : (q.diff === 'easy' ? '基础' : '中档');
+      var ang = rq['创新角度'] || '—';
+      var sol = rq['解法大纲'] || '—';
+      var syl = rq['考纲自检'] || '—';
+      var probs = (rq.problems || []).map(function (p) { return '<li>' + U.esc(p) + '</li>'; }).join('');
+      return '<div style="border:1px solid #e5e5e5;border-radius:8px;padding:10px 12px;margin:6px 0">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+        + '<b>题 ' + rq.qid + '</b> <span style="font-size:12px;background:' + ((q.diff === 'hard') ? '#FFE4E1' : '#F0F0F0') + ';padding:1px 8px;border-radius:4px">' + tag + ' · ' + (q.score || 0) + '分</span>'
+        + (rq.needsRewrite ? '<span style="background:#E74C3C;color:#fff;font-size:11px;padding:1px 8px;border-radius:4px">已微调重写</span>' : '<span style="background:#27AE60;color:#fff;font-size:11px;padding:1px 8px;border-radius:4px">通过</span>')
+        + '</div>'
+        + '<div class="muted-sm"><b>创新角度：</b>' + U.esc(ang) + ' &nbsp; <b>考纲：</b>' + U.esc(syl) + '</div>'
+        + '<div class="muted-sm"><b>解法大纲：</b>' + U.esc(sol) + '</div>'
+        + (probs ? '<div style="margin-top:4px;color:#A93226"><b>原题问题：</b><ul style="margin:2px 0 0 18px;padding:0">' + probs + '</ul></div>' : '')
+        + '</div>';
+    }).join('');
+    var localBox = (review.localIssues || []).length
+      ? '<div style="background:#FFF3CD;border:1px solid #FFE69C;border-radius:8px;padding:10px 12px;margin:8px 0"><b>⚠️ 整卷级硬校验：</b><ul style="margin:4px 0 0 18px;padding:0">' + review.localIssues.map(function (s) { return '<li>' + U.esc(s) + '</li>'; }).join('') + '</ul></div>'
+      : '';
+    var summary = review.summary ? '<div class="muted-sm" style="margin:6px 0">' + U.esc(review.summary) + '</div>' : '';
+    Modal.open({
+      title: '🧠 总工程师审查报告 · ' + (review.verdict === 'ok' ? '✅ 通过' : review.verdict === 'minor' ? '⚠️ 轻瑕' : '🔴 重大') + ' · ' + (review.hardPct || 0) + '% hard（目标 ' + (review.targetHardPct || 0) + '%）',
+      wide: true, dismissable: true,
+      html: summary + localBox + rows + (review.needsRewrite && review.needsRewrite.length ? '<div class="muted-sm" style="margin-top:6px">🔄 已自动微调 ' + review.needsRewrite.length + ' 道题（创新角度/解法大纲/答案已重生成）</div>' : ''),
+      actions: [{ label: '了解' }]
     });
   }
   // 并行出卷总入口
@@ -20161,10 +20262,18 @@ function bind(el, next) {
       }).then(function (plan) {
         // 阶段2+3 合并：plan 闭包内调 chiefReview（避免上 then 的 plan 不可见 → ReferenceError）
         return runParallelQuestions(plan, subj, bp, major, prefs).then(function (built) {
-          // 阶段3：总审查
+          // 阶段3：总审查（结构化 + 自动重写有问题的题 + 显眼展示报告）
           parLog('全部题目出题完毕，总工程师开始审查…');
-          return chiefReview(built, subj, bp, plan).then(function (review) {
-            if (review.verdict === 'ok') parLog('总审查通过（' + built.questions.length + ' 题均合理）');
+          return chiefReview(built, subj, bp, plan, prefs).then(function (review) {
+            parLog('总审查：verdict=' + review.verdict + ' · ' + (review.hardPct || 0) + '% hard（目标 ' + (review.targetHardPct || 0) + '%）· ' + (review.summary || ''));
+            // 阶段3.5：总工程师微调（自动重写 needsRewrite 的题）
+            if (review.needsRewrite && review.needsRewrite.length) {
+              parLog('总工程师微调：' + review.needsRewrite.length + ' 题按审查反馈重写…');
+              return applyReviewAdjustments(built, review, subj, bp, major, prefs, plan).then(function () {
+                parLog('总工程师微调完成');
+                return { built: built, review: review };
+              });
+            }
             return { built: built, review: review };
           });
         });
@@ -20187,10 +20296,22 @@ function bind(el, next) {
         exam = {
           id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
           questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
-          createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel'
+          createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel',
+          chiefReview: out.review  // 保存总审查结果（用于稍后随时打开报告）
         };
         Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
-        Toast.success('并行押题卷已生成：' + exam.title + '（' + exam.questions.length + '题' + (out.review.verdict === 'ok' ? '·审查通过' : out.review.verdict === 'minor' ? '·有小瑕疵已标注' : '·建议复核') + '）');
+        // 显眼提示：Toast 弹一个长一点的（4 秒），文案带"看报告"按钮
+        var nRewrite = (out.review.needsRewrite || []).length;
+        Toast.show(
+          '🧠 ' + exam.title + ' · ' + exam.questions.length + '题 · ' + out.review.hardPct + '% hard · ' +
+          (out.review.verdict === 'ok' ? '✅ 审查通过' : out.review.verdict === 'minor' ? '⚠️ ' + nRewrite + '题已微调' : '🔴 ' + nRewrite + '题已微调·建议复核') +
+          (nRewrite ? '（已自动重写）' : ''),
+          out.review.verdict === 'ok' ? 'success' : 'info', 4500
+        );
+        // 总审查报告按钮：在主区显示（考试页顶部加按钮）
+        setTimeout(function () {
+          if (window.__sprintReportExamId === exam.id) showChiefReport(exam, out.review);
+        }, 600);
         if (currentEl) render(currentEl);
         openExam(exam.id, currentEl || el);
         return exam;
@@ -20569,6 +20690,7 @@ function bind(el, next) {
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-back">← 返回智能押题</button>'
       + '<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b>📝 ' + U.esc(exam.title) + '</b>'
       + '<span class="muted-sm" style="margin-left:6px">' + qn + '题 · 满分' + totalScore + ' · ' + (done ? '已完成' : '限时' + (exam.timeLimit || 180) + '分钟') + '</span></span>'
+      + (exam.chiefReview ? '<button class="btn btn-ghost btn-sm" id="sp-exam-report" title="总工程师审查报告：每题创新角度+解法大纲+考纲自检+问题清单" style="border:1px solid #faad14;color:#d48806">🧠 总审查报告</button>' : '')
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-print">🖨 打印试卷</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-dl" title="保存为独立 HTML 文件（公式已渲染，可随时打开再打印）">⬇️ 下载</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-star" title="标星收藏">' + (exam.starred ? '⭐' : '☆') + '</button>'
@@ -20598,6 +20720,13 @@ function bind(el, next) {
       Store.update(function (s) { var e = (s.sprintData.mockExams || []).find(function (x) { return x.id === examId; }); if (e) e.starred = !e.starred; });
       Toast.show(exam.starred ? '已取消标星' : '⭐ 已标星收藏', 'info', 1200);
       if (currentEl) render(currentEl);
+    };
+    var reportBtn = el.querySelector('#sp-exam-report');
+    if (reportBtn) reportBtn.onclick = function () {
+      var st = Store.get();
+      var ex = ((st.sprintData && st.sprintData.mockExams) || []).find(function (x) { return x.id === examId; });
+      if (ex && ex.chiefReview) showChiefReport(ex, ex.chiefReview);
+      else Toast.warn('本卷无总审查报告（可能是单卷模式生成）');
     };
     var submit = el.querySelector('#sp-exam-submit');
     if (submit) submit.onclick = function () { gradeExam(examId, el); };
