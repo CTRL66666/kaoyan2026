@@ -19798,9 +19798,13 @@ function bind(el, next) {
   // ---------- 状态面板（题号网格可视化） ----------
   var parPanel = null;   // {startTs, doneN, totalN, questions, cells:{qid->{status,ms,err}}, sched}
   function parPanelHtml(questions) {
+    // 【修复】日志区移到顶部（题目卡片上方），用户不滚动也能看到审查/复核实时反馈
     return '<div class="par-panel">'
       + '<div class="par-head" id="par-head" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px"></div>'
-      + '<div class="par-progress" style="height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:8px 0 12px"><div class="par-progress-fill" id="par-progress-fill" style="height:100%;width:0%;transition:width .4s"></div></div>'
+      + '<div class="par-progress" style="height:6px;background:#e5e5e5;border-radius:3px;overflow:hidden;margin:8px 0 6px"><div class="par-progress-fill" id="par-progress-fill" style="height:100%;width:0%;transition:width .4s"></div></div>'
+      + '<details class="par-log-wrap" open style="margin:6px 0 12px;border:1px solid #e5e5e5;border-radius:6px;background:#fafafa"><summary style="cursor:pointer;padding:6px 10px;font-size:12px;font-weight:500;user-select:none;color:#1a1a1a">📋 实时日志（默认展开 · 点击折叠）</summary>'
+      + '<div class="par-log" id="par-log" style="max-height:160px;overflow:auto;padding:4px 8px;font-size:11.5px;line-height:1.5;color:#1a1a1a"></div>'
+      + '</details>'
       + '<div class="par-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px">'
       + questions.map(function (p) {
         return '<div class="par-cell par-queued" id="par-cell-' + p.qid + '" style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;background:var(--bg-muted);border-left:3px solid var(--line);transition:all .25s" data-err="">'
@@ -19808,9 +19812,6 @@ function bind(el, next) {
           + '<div class="par-cell-topic" style="margin:2px 0;font-size:11px;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + U.esc(p.topic) + '</div>'
           + '<div class="par-cell-status" style="font-size:11px;color:var(--text-muted);white-space:normal;word-break:break-all">⏳ 排队</div></div>';
       }).join('') + '</div>'
-      + '<details class="par-log-wrap" open style="margin-top:12px"><summary style="cursor:pointer;padding:6px 10px;background:var(--bg-muted);border-radius:4px;font-size:12px;user-select:none">📋 出题日志（默认展开 · 点击折叠）</summary>'
-      + '<div class="par-log" id="par-log" style="margin-top:6px;font-size:12px;max-height:160px;overflow:auto;padding:4px 8px"></div>'
-      + '</details>'
       + '</div>';
   }
   function parPaint(qid, status, ms, err, q) {
@@ -19837,7 +19838,8 @@ function bind(el, next) {
       }
     } else if (vb) { vb.remove(); }
   }
-  // 阶段可视化：出题 → 总审查 → 复核 → 完成（面板头部 + 每题格子状态）
+  // 阶段可视化：出题 → 总审查 → 微调 → 复核 → 完成（面板头部 + 每题格子状态）
+  // 审查/微调/复核阶段进度条做"流动动画"（indeterminate），表示在思考但进度未知
   var PAR_STAGE = null;   // {name, label, color}
   function parStage(name, label, color) {
     if (!parPanel) return;
@@ -19847,6 +19849,17 @@ function bind(el, next) {
       var stageHtml = '<span class="tag" style="background:' + (color || '#096dd9') + ';color:#fff;padding:2px 10px;font-size:12px;font-weight:500">' + (label || name) + '</span>';
       // 保留出题统计标签，替换"状态实时更新中…"
       head.innerHTML = head.innerHTML.replace(/<span class="tag">状态实时更新中…<\/span>/, stageHtml);
+    }
+    // 进度条：审查/微调/复核阶段 → 流动动画 + 阶段色；出题阶段 → 普通百分比
+    var fill = document.getElementById('par-progress-fill');
+    if (fill) {
+      if (name === 'review' || name === 'rewrite' || name === 'verify') {
+        fill.classList.add('par-stage-thinking');
+        fill.style.color = (color || '#722ed1');
+      } else {
+        fill.classList.remove('par-stage-thinking');
+        fill.style.color = '';
+      }
     }
     // 标题更新（独立面板 #par-panel-title；旧版挂在 modal 上，兼容保留）
     var panelTitle = document.getElementById('par-panel-title');
@@ -19936,7 +19949,7 @@ function bind(el, next) {
     if (!parPanel) return;
     var log = document.getElementById('par-log');
     if (!log) return;
-    var style = isError ? ' style="color:var(--danger);font-weight:500;white-space:normal;word-break:break-all"' : '';
+    var style = isError ? ' style="color:#cf1322;font-weight:500;white-space:normal;word-break:break-all"' : '';
     log.insertAdjacentHTML('beforeend', '<div' + style + '>· ' + U.esc(msg) + '</div>');
     log.scrollTop = log.scrollHeight;
   }
@@ -19951,7 +19964,7 @@ function bind(el, next) {
     // 【修复透明】panel 局部 <style> 兜底：.tag 默认深灰+浅灰在白色 panel 上几乎不可见；.btn-ghost 透明背景在浅色场景也褪色。
     // 这里给 panel 作用域内的 .tag/.btn 一个明确的浅灰底+深色字基线，避免依赖全局主题变量在子文档树里被解析成低对比度。
     panel.style.cssText = 'position:fixed;right:16px;bottom:16px;width:430px;max-width:calc(100vw - 32px);max-height:76vh;overflow:auto;background:#ffffff;color:#1a1a1a;border:1px solid #d9d9d9;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.18);z-index:10000;padding:12px 14px';
-    panel.innerHTML = '<style>#par-fixed-panel .tag{background:#f0f0f0;color:#1a1a1a;border:1px solid #d0d0d0;padding:2px 8px;border-radius:10px;font-size:11px;display:inline-block;line-height:1.5}#par-fixed-panel .btn-ghost{background:#ffffff;color:#1a1a1a;border:1px solid #d0d0d0}#par-fixed-panel .btn{color:#1a1a1a;font-weight:500}</style>'
+    panel.innerHTML = '<style>#par-fixed-panel .tag{background:#f0f0f0;color:#1a1a1a;border:1px solid #d0d0d0;padding:2px 8px;border-radius:10px;font-size:11px;display:inline-block;line-height:1.5}#par-fixed-panel .btn-ghost{background:#ffffff;color:#1a1a1a;border:1px solid #d0d0d0}#par-fixed-panel .btn{color:#1a1a1a;font-weight:500}#par-fixed-panel .par-progress-fill{transition:width .4s}#par-fixed-panel .par-progress-fill.par-stage-thinking{width:100%!important;background:linear-gradient(90deg,transparent,currentColor,transparent)!important;background-size:200% 100%!important;animation:parIndeterminate 1.5s linear infinite}@keyframes parIndeterminate{0%{background-position:-100% 0}100%{background-position:100% 0}}</style>'
       + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
       + '<b id="par-panel-title" style="font-size:13px;color:#1a1a1a">⚡ 并发出卷中</b>'
       + '<span style="flex:1"></span>'
@@ -20259,10 +20272,20 @@ function bind(el, next) {
     if (diffOff > 10) localIssues.push('难度比例偏差：实际 ' + actualHardPct + '% hard，设定 ' + targetHardPct + '% hard（差 ' + diffOff + '%）');
 
     // === AI 深度结构化审查 ===
+    // 【修复体验断链】AI 审查可能耗时数分钟，实时反馈避免用户以为卡死：阶段计时器每 20s 提示，本地硬校验先报告，AI 返回/超时/失败都明确 log
+    parLog('🔍 本地硬校验：' + localIssues.length + ' 项 · 比例 ' + actualHardPct + '% hard（目标 ' + targetHardPct + '%）' + (localIssues.length ? '（发现：' + localIssues.slice(0, 3).join('；') + (localIssues.length > 3 ? '…' : '') + '）' : '（无问题）'));
+    parLog('🤖 启动 AI 总审查（思考模式，最久 ~5min，请耐心等待…））');
+    var chiefT0 = Date.now();
+    var stageTimer = setInterval(function () {
+      var el = Math.round((Date.now() - chiefT0) / 1000);
+      parLog('⏱ AI 总审查已思考 ' + el + 's（满 300s 将自动降级本地校验）…');
+    }, 20000);
     var payload = built.questions.map(function (q, i) {
       return (i + 1) + '. [' + (q.diff || 'medium') + '·' + (q.score || 0) + '分] ' + (q.topicName || '?') + '\n题干：' + String(q.stem || '').slice(0, 100) + '\n答案：' + String(q.answer || '').slice(0, 60) + '\n解析：' + String(q.solution || '').slice(0, 60);
     }).join('\n\n');
     return AI.chatJSON(chiefReviewSystem(subj, bp, prefs), '【整卷 ' + totalN + ' 题 / 设定 ' + targetHardPct + '% hard】\n' + payload, null, { noThink: false, timeout: 300000, cache: false, ctx: 'sprint.chief' }).then(function (rev) {
+      clearInterval(stageTimer);
+      parLog('✓ AI 总审查返回（用时 ' + Math.round((Date.now() - chiefT0) / 1000) + 's）');
       rev = rev || {};
       // 把本地硬校验合并到对应题目（qid=0 表示整卷级）
       var aiQs = (rev.questions || []).map(function (q) {
@@ -20290,7 +20313,9 @@ function bind(el, next) {
         needsRewrite: needsRewrite,
         localIssues: localIssues
       };
-    }).catch(function () {
+    }).catch(function (e) {
+      clearInterval(stageTimer);
+      parLog('⚠ AI 总审查超时/失败（用时 ' + Math.round((Date.now() - chiefT0) / 1000) + 's）→ 自动降级本地校验兜底：' + (e && e.message || '未知'));
       return { verdict: localIssues.length ? 'minor' : 'ok', hardPct: actualHardPct, targetHardPct: targetHardPct, summary: '', questions: [], needsRewrite: [], localIssues: localIssues };
     });
   }
@@ -20298,13 +20323,14 @@ function bind(el, next) {
   function applyReviewAdjustments(built, review, subj, bp, major, prefs, pMap, plog) {
     if (!review.needsRewrite || !review.needsRewrite.length) return Promise.resolve(built);
     var log = plog || parLog;
-    log('总审查微调：' + review.needsRewrite.length + ' 题重写中…');
-    var tasks = review.needsRewrite.slice(0, 4).map(function (rq) {  // 单轮最多 4 题（避免总时间失控）
-      // qid 是 1-based（总审查 prompt 里题目按 1 开始编号），built.questions 是 0-based 数组
-      // 修复：用 (qid-1) 直接索引，避免之前 find 回调里 `return i = ...` 立即返回导致永远命中第 2 题
+    var totalRewrite = review.needsRewrite.length;
+    log('🔧 总工程师微调：' + totalRewrite + ' 题需重写（每题 ~30-60s）…');
+    var tasks = review.needsRewrite.slice(0, 4).map(function (rq, idx) {  // 单轮最多 4 题（避免总时间失控）
       var qi = (Number(rq.qid) || 1) - 1;
-      var orig = built.questions[qi] || built.questions[qi + 1] || null;  // 兜底：qid 若为 0-based 则 +1 补偿
+      var orig = built.questions[qi] || built.questions[qi + 1] || null;
       if (!orig) return Promise.resolve(null);
+      log('  ✏ 正在重写题 ' + (qi + 1) + '（' + (idx + 1) + '/' + Math.min(4, totalRewrite) + '）…');
+      var rewriteT0 = Date.now();
       var problemsTxt = (rq.problems || []).concat(review.localIssues || []).join('；') || '压轴题需创新+解法考纲内+答案正确';
       var sysRewrite = '你是考研命题专家（严格模式）。' + (prefs && prefs.diff === 'superhard' ? '【超难特训】100% hard·创新·考纲内解法。' : '【压轴题】创新设问+考纲内解法。')
         + '对原题做**完整重写**（不是小修小补），按反馈问题逐条改进。' + (rq['创新角度'] ? '原题创新角度不足，新题必须采用类似「' + rq['创新角度'] + '」角度。' : '')
@@ -20322,13 +20348,13 @@ function bind(el, next) {
           // 星级规范化：AI 重写给 star 则同步 diff；未给保持原 star
           var ns = Math.floor(Number(nr.star));
           if (ns >= 1 && ns <= 5) { orig.star = ns; orig.diff = starToDiff(ns); }
-          log('总审查微调：题 ' + (built.questions.indexOf(orig) + 1) + ' 已重写（★' + (orig.star || '-') + '）');
+          log('总审查微调：题 ' + (built.questions.indexOf(orig) + 1) + ' 已重写（★' + (orig.star || '-') + '，用时 ' + Math.round((Date.now() - rewriteT0) / 1000) + 's）');
           return orig;
         }
         return null;
       }).catch(function () { return null; });
     });
-    return Promise.all(tasks).then(function () { return built; });
+    return Promise.all(tasks).then(function () { log('🔧 总工程师微调完成（' + totalRewrite + ' 题已重写）'); return built; }).catch(function (e) { log('⚠ 总工程师微调异常：' + (e && e.message || e)); return built; });
   }
   // 展示总审查报告（弹窗 + 按题分组 + 显眼 + 答案复核结果）
   // 【收尾工程师闭环】用户可对单题多次优化（上限 5 次），每次带具体意见重写；保留 originalStem 可还原
