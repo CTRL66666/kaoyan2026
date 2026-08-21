@@ -19475,17 +19475,44 @@ function bind(el, next) {
   // 【修复】解析层强制按难度档重新分配每题 diff（用户实际反馈：选了强化仍全部是 hard → AI 过度偏向）
   //  mix（标准）→ medium 60% + hard 40%；hard（强化）→ medium 30% + hard 70%；superhard → 100% hard
   // 策略：保留 AI 已标的 hard；不足则从 medium 升；过多则把多余的 hard 降到 medium
+  // 【五档难度星级】star 取 1~5，难度均分五档；diff 三档由 star 派生（兼容 forceDiff/hardPct/作答率等既有逻辑）
+  //  ★1 基础识记/单公式直用 · ★2 基础运算/两步常规 · ★3 中档综合/多知识点常规综合 · ★4 压轴创新/隐蔽条件或参数讨论 · ★5 压轴极高/多步综合+构造反证
+  function starToDiff(star) {
+    var s = Math.max(1, Math.min(5, Math.floor(Number(star) || 3)));
+    return s <= 2 ? 'easy' : s === 3 ? 'medium' : 'hard';
+  }
+  // 取题的星级：优先 q.star（1~5），旧数据无 star 时由 diff 反推（easy→2, medium→3, hard→5，与旧显示一致）
+  function starOf(q) {
+    var s = Number(q && q.star);
+    if (s >= 1 && s <= 5) return Math.round(s);
+    return ({ easy: 2, medium: 3, hard: 5 })[(q && q.diff) || 'medium'] || 3;
+  }
   function forceDiff(qs, mode) {
     var ratio = mode === 'hard' ? 0.7 : (mode === 'superhard' ? 1.0 : 0.4); // hard 占比
     var targetHard = Math.round(qs.length * ratio);
-    var hardIdx = [];
-    qs.forEach(function (q, i) { if (q.diff === 'hard') hardIdx.push(i); else q.diff = 'medium'; });
-    var medIdx = qs.map(function (_q, i) { return hardIdx.indexOf(i) >= 0 ? -1 : i; }).filter(function (i) { return i >= 0; });
-    while (hardIdx.length < targetHard && medIdx.length) hardIdx.push(medIdx.shift());
-    while (hardIdx.length > targetHard && hardIdx.length > targetHard - medIdx.length) {
-      var down = hardIdx.shift(); qs[down].diff = 'medium';
+    // 星级驱动：hard = star>=4；不足目标 → star 3 优先升 ★4，仍不足再从 star 1~2 升（superhard 需 100%）；超出 → 把 ★4 降回 ★3（★5 压轴保留）
+    var hardIdx = [], up3 = [], upLow = [];
+    qs.forEach(function (q, i) {
+      var s = starOf(q);
+      if (s >= 4) hardIdx.push(i);
+      else if (s === 3) up3.push(i);
+      else upLow.push(i);
+    });
+    while (hardIdx.length < targetHard && (up3.length || upLow.length)) {
+      var up = up3.length ? up3.shift() : upLow.shift();
+      qs[up].star = 4;
+      hardIdx.push(up);
     }
-    hardIdx.forEach(function (i) { qs[i].diff = 'hard'; });
+    while (hardIdx.length > targetHard) {
+      var downs = hardIdx.filter(function (i) { return starOf(qs[i]) === 4; });
+      if (!downs.length) downs = hardIdx.filter(function (i) { return starOf(qs[i]) >= 5; });  // ★4 降完仍超 → 降 ★5（保比例）
+      if (!downs.length) break;
+      var down = downs[0];
+      qs[down].star = 3;
+      hardIdx.splice(hardIdx.indexOf(down), 1);
+    }
+    // 同步 diff（显示/作答率/审查逻辑都读 diff）
+    qs.forEach(function (q) { q.star = starOf(q); q.diff = starToDiff(q.star); });
     return qs;
   }
   // 生成押题卷配置弹窗
@@ -19596,7 +19623,7 @@ function bind(el, next) {
         + bp.style + '。\n'
         + (bp.example ? '【参考命题示例】' + bp.example + '\n\n' : '\n')
         + '【输出格式】只输出一个合法 JSON 对象，**不要任何前言/后记/markdown 围栏/代码块标记**：\n'
-        + '{"title":"押题卷标题","subject":"' + subj + '","timeLimit":' + bp.timeLimit + ',"questions":[{"stem":"题干（公式用 $...$ LaTeX）","type":"choice|fill|solve|essay","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"标准答案","solution":"完整解析（LaTeX）","diff":"easy|medium|hard","score":分值,"topicName":"对应考点"}]}\n'
+        + '{"title":"押题卷标题","subject":"' + subj + '","timeLimit":' + bp.timeLimit + ',"questions":[{"stem":"题干（公式用 $...$ LaTeX）","type":"choice|fill|solve|essay","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"标准答案","solution":"完整解析（LaTeX）","diff":"easy|medium|hard","star":1-5,"score":分值,"topicName":"对应考点"}]}\n'
         + '硬约束：① 题目数量严格按上面结构；② 每题 score 总和 = ' + bp.totalScore + '；③ choice/fill 题 score 固定（小分），solve/essay 按结构分；④ 数组必须完整闭合（绝不能输出到一半被截断）；⑤ 字段可空字符串但不能省略引号。\n'
         + LATEX_RULE;
 
@@ -19634,7 +19661,14 @@ function bind(el, next) {
             // 之前只调 repairPipeLatex，AI 输出里 \to \tau \top \theta \tan \tilde 等
             // 含 \t \f \n 合法 JSON 转义的 LaTeX 命令会被破损成 TAB/FF 字符原样落库。
             var fixMangled = function (s) { return Tex.repairMangledLatex ? Tex.repairMangledLatex(s) : s; };
-            return { stem: Tex.repairPipeLatex(fixMangled(q.stem || '')), type: q.type || 'solve', options: (q.options || []).map(function (o) { return Tex.repairPipeLatex(fixMangled(String(o))); }), answer: Tex.repairPipeLatex(fixMangled(q.answer || '')), solution: Tex.repairPipeLatex(fixMangled(q.solution || '')), diff: (q.diff === 'hard' ? 'hard' : 'medium'), score: q.score || 0, topicName: q.topicName || '' };
+            return (function (qq) {
+              var rawStar = Math.floor(Number(qq.star));
+              var star = (rawStar >= 1 && rawStar <= 5) ? rawStar : null;
+              var diff = qq.diff === 'hard' ? 'hard' : (qq.diff === 'easy' ? 'easy' : 'medium');
+              if (star) diff = starToDiff(star);
+              else star = ({ easy: 2, medium: 3, hard: 5 })[diff] || 3;
+              return { stem: Tex.repairPipeLatex(fixMangled(qq.stem || '')), type: qq.type || 'solve', options: (qq.options || []).map(function (o) { return Tex.repairPipeLatex(fixMangled(String(o))); }), answer: Tex.repairPipeLatex(fixMangled(qq.answer || '')), solution: Tex.repairPipeLatex(fixMangled(qq.solution || '')), diff: diff, star: star, score: qq.score || 0, topicName: qq.topicName || '' };
+            })(q);
           }),
           timeLimit: result.timeLimit || 180, createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null
         };
@@ -19706,8 +19740,9 @@ function bind(el, next) {
       + '【科目】' + (subj === 'math' ? '数学' : subj === 'ctrl' ? '专业课（' + major + '）' : subj === 'pol' ? '政治' : '英语') + '\n'
       + '【卷面风格】' + bp.style + '\n'
       + (bp.example ? '【参考命题示例】' + bp.example + '\n' : '')
-      + '【真题风格硬要求】① 题干有信息密度，严禁一眼看出答案的直白题；② 选择题干扰项具迷惑性（符号/单位/概念张冠李戴/绝对化）；③ 解答题多步推导，solution 给完整步骤链；④ 创新设问（跨章节综合/反证/临界参数/条件隐蔽化），别出语料库套路题；⑤ solution 写"陷阱识别→正确思路→严密步骤"。\n'
-      + '【输出】只输出 JSON：{"stem":"题干(公式用 $...$ LaTeX)","type":"' + p.type + '","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"标准答案","solution":"完整解析(LaTeX)","diff":"' + p.diff + '","score":' + p.score + ',"topicName":"' + p.topic + '"}'
+            + '【真题风格硬要求】① 题干有信息密度，严禁一眼看出答案的直白题；② 选择题干扰项具迷惑性（符号/单位/概念张冠李戴/绝对化）；③ 解答题多步推导，solution 给完整步骤链；④ 创新设问（跨章节综合/反证/临界参数/条件隐蔽化），别出语料库套路题；⑤ solution 写"陷阱识别→正确思路→严密步骤"。\n'
+      + '【难度星级（五档均分）】按规划难度给 star 1~5：★1 基础识记/单公式直用 · ★2 基础运算/两步常规 · ★3 中档综合/多知识点常规综合 · ★4 压轴创新/隐蔽条件或参数讨论 · ★5 压轴极高/多步综合+构造或反证。当前规划难度 ' + p.diff + '（' + (p.diff === 'hard' ? '★4~★5' : p.diff === 'medium' ? '★3' : '★1~★2') + '），据此定 star。\n'
+      + '【输出】只输出 JSON：{"stem":"题干(公式用 $...$ LaTeX)","type":"' + p.type + '","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"标准答案","solution":"完整解析(LaTeX)","diff":"' + p.diff + '","star":1-5,"score":' + p.score + ',"topicName":"' + p.topic + '"}'
       + (p.type === 'choice' ? '（choice 必须给 4 个 options）' : p.type === 'fill' ? '（填空用 _____ 做空）' : '（解答题可无 options）') + '。只输出 JSON 本身，不要前言/后记。\n'
       + LATEX_RULE;
   }
@@ -19724,7 +19759,7 @@ function bind(el, next) {
       + '【每题结构化审查】对每题必须逐项检查：'
       + '① 题干严谨性（无歧义/无遗漏条件/无模板化痕迹） ② 答案正确性（独立可验） ③ 解法考纲内性（是否超纲、是否可用标准方法做） ④ hard 压轴题创新性（与历年真题/常见题型库的差异点）\n'
       + '【输出格式（严格 JSON）】\n'
-      + '{"verdict":"ok|minor|major","hardPct":实际 hard 百分比,"summary":"整卷总评(≤60字)","questions":[{"qid":N,"diff":"easy|medium|hard","创新角度":"<反证构造|参数讨论|条件隐蔽|综合迁移|反直觉|常规(无创新)>","解法大纲":"<2-3步考纲内方法简述>","考纲自检":"<完全考纲内|轻微超纲:xxx>","problems":["<问题1(≤30字)>"],"needsRewrite":true|false}]}\n'
+      + '{"verdict":"ok|minor|major","hardPct":实际 hard 百分比,"summary":"整卷总评(≤60字)","questions":[{"qid":N,"diff":"easy|medium|hard","star":按难度修正后的星级1-5,"创新角度":"<反证构造|参数讨论|条件隐蔽|综合迁移|反直觉|常规(无创新)>","解法大纲":"<2-3步考纲内方法简述>","考纲自检":"<完全考纲内|轻微超纲:xxx>","problems":["<问题1(≤30字)>"],"needsRewrite":true|false}]}\n'
       + '【判定】verdict=ok：所有 hard 题都有创新角度+解法考纲内+答案正确+比例合规；minor：有 ≤2 题需小幅改写；major：>2 题需重写或有 hard 题模板化/超纲。\n'
       + '【needsRewrite=true 的题】必须填创新角度+解法大纲+problems（重生时 AI 据此改进）。\n'
       + '【极重要】只输出 JSON，禁止前言后记；problems 列真实问题（无问题可空数组）。';
@@ -19745,12 +19780,18 @@ function bind(el, next) {
     if (!stem) return null;
     // 落库前双修复：同 741 行注释
     var fixMangled = function (s) { return Tex.repairMangledLatex ? Tex.repairMangledLatex(s) : s; };
+    // 难度星级规范化：AI 给 star(1~5) → diff 由它派生（保证显示/比例一致）；未给 → diff 反推 star（旧行为兼容）
+    var rawStar = Math.floor(Number(o.star));
+    var star = (rawStar >= 1 && rawStar <= 5) ? rawStar : null;
+    var diff = o.diff === 'hard' ? 'hard' : (o.diff === 'easy' ? 'easy' : 'medium');
+    if (star) diff = starToDiff(star);
+    else star = ({ easy: 2, medium: 3, hard: 5 })[diff] || 3;
     return {
       qid: o.qid || p.qid,                  // 保留题号（parPaint/边出边做都依赖 qid 定位）
       stem: Tex.repairPipeLatex(fixMangled(String(stem))), type: o.type === 'choice' ? 'choice' : (p.type || 'solve'),
       options: Array.isArray(o.options) ? o.options.slice(0, 4).map(function (o2) { return Tex.repairPipeLatex(fixMangled(String(o2))); }) : [],
       answer: Tex.repairPipeLatex(fixMangled(String(o.answer || ''))), solution: Tex.repairPipeLatex(fixMangled(String(o.solution || ''))),
-      diff: o.diff === 'hard' ? 'hard' : 'medium',
+      diff: diff, star: star,
       score: Number(o.score) || p.score || 0, topicName: String(o.topicName || p.topic || '')
     };
   }
@@ -20226,6 +20267,12 @@ function bind(el, next) {
       // 把本地硬校验合并到对应题目（qid=0 表示整卷级）
       var aiQs = (rev.questions || []).map(function (q) {
         if (!q.problems) q.problems = [];
+        // 总审查修正星级 → 同步回题目（diff 派生保持一致）
+        var rs = Math.floor(Number(q.star));
+        if (rs >= 1 && rs <= 5) {
+          var tq = built.questions[(Number(q.qid) || 1) - 1];
+          if (tq) { tq.star = rs; tq.diff = starToDiff(rs); }
+        }
         return q;
       });
       // 整卷级 issues 合并
@@ -20263,7 +20310,7 @@ function bind(el, next) {
         + '对原题做**完整重写**（不是小修小补），按反馈问题逐条改进。' + (rq['创新角度'] ? '原题创新角度不足，新题必须采用类似「' + rq['创新角度'] + '」角度。' : '')
         + (rq['解法大纲'] ? '解法大纲：' + rq['解法大纲'] : '解法大纲：考纲内 2-3 步常规方法。')
         + '原题问题：' + problemsTxt + '\n'
-        + '只输出 JSON：{"stem":"新题干","type":"choice|solve","options":[...如choice],"answer":"新答案","solution":"含考纲内解法大纲的解析","diff":"hard","score":' + (orig.score || 0) + ',"topicName":"' + (orig.topicName || '') + '"}';
+        + '只输出 JSON：{"stem":"新题干","type":"choice|solve","options":[...如choice],"answer":"新答案","solution":"含考纲内解法大纲的解析","diff":"hard","star":' + (orig.star || 5) + ',"score":' + (orig.score || 0) + ',"topicName":"' + (orig.topicName || '') + '"}';
       var usrRewrite = '原题（仅参考，绝不照抄）：' + String(orig.stem || '').slice(0, 150) + '\n请输出新题 JSON。';
       return AI.chatJSON(sysRewrite, usrRewrite, null, { noThink: false, timeout: 180000, cache: false, ctx: 'sprint.rewrite' }).then(function (nr) {
         if (nr && nr.stem) {
@@ -20272,7 +20319,10 @@ function bind(el, next) {
           if (Array.isArray(nr.options)) orig.options = nr.options.map(function (o) { return Tex.repairPipeLatex(fixM(String(o))); });
           orig.answer = Tex.repairPipeLatex(fixM(String(nr.answer || '')));
           orig.solution = Tex.repairPipeLatex(fixM(String(nr.solution || '')));
-          log('总审查微调：题 ' + (built.questions.indexOf(orig) + 1) + ' 已重写');
+          // 星级规范化：AI 重写给 star 则同步 diff；未给保持原 star
+          var ns = Math.floor(Number(nr.star));
+          if (ns >= 1 && ns <= 5) { orig.star = ns; orig.diff = starToDiff(ns); }
+          log('总审查微调：题 ' + (built.questions.indexOf(orig) + 1) + ' 已重写（★' + (orig.star || '-') + '）');
           return orig;
         }
         return null;
@@ -20346,7 +20396,8 @@ function bind(el, next) {
     var bp = examBlueprint(subj);
     var sys = '你是考研命题优化专家（严格模式）。对原题按用户反馈意见做**完整重写**（不是小修小补），保持题型/分值/考点大致不变（除非用户意见明确要求改）。\n'
       + '【硬约束】① 解法必须考纲内（不超纲）② 压轴题需新角度（反证/构造/参数讨论/条件隐蔽等）③ 题干无歧义 ④ 答案正确完整 ⑤ solution 含考纲内解法大纲。\n'
-      + '只输出 JSON：{"stem":"新题干","type":"choice|solve","options":[...],"answer":"新答案","solution":"含考纲内解法大纲","diff":"...","score":N,"topicName":"..."}。不要任何多余文字。';
+      + '【难度星级】按实际难度给 star 1~5（★1 基础识记 · ★2 基础运算 · ★3 中档综合 · ★4 压轴创新 · ★5 压轴极高多步综合+构造反证），原题当前 ★' + (q.star || 3) + '，重写后可保持或按意见调整。\n'
+      + '只输出 JSON：{"stem":"新题干","type":"choice|solve","options":[...],"answer":"新答案","solution":"含考纲内解法大纲","diff":"...","star":1-5,"score":N,"topicName":"..."}。不要任何多余文字。';
     var usr = '原题（仅参考，绝不照抄）：' + String(q.stem || '').slice(0, 300) + '\n当前答案：' + String(q.answer || '').slice(0, 100) + '\n当前解析：' + String(q.solution || '').slice(0, 100) + '\n本次意见：' + opinion + '\n历次意见：' + (q.opinionHistory || []).map(function (o, i) { return (i + 1) + '. ' + o; }).join('\n');
     Toast.show('🔧 正在按意见重写此题（' + (q.optimizeCount + 1) + '/5 次）…', 'info', 2500);
     AI.chatJSON(sys, usr, null, { noThink: false, timeout: 180000, cache: false, ctx: 'sprint.optimize' }).then(function (nr) {
@@ -20356,6 +20407,9 @@ function bind(el, next) {
         if (Array.isArray(nr.options)) q.options = nr.options.map(function (o) { return Tex.repairPipeLatex(fixM(String(o))); });
         q.answer = Tex.repairPipeLatex(fixM(String(nr.answer || '')));
         q.solution = Tex.repairPipeLatex(fixM(String(nr.solution || '')));
+        // 星级规范化：AI 重写给 star 则同步 diff
+        var ns = Math.floor(Number(nr.star));
+        if (ns >= 1 && ns <= 5) { q.star = ns; q.diff = starToDiff(ns); }
         q.optimizeCount = (q.optimizeCount || 0) + 1;
         q.opinionHistory = (q.opinionHistory || []).concat([opinion]);
         // 同步 chiefReview.questions[qi]
@@ -20420,7 +20474,7 @@ function bind(el, next) {
         : '';
       return '<div style="border:1px solid #e5e5e5;border-radius:8px;padding:10px 12px;margin:6px 0">'
         + '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">'
-        + '<div><b>题 ' + rq.qid + '</b> <span style="font-size:12px;background:' + ((q.diff === 'hard') ? '#FFE4E1' : '#F0F0F0') + ';padding:1px 8px;border-radius:4px">' + tag + ' · ' + (q.score || 0) + '分</span> ' + statusTag + ' ' + optTag + '</div>'
+        + '<div><b>题 ' + rq.qid + '</b> <span style="font-size:12px;color:#B8860B;letter-spacing:1px">' + '★'.repeat(starOf(q)) + '☆'.repeat(5 - starOf(q)) + '</span> <span style="font-size:12px;background:' + ((q.diff === 'hard') ? '#FFE4E1' : '#F0F0F0') + ';padding:1px 8px;border-radius:4px">' + tag + ' · ' + (q.score || 0) + '分</span> ' + statusTag + ' ' + optTag + '</div>'
         + '<div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="__spOpt(' + i + ')" style="background:#722ed1;color:#fff;border-color:#722ed1;font-size:11px">🔧 优化此题</button>' + restoreBtn + '</div>'
         + '</div>'
         + '<div class="muted-sm"><b>创新角度：</b>' + U.esc(ang) + ' &nbsp; <b>考纲：</b>' + U.esc(syl) + '</div>'
@@ -20687,7 +20741,7 @@ function bind(el, next) {
     var done = exam.completedAt != null;
     var n = (exam.questions || []).length;
     var diffStars = { easy: 2, medium: 3, hard: 5 };
-    var dn = diffStars[q.diff] || 3;
+    var dn = starOf(q);
     var stars = '★'.repeat(dn) + '☆'.repeat(5 - dn);
     var mark = r == null ? '<span class="tag">未答</span>'
       : (r.correct ? '<span class="tag tag-ok">✓ ' + (r.score || 0) + '分</span>' : '<span class="tag tag-red">✗ ' + (r.score || 0) + '分</span>');
@@ -20751,7 +20805,7 @@ function bind(el, next) {
         ? '<div style="margin:6px 0 10px">' + q.options.map(function (o) { return '<div style="margin:3px 0">' + Tex.renderInline(o) + '</div>'; }).join('') + '</div>'
         : '';
       var ansArea = q.type === 'choice' && q.options && q.options.length ? '' : '<div style="height:110px;border-bottom:1px dashed #bbb;margin:8px 0 18px"></div>';
-      return '<div style="margin-bottom:14px;page-break-inside:avoid"><b>' + (i + 1) + '. [' + (q.score || 0) + '分]</b> ' + Tex.renderInline(q.stem)
+      return '<div style="margin-bottom:14px;page-break-inside:avoid"><b>' + (i + 1) + '. [' + (q.score || 0) + '分]</b> <span style="color:#8a6d1a;font-size:11px;letter-spacing:1px">' + '★'.repeat(starOf(q)) + '☆'.repeat(5 - starOf(q)) + '</span> ' + Tex.renderInline(q.stem)
         + opts + ansArea + '</div>';
     }).join('');
     var txCss = '.tx{font-family:"Cambria Math",Georgia,"Times New Roman",serif;font-size:1.08em}'
@@ -20842,7 +20896,7 @@ function bind(el, next) {
         s.questionBank.unshift({
           id: U.uid(), examId: 'variant', qi: -1, subject: exam.subject,
           stem: Tex.repairPipeLatex(fixMangled(String(r.stem || ''))), options: Array.isArray(r.options) ? r.options.slice(0, 4).map(function (o) { return Tex.repairPipeLatex(fixMangled(String(o))); }) : [],
-          answer: Tex.repairPipeLatex(fixMangled(String(r.answer || ''))), solution: Tex.repairPipeLatex(fixMangled(String(r.solution || ''))), diff: r.diff === 'hard' ? 'hard' : 'medium',
+          answer: Tex.repairPipeLatex(fixMangled(String(r.answer || ''))), solution: Tex.repairPipeLatex(fixMangled(String(r.solution || ''))), diff: (function (d) { var ns = Math.floor(Number(r.star)); var s = (ns >= 1 && ns <= 5) ? ns : null; var df = d === 'hard' ? 'hard' : (d === 'easy' ? 'easy' : 'medium'); if (s) df = starToDiff(s); return df; })(r.diff), star: (function () { var ns = Math.floor(Number(r.star)); return (ns >= 1 && ns <= 5) ? ns : ({ easy: 2, medium: 3, hard: 5 })[r.diff === 'hard' ? 'hard' : (r.diff === 'easy' ? 'easy' : 'medium')] || 3; })(),
           score: q.score || 0, topicName: String(r.topicName || q.topicName || ''), addedAt: new Date().toISOString(),
           variantOf: examId + ':' + qi, source: 'variant'
         });
@@ -21768,8 +21822,7 @@ function bind(el, next) {
 
   // ==================== 我的题库浏览 ====================
   function bankCardHtml(b, idx, showPick) {
-    var diffStars = { easy: 2, medium: 3, hard: 5 };
-    var dn = diffStars[b.diff] || 3;
+    var dn = starOf(b);
     var stars = '★'.repeat(dn) + '☆'.repeat(5 - dn);
     var optsHtml = (b.options && b.options.length)
       ? '<div class="sp-exam-opts" style="margin-top:6px">' + b.options.map(function (o) {
