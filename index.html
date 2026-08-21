@@ -19807,7 +19807,9 @@ function bind(el, next) {
       // 保留出题统计标签，替换"状态实时更新中…"
       head.innerHTML = head.innerHTML.replace(/<span class="tag">状态实时更新中…<\/span>/, stageHtml);
     }
-    // 标题更新
+    // 标题更新（独立面板 #par-panel-title；旧版挂在 modal 上，兼容保留）
+    var panelTitle = document.getElementById('par-panel-title');
+    if (panelTitle) panelTitle.textContent = '⚡ ' + (label || name);
     var modalTitle = document.querySelector('.modal-title, .cm-modal-title, .modal .card-title');
     if (modalTitle && modalTitle.textContent.indexOf('并发出卷') >= 0) {
       modalTitle.textContent = '⚡ ' + (label || name);
@@ -19897,6 +19899,33 @@ function bind(el, next) {
     log.insertAdjacentHTML('beforeend', '<div' + style + '>· ' + U.esc(msg) + '</div>');
     log.scrollTop = log.scrollHeight;
   }
+  // 独立固定面板（替代 Modal 承载并行出卷面板）：
+  // Modal 是单弹窗架构（Modal.open 第一行就 Modal.close()），出题期间用户点「👁 查看」或任何其它模块弹窗
+  // 都会把出题面板顶掉 → 后续「总审查→微调→复核」的可视化全部画在幽灵 DOM 上（这就是"出完题可视化就消失"的根因）。
+  // 改挂到独立 fixed div，与 Modal 互不干扰，保证全流程可视化不消失；点「后台继续」收起为右下 FAB 随时恢复。
+  function parOpenPanel(questions) {
+    parClosePanel();
+    var panel = document.createElement('div');
+    panel.id = 'par-fixed-panel';
+    panel.style.cssText = 'position:fixed;right:16px;bottom:16px;width:430px;max-width:calc(100vw - 32px);max-height:76vh;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.18);z-index:10000;padding:12px 14px';
+    panel.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+      + '<b id="par-panel-title" style="font-size:13px">⚡ 并发出卷中</b>'
+      + '<span style="flex:1"></span>'
+      + '<button class="btn btn-sm btn-ghost" id="par-panel-min">📌 后台继续</button>'
+      + '<button class="btn btn-sm btn-ghost" id="par-panel-close" title="收起为右下角悬浮入口">—</button>'
+      + '</div>'
+      + parPanelHtml(questions);
+    document.body.appendChild(panel);
+    var minBtn = panel.querySelector('#par-panel-min');
+    if (minBtn) minBtn.onclick = function () { parClosePanel(); parFab(); parFabUpdate(); };
+    var closeBtn = panel.querySelector('#par-panel-close');
+    if (closeBtn) closeBtn.onclick = function () { parClosePanel(); parFab(); parFabUpdate(); };
+    return panel;
+  }
+  function parClosePanel() {
+    var p = document.getElementById('par-fixed-panel');
+    if (p && p.parentNode) p.parentNode.removeChild(p);
+  }
   // 右下角悬浮入口：状态面板被关闭后仍可随时恢复查看
   function parFab() {
     var fab = document.getElementById('par-fab');
@@ -19913,9 +19942,15 @@ function bind(el, next) {
   function parFabUpdate() {
     var fab = document.getElementById('par-fab');
     if (!fab) return;
-    var running = parPanel && parPanel.doneN < parPanel.totalN;
+    // flowDone 前（出题/审查/微调/复核全程）FAB 常显：用户收起面板后仍有「点击恢复查看」入口，
+    // 杜绝「面板关了就再也看不到进度」的体验断链
+    var running = parPanel && !parPanel.flowDone;
     if (running) {
-      fab.textContent = '⚡ 并行组卷中 ' + parPanel.doneN + '/' + parPanel.totalN + ' · 并发 ' + (parPanel.sched ? parPanel.sched.concurrency() : '');
+      if (parPanel.doneN < parPanel.totalN) {
+        fab.textContent = '⚡ 并行组卷中 ' + parPanel.doneN + '/' + parPanel.totalN + ' · 并发 ' + (parPanel.sched ? parPanel.sched.concurrency() : '');
+      } else {
+        fab.textContent = '⚡ 审查/复核中 · 点击查看';
+      }
       fab.style.display = '';
     } else fab.style.display = 'none';
   }
@@ -19925,12 +19960,23 @@ function bind(el, next) {
   }
   function parReopenPanel() {
     if (!parPanel || !parPanel.questions || !parPanel.questions.length) return;
-    Modal.open({ title: '⚡ 并发出卷中', wide: true, dismissable: true, html: parPanelHtml(parPanel.questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
+    parOpenPanel(parPanel.questions);
     parRenderAll();
   }
   function parRenderAll() {
     if (!parPanel) return;
     parHead(parPanel.questions, parPanel.sched, parPanel.doneN, parPanel.startTs);
+    // 重放当前阶段标签（PAR_STAGE）+ 复核进度（用户中途收起再恢复时头部不退回出题形态）
+    if (PAR_STAGE) {
+      var head = document.getElementById('par-head');
+      if (head) {
+        if (PAR_STAGE.name === 'verify' && parPanel.vDone != null) {
+          head.innerHTML = head.innerHTML.replace(/<span class="tag">完成[^<]*<\/span>/, '<span class="tag" style="background:' + (PAR_STAGE.color || '#08979c') + ';color:#fff">' + (PAR_STAGE.label || '复核') + ' ' + parPanel.vDone + '/' + parPanel.totalN + '</span>');
+        } else {
+          head.innerHTML = head.innerHTML.replace(/<span class="tag">状态实时更新中…<\/span>/, '<span class="tag" style="background:' + (PAR_STAGE.color || '#096dd9') + ';color:#fff">' + (PAR_STAGE.label || PAR_STAGE.name) + '</span>');
+        }
+      }
+    }
     (parPanel.questions || []).forEach(function (p) {
       var c = parPanel.cells[p.qid] || { status: 'queued' };
       parPaint(p.qid, c.status, c.ms, c.err);
@@ -20018,7 +20064,8 @@ function bind(el, next) {
     Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
     parRemoveFab();
     parPanel.examId = null;   // 停止后不再增量入库
-    setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 100);
+    parPanel.flowDone = true;
+    parClosePanel();
     Toast.success('已停止出题，载入 ' + doneQs.length + ' 题开始作答');
     if (currentEl) render(currentEl);
     openExam(exam.id, currentEl || document.body);
@@ -20030,8 +20077,8 @@ function bind(el, next) {
     // 按题量动态起步并发：题多起步高（≥30→8，≥15→6，≥6→4，小卷→3），后续快升到上限 20
     var initialC = questions.length >= 30 ? 8 : questions.length >= 15 ? 6 : questions.length >= 6 ? 4 : 3;
     var sched = makeScheduler(initialC);
-    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched, subj: subj, bp: bp, major: major, prefs: prefs, examId: null, aborters: [], stopped: false };
-    Modal.open({ title: '⚡ 并发出卷中（总工程师规划完成）', wide: true, dismissable: true, html: parPanelHtml(questions), actions: [{ label: '后台继续', kind: 'btn-ghost' }] });
+    parPanel = { startTs: Date.now(), doneN: 0, totalN: questions.length, questions: questions, cells: {}, sched: sched, subj: subj, bp: bp, major: major, prefs: prefs, examId: null, pendingExamId: null, aborters: [], stopped: false };
+    parOpenPanel(questions);
     parFab();
     parHead(questions, sched, 0, parPanel.startTs);
     var results = new Array(questions.length);
@@ -20323,9 +20370,11 @@ function bind(el, next) {
     if (!qs.length) return Promise.resolve({ verified: [], stats: { total: 0, agree: 0, dispute: 0, failed: 0 } });
     parStageProgress(0, qs.length, '🔍 复核');
     var vDone = 0, vDoneSet = {};
+    if (parPanel) parPanel.vDone = 0;
     return crossCheckAnswers(qs, function (i, text, cls) {
       if (i >= 0) {
         if (!vDoneSet[i]) { vDoneSet[i] = 1; vDone++; }
+        if (parPanel) parPanel.vDone = vDone;
         parStageProgress(vDone, qs.length, '🔍 复核');
         parCellStatus(i + 1, text, cls === 'dispute' ? '#cf1322' : cls === 'agree' ? 'var(--ok)' : '#08979c');
       }
@@ -20374,6 +20423,19 @@ function bind(el, next) {
       }).then(function (plan) {
         // 阶段2+3 合并：plan 闭包内调 chiefReview（避免上 then 的 plan 不可见 → ReferenceError）
         return runParallelQuestions(plan, subj, bp, major, prefs).then(function (built) {
+          // 【立即入库】出题完成即把题目落库（parallelPending），后续总审查/微调/复核只是 update 同一份卷面——
+          // 杜绝「所有子 AI 出完题后面板消失、卷子却迟迟不进列表」的体验断链；中途任何阶段失败，卷也已保留。
+          if (parPanel && !parPanel.examId && !parPanel.pendingExamId) {
+            var tmpExam = {
+              id: U.uid(), title: built.title || 'AI 并行押题卷', subject: subj,
+              questions: built.questions, timeLimit: built.timeLimit || bp.timeLimit,
+              createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null,
+              builtBy: 'parallel', parallelPending: true, pendingStage: 'review'
+            };
+            Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(tmpExam); });
+            parPanel.pendingExamId = tmpExam.id;
+            parLog('✅ 出题完成 ' + built.questions.length + ' 题，卷面已暂存，正在总审查…');
+          }
           // 阶段3：总审查（结构化 + 自动重写有问题的题 + 显眼展示报告）
           parStage('review', '🧠 总审查中', '#722ed1');
           parLog('全部题目出题完毕，总工程师开始审查…');
@@ -20401,49 +20463,64 @@ function bind(el, next) {
           });
         });
       }).then(function (out) {
-        if (parPanel) { parRemoveFab(); setTimeout(function () { var m = document.querySelector('.modal'); if (m && m.parentNode) m.parentNode.removeChild(m); }, 800); }
-        // 边出边做分支：用户已中途进入 → 更新该 exam（不重复开）；否则新建入库 + openExam
-        var pendingExamId = parPanel && parPanel.examId;
+        if (parPanel) { parPanel.flowDone = true; parRemoveFab(); parClosePanel(); }
+        // 统一「更新既有卷面」：pendingExamId（出题完成已预入库）或 examId（边出边做已入库）→ 补全审查/复核结果；
+        // 理论兜底都没有 → 新建。
+        var wasInExam = !!(parPanel && parPanel.examId);   // 边出边做：用户已在考试页，不再重复 openExam
+        var pendingExamId = (parPanel && (parPanel.pendingExamId || parPanel.examId)) || null;
         var exam = null;
         if (pendingExamId) {
           Store.update(function (s) {
             var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === pendingExamId; });
-            if (ex) { ex.title = out.built.title || ex.title; ex.timeLimit = out.built.timeLimit || ex.timeLimit; delete ex.parallelPending; exam = ex; }
+            if (ex) {
+              ex.title = out.built.title || ex.title;
+              ex.timeLimit = out.built.timeLimit || ex.timeLimit;
+              ex.questions = out.built.questions;
+              ex.chiefReview = out.review;              // 保存总审查结果（考试页顶部按钮随时打开报告）
+              ex.answerVerify = out.verify || null;     // 保存答案并行复核结果
+              ex.pendingStage = undefined;
+              delete ex.parallelPending;
+              exam = ex;
+            }
           });
-          if (exam) {
-            Toast.success('出题完成：' + exam.title + '（' + exam.questions.length + '题·已追加到当前卷面）');
-            if (currentEl) render(currentEl);
-            return exam;
-          }
         }
-        exam = {
-          id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
-          questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
-          createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel',
-          chiefReview: out.review,  // 保存总审查结果（用于稍后随时打开报告）
-          answerVerify: out.verify || null  // 保存答案并行复核结果
-        };
-        Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
-        // 显眼提示：Toast 弹一个长一点的（4 秒），文案带"看报告"按钮
+        if (!exam) {
+          exam = {
+            id: U.uid(), title: out.built.title || 'AI 并行押题卷', subject: subj,
+            questions: out.built.questions, timeLimit: out.built.timeLimit || bp.timeLimit,
+            createdAt: new Date().toISOString(), completedAt: null, score: null, duration: null, builtBy: 'parallel',
+            chiefReview: out.review, answerVerify: out.verify || null
+          };
+          Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.mockExams = s.sprintData.mockExams || []; s.sprintData.mockExams.unshift(exam); });
+        }
+        // 显眼提示：Toast 弹一个长一点的（4 秒），文案带审查/复核结果
         var nRewrite = (out.review.needsRewrite || []).length;
         var vStats = (out.verify && out.verify.stats) || null;
         var vTxt = vStats ? ' · 🔍 答案复核 ' + vStats.agree + '/' + vStats.total + ' 一致' + (vStats.dispute ? '（' + vStats.dispute + ' 争议）' : '') : '';
         Toast.show(
           '🧠 ' + exam.title + ' · ' + exam.questions.length + '题 · ' + out.review.hardPct + '% hard · ' +
           (out.review.verdict === 'ok' ? '✅ 审查通过' : out.review.verdict === 'minor' ? '⚠️ ' + nRewrite + '题已微调' : '🔴 ' + nRewrite + '题已微调·建议复核') +
-          (nRewrite ? '（已自动重写）' : '') + vTxt,
+          (nRewrite ? '（已自动重写）' : '') + vTxt + (wasInExam ? '（已追加到当前卷面）' : ''),
           out.review.verdict === 'ok' ? 'success' : 'info', 4500
         );
-        // 总审查报告按钮：在主区显示（考试页顶部加按钮）
-        setTimeout(function () {
-          if (window.__sprintReportExamId === exam.id) showChiefReport(exam, out.review);
-        }, 600);
         if (currentEl) render(currentEl);
-        openExam(exam.id, currentEl || el);
+        if (!wasInExam) openExam(exam.id, currentEl || el);
         return exam;
       });
     }).catch(function (e) {
       if (e && e.message === '__stopped__') return;   // 用户主动停止 → 静默（已在做题页）
+      // 兜底：若卷面已预入库（出题完成）但后续阶段失败 → 卷保留在列表，不白出
+      if (parPanel && parPanel.pendingExamId) {
+        Store.update(function (s) {
+          var ex = ((s.sprintData || {}).mockExams || []).find(function (x) { return x.id === parPanel.pendingExamId; });
+          if (ex) { delete ex.parallelPending; ex.pendingError = (e && e.message) || String(e); }
+        });
+        if (parPanel) { parPanel.flowDone = true; parRemoveFab(); parClosePanel(); }
+        Toast.warn('并行组卷后续阶段失败：' + (e.message || e) + '，已完成题目已保留在押题卷列表');
+        if (currentEl) render(currentEl);
+        return;
+      }
+      if (parPanel) { parPanel.flowDone = true; parRemoveFab(); parClosePanel(); }
       Toast.warn('并行组卷失败：' + (e.message || e));
       if (currentEl) render(currentEl);
     });
@@ -21799,7 +21876,10 @@ function bind(el, next) {
               reviewTxt = '<span class="tag ' + (overdue ? 'tag-warn' : '') + '" style="font-size:10.5px;margin-left:4px">' + (overdue ? '⏰ 已到期' : '复习 ' + dueS) + '</span>';
             }
             return '<div style="padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:6px" data-exam="' + e.id + '">'
-              + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.starred ? '⭐ ' : '') + U.esc(e.title) + reviewTxt + '</span>'
+              + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.starred ? '⭐ ' : '') + U.esc(e.title) + reviewTxt
+              + (e.parallelPending ? '<span class="tag tag-warn" style="font-size:10px;margin-left:4px">⏳ ' + (e.pendingStage === 'verify' ? '答案复核中' : e.pendingStage === 'rewrite' ? '微调中' : e.pendingStage === 'review' ? '总审查中' : '生成中') + '</span>' : '')
+              + (e.pendingError ? '<span class="tag tag-red" style="font-size:10px;margin-left:4px">⚠ 后续阶段失败</span>' : '')
+              + '</span>'
               + '<span class="muted-sm" style="font-size:12px;flex-shrink:0">' + (done ? '<span style="color:' + (pct >= 60 ? 'var(--ok)' : pct >= 40 ? 'var(--warn)' : 'var(--danger)') + '">' + pct + '%</span> (' + (e.score || 0) + '/' + totalScore + ')' : e.questions.length + '题') + ' · ' + ((e.createdAt || '').slice(0, 10)) + '</span>'
               + '<button class="btn btn-sm btn-ghost sp-exam-del" data-id="' + e.id + '" style="font-size:11px;flex-shrink:0">🗑</button>'
               + '</div>';
