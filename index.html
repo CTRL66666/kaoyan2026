@@ -610,7 +610,10 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 /* ============================================================
  * 极简LaTeX公式渲染（tex.js）
  * ============================================================ */
-.tx { font-family: "Cambria Math", Georgia, "Times New Roman", serif; font-size: 1.05em; }
+.tx { font-family: "Cambria Math", Georgia, "Times New Roman", serif; font-size: 1.05em;
+  /* 公式原子化：外层容器多为 word-break:break-all，会在公式内任意字符处断行；
+     这里整体禁止内部换行（NBSP 挡不住 break-all），超宽公式横向滚动兜底 */
+  white-space: nowrap; display: inline-block; max-width: 100%; vertical-align: middle; overflow-x: auto; overflow-y: hidden; }
 .tx i { font-style: italic; }
 .tx-fn { font-style: italic; font-family: "Cambria Math", Georgia, "Times New Roman", serif; }   /* 函数名斜体 serif（\f \sin 等）—— 让用户视觉看出 LaTeX 已渲染而非裸文本 */
 .tx sup, .tx sub { font-size: .72em; line-height: 0; }
@@ -21572,7 +21575,7 @@ function bind(el, next) {
             + '</div>';
         }).join('') + '</div>'
       : '';
-    var txCss = '.tx{font-family:"Cambria Math",Georgia,"Times New Roman",serif;font-size:1.08em}'
+    var txCss = '.tx{font-family:"Cambria Math",Georgia,"Times New Roman",serif;font-size:1.08em;white-space:nowrap}'
       + '.tx i{font-style:italic}.tx-fn{font-style:normal}'
       + '.tx sup,.tx sub{font-size:.72em;line-height:0}.tx-fn + sub{font-style:normal;font-size:.68em}'
       + '.tx-frac{display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 .25em}'
