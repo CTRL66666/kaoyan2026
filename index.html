@@ -27522,7 +27522,9 @@ function bind(el, next) {
             + '<button class="btn btn-ghost" id="st-cloud-compact">压实 op 日志</button>'
             + '</div>';
         } else {
-          html += '<div class="alert alert-warn">尚未登录云端同步。请点击右下角 ☁ 徽标配置 GitHub 令牌。</div>';
+          html += '<div class="alert alert-warn">尚未登录云端同步。'
+            + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-sm btn-primary" id="st-cloud-login">🔑 登录 GitHub（配置令牌）</button>'
+            + '<span class="muted-sm" style="font-size:11px;align-self:center">也可点屏幕底部状态栏右下角的 ☁ 徽标</span></div></div>';
         }
         html += '</div>';
         return html;
@@ -28183,6 +28185,12 @@ function bind(el, next) {
         this.disabled = true; this.textContent = '压实中…';
         cloud.doCompact().then(function () { Toast.success('已压实'); App.refresh(); })
           .catch(function (e) { Toast.danger('压实失败：' + ((e && e.message) || e)); App.refresh(); });
+      };
+      // 未登录 → 登录按钮（打开云同步面板配置令牌）
+      var loginBtn = el.querySelector('#st-cloud-login');
+      if (loginBtn) loginBtn.onclick = function () {
+        if (typeof cloud.openPanel === 'function') cloud.openPanel();
+        else Toast.warn('云同步面板不可用');
       };
     })();
 
@@ -34376,7 +34384,10 @@ function bind(el, next) {
           + '<div style="margin-top:6px;font-size:12px" class="muted-sm">我的分享 ID：<code style="user-select:all;font-size:11px">' + U.esc(shortId(s.myGistId)) + '</code>'
           + ' · 已分享 <b>' + (s.sentCount || 0) + '</b> 条'
           + (s.autoCheck ? ' · <span style="color:var(--ok)">进入本页自动检查已开启</span>' : '') + '</div>'
-        : '<div class="empty">首次使用会自动创建专属分享档案（secret Gist）。<br>把生成的 ID 发给同学，TA 添加后你们即可互传题目和试卷。</div>')
+        : '<div class="empty">首次使用会自动创建专属分享档案（secret Gist）。<br>把生成的 ID 发给同学，TA 添加后你们即可互传题目和试卷。</div>'
+          + (loggedIn() ? '' : '<div class="alert alert-warn" style="margin-top:8px">分享协作需要先登录 GitHub（仅需 gist 权限，与云同步共用同一登录）。'
+            + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-sm btn-primary" id="sc-login">🔑 登录 GitHub</button>'
+            + '<span class="muted-sm" style="font-size:11px;align-self:center">也可点屏幕<b>底部状态栏右下角的 ☁ 云朵徽标</b></span></div></div>'))
       + '</div>'
       // ===== 好友 =====
       + '<div class="card"><div class="card-title-row"><span class="card-title">👥 我的好友（' + s.friends.length + '）</span>'
@@ -34429,6 +34440,11 @@ function bind(el, next) {
     copyBtn.onclick = function () {
       if (!s.myGistId) { Toast.warn('还没有分享档案，先分享一条内容即可自动创建'); return; }
       copyText(s.myGistId, '🪪 分享 ID 已复制，发给同学即可加好友');
+    };
+    var loginBtn = el.querySelector('#sc-login');
+    if (loginBtn) loginBtn.onclick = function () {
+      if (window.Cloud && Cloud.openPanel) Cloud.openPanel();
+      else Toast.warn('云同步面板不可用');
     };
     el.querySelector('#sc-add-toggle').onclick = function () {
       var f = el.querySelector('#sc-add-form');
