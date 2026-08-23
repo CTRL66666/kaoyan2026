@@ -34159,7 +34159,15 @@ function bind(el, next) {
     if (!window.Cloud || !Cloud.gistReq) throw new Error('云同步模块不可用');
     return Cloud.gistReq(path, opts);
   }
-  function loggedIn() { return !!(window.Cloud && typeof Cloud.isLoggedIn === 'function' && Cloud.isLoggedIn()); }
+  // ⚠️ Cloud.isLoggedIn 是 getter（访问即返回布尔），不是函数属性；
+  //    typeof 判断会得到 'boolean' 导致恒 false。两种形态都兼容。
+  function loggedIn() {
+    if (!window.Cloud) return false;
+    try {
+      var v = Cloud.isLoggedIn;
+      return typeof v === 'function' ? !!v() : !!v;
+    } catch (e) { return false; }
+  }
 
   function loginHint() {
     Toast.warn('请先在「设置 → 云同步」登录 GitHub（仅需 gist 权限）', 3000);
