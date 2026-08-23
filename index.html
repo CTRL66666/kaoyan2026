@@ -3653,6 +3653,15 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         path: null,                // AI 攻克路线 {major, strategy, order:[{id,name,days,reason}], at}
         updatedAt: ''
       },
+      // ---- 分享协作（Gist 协作互传，2026-08-21）----
+      share: {
+        myGistId: '',        // 我的分享 Gist（secret）ID = 我的分享 ID（首次发布时自动创建）
+        nick: '',            // 我的昵称（对方收件时显示来源）
+        friends: [],         // 好友 [{id(对方的分享GistID), name, addedAt, lastOkAt, lastErr}]
+        recvIds: {},         // 已导入去重表 {uid: 导入时间戳}，防止重复导入同一份内容
+        sentCount: 0,        // 累计发布条数（统计展示用）
+        autoCheck: false     // 进入本页时是否自动拉取好友更新
+      },
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false,
         examConfig: { mathType: 'shuyi', engType: 'yingyi', profName: '自控原理' },
         // ---- 以下字段均可被 AI/用户改写，原为代码内硬编码规则 ----
@@ -5585,6 +5594,11 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     doCompact: () => { setSyncPhase('uploading-bulk'); return push({ bulk: true }); },
     get gistId() { return state.gistId; },
     get bulkGistId() { return state.bulkGistId; },
+    // 分享协作（sharecenter）：复用本机令牌的轻量 Gist 读写（独立于同步状态，不碰 gistId/etag/游标）
+    gistReq: (path, opts) => {
+      if (!state.token) { const e = new Error('未登录云同步，无法使用分享协作（先在设置里登录）'); e.status = 0; throw e; }
+      return apiReq(path, opts);
+    },
     get syncInfo() { return { gistId: state.gistId, bulkGistId: state.bulkGistId, lastSyncAt: state.lastSyncAt, lastTransfer: state.lastTransfer, opCount: meta.opCount || 0, compactGen: meta.compactGen || 0 }; }
   };
   // 仅供单测使用（Node 环境），浏览器中 module 未定义，不影响
@@ -15008,6 +15022,11 @@ function bind(el, next) {
         var sBtn2 = document.querySelector('#modal-overlay [data-act="0"]'); if(sBtn2) sBtn2.onclick = doBankAsk;
       };
     });
+    el.querySelectorAll('.bank-share').forEach(b => b.onclick = () => {
+      if (!window.ShareCenter) { Toast.warn('分享协作模块未加载'); return; }
+      const q = (Store.get().quizBank || []).find(x => x.id === b.getAttribute('data-id'));
+      if (q) ShareCenter.publishQuiz(q, b);
+    });
     el.querySelectorAll('.bank-del').forEach(b => b.onclick = () => {
       const id = b.getAttribute('data-id');
       Modal.confirm('删除题目', '<p>从本地题库删除此题？</p>', '删除', () => {
@@ -15043,6 +15062,7 @@ function bind(el, next) {
           + '<span class="mis-date">' + U.esc((q.savedAt || '').slice(5, 10)) + '</span></div>'
           + '<div class="mis-desc">' + formatStem(q.stem).slice(0, 120) + '</div>'
           + '<div class="mis-actions"><button class="btn btn-sm btn-ghost bank-view" data-id="' + q.id + '">查看解析</button>'
+          + '<button class="btn btn-sm btn-ghost bank-share" data-id="' + q.id + '" title="分享给好友（Gist 协作）">📤 分享</button>'
           + '<button class="btn btn-sm btn-ghost bank-del" data-id="' + q.id + '">删除</button></div></div>'
         ).join('')
         : '<div class="empty">答完题点"加入本地题库"即可收藏。好题值得反复做。</div>')
@@ -21878,6 +21898,7 @@ function bind(el, next) {
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-print">🖨 打印试卷</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-dl" title="保存为独立 HTML 文件（公式已渲染，可随时打开再打印）">⬇️ 下载</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-exam-star" title="标星收藏">' + (exam.starred ? '⭐' : '☆') + '</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-exam-share" title="分享给好友（Gist 协作，广播式）">📤 分享</button>'
       + (!done ? '<span id="sp-exam-timer" style="font-variant-numeric:tabular-nums;font-weight:600;color:var(--danger)"></span>' : '<span class="tag tag-ok">✓ 已完成</span>')
       + '</div>'
       + '<div class="sp-exam-progress" style="margin:8px 0 4px"><span class="muted-sm" style="font-size:12px">作答进度 ' + answeredN + '/' + qn + '</span>'
@@ -21904,6 +21925,11 @@ function bind(el, next) {
       Store.update(function (s) { var e = (s.sprintData.mockExams || []).find(function (x) { return x.id === examId; }); if (e) e.starred = !e.starred; });
       Toast.show(exam.starred ? '已取消标星' : '⭐ 已标星收藏', 'info', 1200);
       if (currentEl) render(currentEl);
+    };
+    var shareExamBtn = el.querySelector('#sp-exam-share');
+    if (shareExamBtn) shareExamBtn.onclick = function () {
+      if (!window.ShareCenter) { Toast.warn('分享协作模块未加载'); return; }
+      ShareCenter.publishExam(exam, shareExamBtn);
     };
     var reportBtn = el.querySelector('#sp-exam-report');
     if (reportBtn) reportBtn.onclick = function () {
@@ -33990,6 +34016,510 @@ function bind(el, next) {
 })();
 
 
+/* ===== js/modules/sharecenter.js ===== */
+/* ============================================================
+ * 分享协作（Gist 协作互传）· sharecenter.js · 2026-08-21
+ * ------------------------------------------------------------
+ * 原理（复用既有云同步基建，零后端、零新依赖）：
+ *  - 我的身份 = 一个专属 secret Gist（仅含 share.json），ID 即「我的分享 ID」
+ *  - 加好友   = 对方把 TA 的分享 ID 发给我，我存 {id, name}
+ *  - 发布     = 把题目/试卷追加进【我自己的】share.json（PATCH，广播式，
+ *               所有好友拉取时都能看到，无需逐人发送）
+ *  - 接收     = 匿名可读 secret Gist（与云同步同一安全模型）：
+ *               拉好友的 share.json，按 uid 去重后一键导入本地题库/押题卷
+ * 安全边界：secret gist 拿到链接即可读 —— 只分享学习内容，
+ *          好友 ID 本身不含任何令牌，泄露最多等于"能看到我的分享内容"。
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  var SHARE_FILE = 'share.json';
+  var SHARE_DESC = 'kaoyan2026-share';
+  var MAX_ITEMS = 50;      // 我的分享箱容量上限（超出裁最旧）
+  var MAX_PACK = 80;       // 单次打包题数上限（控制 share.json 体积 <1MB 免截断）
+  var KIND_LABEL = { quiz: '📝 题目', quizpack: '📚 题包', exam: '📄 押题卷', text: '🗒 笔记' };
+
+  // ---------- 纯函数层（Node 可测） ----------
+  function makeUid() {
+    return 'sh-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  }
+  function normalizeBox(raw) {
+    var b = raw && typeof raw === 'object' ? raw : {};
+    return { v: 1, nick: String(b.nick || ''), items: Array.isArray(b.items) ? b.items.filter(Boolean) : [] };
+  }
+  function capItems(items) {
+    var seen = {}, out = [];
+    (items || []).forEach(function (it) {
+      if (!it || !it.uid || seen[it.uid]) return;
+      seen[it.uid] = true; out.push(it);
+    });
+    return out.length > MAX_ITEMS ? out.slice(0, MAX_ITEMS) : out;
+  }
+  function filterNew(items, recvIds) {
+    recvIds = recvIds || {};
+    return (items || []).filter(function (it) { return it && it.uid && !recvIds[it.uid]; });
+  }
+  // 白名单净化收藏题（防对方数据夹带异常字段/超大字段）
+  function sanitizeQuiz(q) {
+    q = q || {};
+    return {
+      topicId: String(q.topicId || 'shared'), topicName: String(q.topicName || '分享题'),
+      stem: String(q.stem || ''), type: q.type === 'choice' ? 'choice' : 'solve',
+      options: Array.isArray(q.options) ? q.options.map(String).slice(0, 8) : undefined,
+      answer: String(q.answer || ''), solution: String(q.solution || ''),
+      trap: String(q.trap || ''), diff: String(q.diff || 'medium')
+    };
+  }
+  // 押题卷出站净化：剥离作答痕迹（results/completedAt/score/duration/starred）
+  function sanitizeExamForShare(ex) {
+    ex = ex || {};
+    return {
+      subject: String(ex.subject || 'math'),
+      title: String(ex.title || '未命名押题卷'),
+      timeLimit: Number(ex.timeLimit) || 180,
+      questions: (Array.isArray(ex.questions) ? ex.questions : []).slice(0, 100).map(function (q) {
+        q = q || {};
+        var out = {
+          stem: String(q.stem || ''), type: q.type === 'choice' ? 'choice' : 'solve',
+          options: Array.isArray(q.options) ? q.options.map(String).slice(0, 8) : undefined,
+          answer: String(q.answer || ''), solution: String(q.solution || ''),
+          trap: String(q.trap || ''), diff: String(q.diff || 'medium'),
+          score: Number(q.score) || 5
+        };
+        return out;
+      })
+    };
+  }
+  function makeItem(kind, title, from, payload) {
+    return { uid: makeUid(), kind: String(kind || 'text'), title: String(title || '未命名'),
+      from: String(from || '好友'), at: new Date().toISOString(), item: payload };
+  }
+  // 把一条收件导入到 state（纯变异，供测试与浏览器共用）；返回导入摘要文本
+  function importIntoState(state, it, fromName) {
+    it = it || {}; fromName = fromName || it.from || '好友';
+    var share = state.share = state.share || {};
+    share.recvIds = share.recvIds || {};
+    var label = KIND_LABEL[it.kind] || '📦 内容';
+    var n = 0;
+    if (it.kind === 'quiz') {
+      state.quizBank = state.quizBank || [];
+      var qid = 'sh-' + it.uid;
+      if (!state.quizBank.some(function (x) { return x.id === qid; })) {
+        var q = sanitizeQuiz(it.item);
+        q.id = qid; q.savedAt = it.at || new Date().toISOString();
+        q.note = '来自 ' + fromName;
+        state.quizBank.push(q); n = 1;
+      }
+    } else if (it.kind === 'quizpack') {
+      state.quizBank = state.quizBank || [];
+      (Array.isArray(it.item) ? it.item : []).forEach(function (raw, i) {
+        var pid = 'sh-' + it.uid + '-' + i;
+        if (state.quizBank.some(function (x) { return x.id === pid; })) return;
+        var pq = sanitizeQuiz(raw);
+        pq.id = pid; pq.savedAt = it.at || new Date().toISOString();
+        pq.note = '来自 ' + fromName;
+        state.quizBank.push(pq); n++;
+      });
+    } else if (it.kind === 'exam') {
+      state.sprintData = state.sprintData || {};
+      state.sprintData.mockExams = state.sprintData.mockExams || [];
+      var eid = 'sh-' + it.uid;
+      if (!state.sprintData.mockExams.some(function (x) { return x.id === eid; })) {
+        var ex = sanitizeExamForShare(it.item);
+        ex.id = eid;
+        ex.title = ex.title + '（来自 ' + fromName + '）';
+        ex.createdAt = it.at || new Date().toISOString();
+        ex.sharedIn = true;                       // 标记为他人分享卷（UI 可识别）
+        state.sprintData.mockExams.unshift(ex); n = 1;
+      }
+    }
+    share.recvIds[it.uid] = Date.now();
+    return label + (n > 1 ? ' ×' + n : '');
+  }
+
+  // ---------- 浏览器层 ----------
+  var _inbox = null;        // 最近一次检查结果缓存（切页不丢）：[{friend, items:[新条目], err}]
+  var _busy = false;
+
+  function st() {
+    var s = Store.get().share || {};
+    s.friends = Array.isArray(s.friends) ? s.friends : [];
+    s.recvIds = s.recvIds || {};
+    return s;
+  }
+  function api(path, opts) {
+    if (!window.Cloud || !Cloud.gistReq) throw new Error('云同步模块不可用');
+    return Cloud.gistReq(path, opts);
+  }
+  function loggedIn() { return !!(window.Cloud && typeof Cloud.isLoggedIn === 'function' && Cloud.isLoggedIn()); }
+
+  function loginHint() {
+    Toast.warn('请先在「设置 → 云同步」登录 GitHub（仅需 gist 权限）', 3000);
+  }
+
+  async function readFileContent(f) {
+    if (!f) throw new Error('分享箱文件不存在');
+    if (f.truncated && f.raw_url) {
+      var r = await fetch(f.raw_url);
+      if (!r.ok) throw new Error('raw 拉取失败 HTTP ' + r.status);
+      return await r.text();
+    }
+    return f.content || '';
+  }
+
+  // 读任意分享箱（自己的走鉴权；好友的也走鉴权以享受高限额）
+  async function readBox(gistId) {
+    var r = await api('/gists/' + gistId, {});
+    var f = r.data && r.data.files && r.data.files[SHARE_FILE];
+    if (!f) return normalizeBox(null);
+    try { return normalizeBox(JSON.parse(await readFileContent(f))); }
+    catch (e) { console.warn('[Share] share.json 解析失败', e); return normalizeBox(null); }
+  }
+  async function writeBox(gistId, box) {
+    var files = {};
+    files[SHARE_FILE] = { content: JSON.stringify(box) };
+    await api('/gists/' + gistId, { method: 'PATCH', body: { files: files } });
+  }
+  async function createShareGist(nick) {
+    var box = normalizeBox(null); box.nick = nick;
+    var files = {};
+    files[SHARE_FILE] = { content: JSON.stringify(box) };
+    var r = await api('/gists', { method: 'POST', body: { description: SHARE_DESC, public: false, files: files } });
+    return r.data.id;
+  }
+  // 首次使用自动建档；返回 myGistId
+  async function ensureIdentity() {
+    var s = st();
+    if (!s.nick) {
+      Store.update(function (d) { d.share = d.share || {}; if (!d.share.nick) d.share.nick = '同学' + Math.floor(Math.random() * 900 + 100); });
+      s = st();
+    }
+    if (s.myGistId) {
+      // 远端可能已被手动删除：发布前轻校验由调用方 catch 404 处理，这里直接返回
+      return s.myGistId;
+    }
+    var id = await createShareGist(s.nick);
+    Store.update(function (d) { d.share.myGistId = id; });
+    return id;
+  }
+
+  // ---------- 发布（广播式：进我自己的分享箱，全部好友可见） ----------
+  var publishing = false;
+  async function publish(kind, title, payload, btnEl) {
+    if (!loggedIn()) { loginHint(); return false; }
+    if (publishing) { Toast.warn('上一个分享还在路上…'); return false; }
+    publishing = true;
+    var oldTxt = null;
+    if (btnEl) { oldTxt = btnEl.textContent; btnEl.disabled = true; btnEl.textContent = '⏳ 分享中…'; }
+    try {
+      var gid = await ensureIdentity();
+      var s = st();
+      var box = null;
+      try { box = await readBox(gid); }
+      catch (e) {
+        if (e.status === 404) { gid = await createShareGist(s.nick); Store.update(function (d) { d.share.myGistId = gid; }); box = normalizeBox(null); }
+        else throw e;
+      }
+      box.nick = s.nick;
+      box.items.unshift(makeItem(kind, title, s.nick, payload));
+      box.items = capItems(box.items);
+      await writeBox(gid, box);
+      Store.update(function (d) { d.share.sentCount = (d.share.sentCount || 0) + 1; });
+      Toast.success('✅ 已分享到你的分享箱，好友下次检查即可收到', 2600);
+      return true;
+    } catch (e) {
+      Toast.show('❌ 分享失败：' + (e.message || e), 'error', 3200);
+      return false;
+    } finally {
+      publishing = false;
+      if (btnEl) { btnEl.disabled = false; if (oldTxt != null) btnEl.textContent = oldTxt; }
+    }
+  }
+  // 供其它模块一行调用
+  function publishQuiz(q, btnEl) {
+    if (!q) return Promise.resolve(false);
+    var clean = sanitizeQuiz(q);
+    clean.note = q.note || ''; clean.savedAt = q.savedAt || '';
+    return publish('quiz', (q.topicName || '分享题') + ' · ' + String(q.stem || '').replace(/[$\\]/g, '').slice(0, 30), clean, btnEl);
+  }
+  function publishQuizPack(list, btnEl) {
+    var arr = (list || []).map(sanitizeQuiz);
+    if (!arr.length) { Toast.warn('没有可分享的题目'); return Promise.resolve(false); }
+    if (arr.length > MAX_PACK) arr = arr.slice(0, MAX_PACK);
+    return publish('quizpack', '题包（' + arr.length + ' 题）', arr, btnEl);
+  }
+  function publishExam(exam, btnEl) {
+    if (!exam) return Promise.resolve(false);
+    var clean = sanitizeExamForShare(exam);
+    return publish('exam', clean.title + '（' + clean.questions.length + ' 题）', clean, btnEl);
+  }
+
+  // ---------- 接收 ----------
+  async function checkUpdates() {
+    var s = st();
+    if (!s.friends.length) return [];
+    var results = await Promise.all(s.friends.map(async function (fr) {
+      try {
+        var box = await readBox(fr.id);
+        var fresh = filterNew(box.items, s.recvIds).map(function (it) {
+          return { it: it, mine: alreadyHave(it) };
+        });
+        Store.update(function (d) {
+          d.share = d.share || {};
+          d.share.friends = (d.share.friends || []).map(function (x) {
+            if (x.id !== fr.id) return x;
+            var c = Object.assign({}, x); c.lastOkAt = new Date().toISOString(); c.lastErr = '';
+            return c;
+          });
+        });
+        return { friend: fr, items: fresh, err: '' };
+      } catch (e) {
+        Store.update(function (d) {
+          d.share = d.share || {};
+          d.share.friends = (d.share.friends || []).map(function (x) {
+            if (x.id !== fr.id) return x;
+            var c = Object.assign({}, x); c.lastErr = e.message || String(e);
+            return c;
+          });
+        });
+        return { friend: fr, items: [], err: e.message || String(e) };
+      }
+    }));
+    _inbox = results;
+    return results;
+  }
+  // 内容级去重兜底：即使 uid 新，同 id 已存在也不重复入库（导入时仍会二次判断）
+  function alreadyHave(it) {
+    if (!it) return false;
+    var g = Store.get();
+    if (it.kind === 'quiz') return (g.quizBank || []).some(function (x) { return x.id === 'sh-' + it.uid; });
+    if (it.kind === 'exam') return ((g.sprintData || {}).mockExams || []).some(function (x) { return x.id === 'sh-' + it.uid; });
+    return false;
+  }
+  function importChecked(uids, friendName) {
+    if (!_inbox) return 0;
+    var n = 0;
+    _inbox.forEach(function (grp) {
+      if (grp.friend.name !== friendName) return;
+      grp.items.forEach(function (entry) {
+        if (uids.indexOf(entry.it.uid) < 0) return;
+        Store.update(function (d) { importIntoState(d, entry.it, grp.friend.name); });
+        n++;
+        entry.imported = true;
+      });
+    });
+    if (n) {
+      Toast.success('📥 已导入 ' + n + ' 条', 2000);
+      if (window.Cloud && Cloud.schedulePush) Cloud.schedulePush();
+    }
+    return n;
+  }
+
+  // ---------- UI ----------
+  function shortId(id) { return id ? id.slice(0, 7) + '…' + id.slice(-4) : '-'; }
+  function copyText(txt, tip) {
+    function done() { Toast.success(tip || '已复制', 1500); }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, function () { fallback(); });
+    else fallback();
+    function fallback() {
+      var ta = document.createElement('textarea'); ta.value = txt;
+      ta.style.cssText = 'position:fixed;left:-999px'; document.body.appendChild(ta);
+      ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
+    }
+  }
+  function fmtTime(iso) {
+    if (!iso) return '';
+    try { var d = new Date(iso); return (d.getMonth() + 1) + '.' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); } catch (e) { return ''; }
+  }
+
+  function inboxHtml() {
+    if (!_inbox) return '<div class="empty">点「🔄 检查好友更新」拉取好友分享箱</div>';
+    var any = false;
+    var html = _inbox.map(function (grp) {
+      var head = '<div class="card-title-sm" style="margin-top:6px">👤 ' + U.esc(grp.friend.name) +
+        (grp.err ? ' <span class="tag tag-red" title="' + U.esc(grp.err) + '">拉取失败</span>' : '') + '</div>';
+      if (grp.err) return head + '<div class="muted-sm" style="font-size:12px;color:var(--danger)">⚠ ' + U.esc(grp.err) + '</div>';
+      if (!grp.items.length) return head + '<div class="muted-sm" style="font-size:12px">暂无新内容</div>';
+      any = true;
+      return head + grp.items.map(function (entry) {
+        var it = entry.it;
+        return '<label class="mis-row" style="border-left-color:#2563eb;display:flex;align-items:flex-start;gap:8px;cursor:pointer">'
+          + '<input type="checkbox" class="recv-chk" data-friend="' + U.esc(grp.friend.name) + '" data-uid="' + U.esc(it.uid) + '"' + (entry.mine ? ' disabled title="已拥有"' : ' checked') + ' style="margin-top:3px">'
+          + '<span style="flex:1;min-width:0"><span class="tag">' + (KIND_LABEL[it.kind] || '📦') + '</span> '
+          + '<b style="font-size:12.5px">' + U.esc(it.title) + '</b>'
+          + '<span class="muted-sm" style="font-size:11px;margin-left:4px">' + U.esc(it.from || '') + ' · ' + fmtTime(it.at) + (entry.mine ? ' · 已拥有' : '') + '</span></span></label>';
+      }).join('');
+    }).join('');
+    return html + (any ? '' : '<div class="muted-sm" style="margin-top:6px">全部好友都暂无新内容 ✓</div>');
+  }
+
+  function examsHtml() {
+    var exams = ((Store.get().sprintData || {}).mockExams) || [];
+    if (!exams.length) return '<div class="empty">还没有押题卷，先去「智能押题」生成一套</div>';
+    return exams.slice(0, 12).map(function (e) {
+      return '<div class="mis-row" style="border-left-color:#c2410c"><div class="mis-head">'
+        + '<span class="tag" style="background:#c2410c">' + U.esc(e.title) + '</span>'
+        + '<span class="mis-date">' + ((e.questions || []).length) + '题</span></div>'
+        + '<div class="mis-actions"><button class="btn btn-sm btn-ghost sc-share-exam" data-id="' + U.esc(e.id) + '">📤 分享此卷</button></div></div>';
+    }).join('');
+  }
+
+  function render(el) {
+    var s = st();
+    var bankN = (Store.get().quizBank || []).length;
+    var html = ''
+      // ===== 我的身份 =====
+      + '<div class="card"><div class="card-title-row"><span class="card-title">🪪 我的分享身份</span>'
+      + '<button class="link-btn" id="sc-copy-id">复制我的 ID</button></div>'
+      + (s.myGistId
+        ? '<div class="form-grid"><label>昵称（对方看到的名字）<input class="input" id="sc-nick" value="' + U.esc(s.nick) + '" maxlength="12"></label></div>'
+          + '<div style="margin-top:6px;font-size:12px" class="muted-sm">我的分享 ID：<code style="user-select:all;font-size:11px">' + U.esc(shortId(s.myGistId)) + '</code>'
+          + ' · 已分享 <b>' + (s.sentCount || 0) + '</b> 条'
+          + (s.autoCheck ? ' · <span style="color:var(--ok)">进入本页自动检查已开启</span>' : '') + '</div>'
+        : '<div class="empty">首次使用会自动创建专属分享档案（secret Gist）。<br>把生成的 ID 发给同学，TA 添加后你们即可互传题目和试卷。</div>')
+      + '</div>'
+      // ===== 好友 =====
+      + '<div class="card"><div class="card-title-row"><span class="card-title">👥 我的好友（' + s.friends.length + '）</span>'
+      + '<button class="link-btn" id="sc-add-toggle">＋ 添加好友</button></div>'
+      + '<div id="sc-add-form" style="display:none" class="form-grid">'
+      + '<label>对方的分享 ID（完整 Gist ID）<input class="input" id="sc-fr-id" placeholder="粘贴同学的分享 ID"></label>'
+      + '<label>备注名<input class="input" id="sc-fr-name" placeholder="如：张三" maxlength="12"></label>'
+      + '<div class="btn-row"><button class="btn btn-sm btn-primary" id="sc-add-ok">确认添加</button></div></div>'
+      + (s.friends.length ? s.friends.map(function (f) {
+          return '<div class="mis-row" style="border-left-color:#2563eb"><div class="mis-head">'
+            + '<span class="tag" style="background:#2563eb">' + U.esc(f.name) + '</span>'
+            + '<span class="mis-date" title="' + U.esc(f.id) + '">' + U.esc(shortId(f.id)) + '</span></div>'
+            + '<div class="muted-sm" style="font-size:11px">'
+            + (f.lastErr ? '<span style="color:var(--danger)">⚠ 上次检查失败：' + U.esc(f.lastErr) + '</span>'
+              : (f.lastOkAt ? '上次成功检查 ' + fmtTime(f.lastOkAt) : '尚未检查过'))
+            + '</div>'
+            + '<div class="mis-actions"><button class="btn btn-sm btn-ghost sc-fr-del" data-id="' + U.esc(f.id) + '" data-name="' + U.esc(f.name) + '">删除</button></div></div>';
+        }).join('') : '<div class="empty">还没有好友。让同学在 TA 的「分享协作」页复制 ID 发给你。</div>')
+      + '</div>'
+      // ===== 收件箱 =====
+      + '<div class="card"><div class="card-title-row"><span class="card-title">📥 收件箱</span>'
+      + '<span><button class="link-btn" id="sc-check">🔄 检查好友更新</button>'
+      + '<button class="link-btn" id="sc-import-all">一键导入全部新内容</button></span></div>'
+      + '<div id="sc-inbox">' + inboxHtml() + '</div></div>'
+      // ===== 快捷分享 =====
+      + '<div class="card"><div class="card-title-row"><span class="card-title">📤 快捷分享</span>'
+      + (bankN ? '<button class="link-btn" id="sc-share-bank">打包分享整个题库（' + Math.min(bankN, MAX_PACK) + ' 题）</button>' : '') + '</div>'
+      + examsHtml()
+      + '</div>'
+      // ===== 说明 =====
+      + '<div class="card"><div class="card-title-sm">ℹ️ 工作原理与隐私</div>'
+      + '<div class="muted-sm" style="font-size:12px;line-height:1.8">'
+      + '① 你的分享箱是一个 <b>secret Gist</b>（有链接才能读，搜索引擎搜不到），与云同步同一安全模型。<br>'
+      + '② 「发布」= 写入你自己的分享箱，是<b>广播式</b>：所有加了你的好友都能收到，无需逐人发。<br>'
+      + '③ 分享 ID 只是 Gist 编号，<b>不含任何令牌/密码</b>，泄露最多等于别人能看到你分享的内容。<br>'
+      + '④ 分享箱只保留最近 ' + MAX_ITEMS + ' 条；接收按内容指纹去重，重复检查不会重复导入。<br>'
+      + '⑤ 题目/试卷导入后完全归你本地所有，可自由改错重做，与原主人互不影响。</div></div>';
+
+    el.innerHTML = html;
+
+    // ---------- 绑定 ----------
+    var nickInp = el.querySelector('#sc-nick');
+    if (nickInp) nickInp.onchange = function () {
+      var v = nickInp.value.trim();
+      if (!v) { nickInp.value = st().nick; return; }
+      Store.update(function (d) { d.share.nick = v; });
+      Toast.success('昵称已保存', 1200);
+    };
+    var copyBtn = el.querySelector('#sc-copy-id');
+    copyBtn.onclick = function () {
+      if (!s.myGistId) { Toast.warn('还没有分享档案，先分享一条内容即可自动创建'); return; }
+      copyText(s.myGistId, '🪪 分享 ID 已复制，发给同学即可加好友');
+    };
+    el.querySelector('#sc-add-toggle').onclick = function () {
+      var f = el.querySelector('#sc-add-form');
+      f.style.display = f.style.display === 'none' ? '' : 'none';
+    };
+    el.querySelector('#sc-add-ok').onclick = async function () {
+      var idIn = el.querySelector('#sc-fr-id'), nameIn = el.querySelector('#sc-fr-name');
+      var fid = (idIn.value || '').trim(), fname = (nameIn.value || '').trim();
+      if (!/^[a-f0-9]{16,}$/.test(fid)) { Toast.warn('分享 ID 应为 16 位以上十六进制 Gist ID'); return; }
+      if (fid === st().myGistId) { Toast.warn('这是你自己的 ID 😄'); return; }
+      if (st().friends.some(function (f) { return f.id === fid; })) { Toast.warn('该好友已存在'); return; }
+      // 添加前先试拉一次，验证 ID 有效并取对方昵称兜底
+      this.disabled = true; this.textContent = '验证中…';
+      try {
+        var box = await readBox(fid);
+        if (!fname) fname = box.nick || '好友' + fid.slice(-4);
+        Store.update(function (d) {
+          d.share.friends.push({ id: fid, name: fname, addedAt: new Date().toISOString(), lastOkAt: '', lastErr: '' });
+        });
+        idIn.value = ''; nameIn.value = '';
+        el.querySelector('#sc-add-form').style.display = 'none';
+        Toast.success('✅ 已添加好友「' + fname + '」，点「检查好友更新」收取 TA 的分享', 2800);
+        App.refresh();
+      } catch (e) {
+        Toast.show('❌ 无法读取该分享箱：' + (e.message || e), 'error', 3200);
+        this.disabled = false; this.textContent = '确认添加';
+      }
+    }.bind(el.querySelector('#sc-add-ok'));
+    el.querySelectorAll('.sc-fr-del').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id'), name = b.getAttribute('data-name');
+        Modal.confirm('删除好友', '<p>删除好友「' + U.esc(name) + '」？已导入的内容不受影响。</p>', '删除', function () {
+          Store.update(function (d) { d.share.friends = (d.share.friends || []).filter(function (x) { return x.id !== id; }); });
+          App.refresh();
+        }, true);
+      };
+    });
+    var checkBtn = el.querySelector('#sc-check');
+    checkBtn.onclick = async function () {
+      if (!st().friends.length) { Toast.warn('先添加一位好友吧'); return; }
+      checkBtn.disabled = true; checkBtn.textContent = '⏳ 检查中…';
+      try { await checkUpdates(); }
+      finally { checkBtn.disabled = false; checkBtn.textContent = '🔄 检查好友更新'; render(el); }
+    };
+    el.querySelector('#sc-import-all').onclick = function () {
+      var n = importAllNew();
+      if (!n) { Toast.warn('没有可导入的新内容'); return; }
+      render(el);
+    };
+    var bankBtn = el.querySelector('#sc-share-bank');
+    if (bankBtn) bankBtn.onclick = function () { publishQuizPack(Store.get().quizBank || [], bankBtn); };
+    el.querySelectorAll('.sc-share-exam').forEach(function (b) {
+      b.onclick = function () {
+        var ex = (((Store.get().sprintData || {}).mockExams) || []).find(function (x) { return x.id === b.getAttribute('data-id'); });
+        if (ex) publishExam(ex, b);
+      };
+    });
+
+    // 自动检查开关（进入本页时若开启则静默拉一次）
+    var s2 = st();
+    if (s2.autoCheck && s2.friends.length && !_inbox && loggedIn()) {
+      checkUpdates().then(function () { render(el); }).catch(function () {});
+    }
+  }
+
+  // 一键导入全部新内容（收件箱按钮 + 对外 API 共用）
+  function importAllNew() {
+    if (!_inbox) return 0;
+    var total = 0;
+    _inbox.forEach(function (grp) {
+      var uids = grp.items.filter(function (en) { return !en.mine && !en.imported; }).map(function (en) { return en.it.uid; });
+      if (uids.length) total += importChecked(uids, grp.friend.name);
+    });
+    return total;
+  }
+
+  if (typeof window !== 'undefined') {
+    window.ShareCenterModule = { render: render };
+    // 供 quiz.js / sprint.js 一行调用；checkUpdates/importAllNew 供自动轮询与测试复用
+    window.ShareCenter = { publishQuiz: publishQuiz, publishQuizPack: publishQuizPack, publishExam: publishExam,
+      checkUpdates: checkUpdates, importAllNew: importAllNew };
+  }
+
+  // Node 可测纯函数层
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { _pure: { makeUid: makeUid, normalizeBox: normalizeBox, capItems: capItems, filterNew: filterNew,
+      sanitizeQuiz: sanitizeQuiz, sanitizeExamForShare: sanitizeExamForShare, makeItem: makeItem, importIntoState: importIntoState } };
+  }
+})();
+
+
 /* ===== js/app.js ===== */
 /* ============================================================
  * app.js — 应用主控
@@ -34054,6 +34584,7 @@ function bind(el, next) {
     polrecite: '<svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M10 10l2 2 4-4"/><circle cx="13" cy="7" r="1.5" fill="#f97316"/></svg>',
     redline: '<svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#991b1b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/><circle cx="12" cy="12" r="1.5" fill="#f97316"/></svg>',
     progress: '<svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="6"/><circle cx="18" cy="6" r="2" fill="#f97316"/></svg>',
+    share: '<svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/><circle cx="18" cy="5" r="0.5" fill="#f97316"/></svg>',
     settings: '<svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/><circle cx="12" cy="12" r="1" fill="#f97316"/></svg>',
     // 页面内部专用图标
     copilot: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="cpBot" x1="3" y1="5" x2="21" y2="19" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#a855f7"/><stop offset="0.55" stop-color="#6366f1"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><path d="M12 2.4v3.2" stroke="#f97316" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="2.3" r="1.8" fill="#fbbf24"/><rect x="4.5" y="6" width="15" height="13" rx="6" fill="url(#cpBot)"/><rect x="6" y="7.6" width="12" height="3" rx="1.5" fill="#ffffff" opacity="0.16"/><circle cx="9.3" cy="12.7" r="1.7" fill="#ffffff"/><circle cx="14.7" cy="12.7" r="1.7" fill="#ffffff"/><circle cx="9.3" cy="12.7" r="0.8" fill="#6d28d9"/><circle cx="14.7" cy="12.7" r="0.8" fill="#6d28d9"/><path d="M9.6 15.6c1.1 1.1 3.7 1.1 4.8 0" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/><circle cx="6.7" cy="15" r="1.1" fill="#f472b6" opacity="0.85"/><circle cx="17.3" cy="15" r="1.1" fill="#34d399" opacity="0.85"/></svg>',
@@ -34098,6 +34629,7 @@ function bind(el, next) {
     ['redline', '红线禁令', ICONS.redline, RedlineModule],
     ['progress', '进度追踪', ICONS.progress, ProgressModule],
     ['plugins', '插件中心', '🧩', PluginCenterModule],
+    ['share', '分享协作', ICONS.share, ShareCenterModule],
     ['settings', '设置', ICONS.settings, SettingsModule]
   ];
   const ALL = MAIN_TABS.concat(TOOL_TABS);
