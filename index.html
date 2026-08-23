@@ -610,10 +610,7 @@ body.focus-lock .nav, body.focus-lock .foot { display: none; }
 /* ============================================================
  * 极简LaTeX公式渲染（tex.js）
  * ============================================================ */
-.tx { font-family: "Cambria Math", Georgia, "Times New Roman", serif; font-size: 1.05em;
-  /* 公式原子化：外层容器多为 word-break:break-all，会在公式内任意字符处断行；
-     这里整体禁止内部换行（NBSP 挡不住 break-all），超宽公式横向滚动兜底 */
-  white-space: nowrap; display: inline-block; max-width: 100%; vertical-align: middle; overflow-x: auto; overflow-y: hidden; }
+.tx { font-family: "Cambria Math", Georgia, "Times New Roman", serif; font-size: 1.05em; }
 .tx i { font-style: italic; }
 .tx-fn { font-style: italic; font-family: "Cambria Math", Georgia, "Times New Roman", serif; }   /* 函数名斜体 serif（\f \sin 等）—— 让用户视觉看出 LaTeX 已渲染而非裸文本 */
 .tx sup, .tx sub { font-size: .72em; line-height: 0; }
@@ -2882,9 +2879,10 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       if (c === '\\') {
         // ★ 双反斜杠 \\ 归一化（消灭「孤立 \ 显示成 |」的顽疾）：
         //   \\int → 跳过第一个 \，第二个 \ 走正常命令解析（JSON 转义残留最常见：\\pi \\sin \\frac）
-        //   孤立 \\（后非字母，如行分隔符）→ 输出 <br>（LaTeX 语义 = 换行）
+        //   \\, \\; \\! → 同样归一化（间距命令符号，JSON 转义残留：\\,\\mathrm{d}）
+        //   孤立 \\（后跟 & [ \end 行尾等，即真·行分隔符）→ 输出 <br>（LaTeX 语义 = 换行）
         if (s[i + 1] === '\\') {
-          if (/[a-zA-Z]/.test(s[i + 2] || '')) { i++; continue; }
+          if (/[a-zA-Z,;!]/.test(s[i + 2] || '')) { i++; continue; }
           out += '<br>'; i += 2; continue;
         }
         const m = s.slice(i).match(/^\\([a-zA-Z]+|.)/);
@@ -21575,7 +21573,7 @@ function bind(el, next) {
             + '</div>';
         }).join('') + '</div>'
       : '';
-    var txCss = '.tx{font-family:"Cambria Math",Georgia,"Times New Roman",serif;font-size:1.08em;white-space:nowrap}'
+    var txCss = '.tx{font-family:"Cambria Math",Georgia,"Times New Roman",serif;font-size:1.08em}'
       + '.tx i{font-style:italic}.tx-fn{font-style:normal}'
       + '.tx sup,.tx sub{font-size:.72em;line-height:0}.tx-fn + sub{font-style:normal;font-size:.68em}'
       + '.tx-frac{display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 .25em}'
