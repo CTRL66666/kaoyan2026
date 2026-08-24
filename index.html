@@ -5734,19 +5734,26 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       throw new Error('该令牌缺 workflow 权限（scope: ' + (scopes || '无') + '）。请到 GitHub → Settings → Developer settings → PAT 勾选 workflow 后重新生成');
     }
     var GH = { 'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' };
+    function sleepMs(ms) { return new Promise(function (rs) { setTimeout(rs, ms); }); }
     async function putFile(repoPath, text, msg) {
-      var sha = null;
-      try {
-        var r = await fetch('https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/contents/' + repoPath + '?ref=main', { headers: GH });
-        if (r.status === 200) { var d = await r.json(); sha = d.sha; }
-      } catch (e) {}
-      onStep && onStep((sha ? '⬆️ 更新 ' : '🆕 新建 ') + repoPath + ' …');
-      var res = await fetch('https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/contents/' + repoPath, {
-        method: 'PUT', headers: GH,
-        body: JSON.stringify({ message: msg, content: b64utf8(text), branch: 'main', sha: sha })
-      });
-      if (res.status !== 200 && res.status !== 201) {
-        throw new Error(repoPath + ' 上传失败 HTTP ' + res.status + (res.status === 404 ? '（令牌可能缺 repo 权限）' : ''));
+      // 409 = 上一个 commit 还在落库（分支变更中），等一下重取 sha 再推即可
+      for (var attempt = 0; ; attempt++) {
+        var sha = null;
+        try {
+          var r = await fetch('https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/contents/' + repoPath + '?ref=main', { headers: GH });
+          if (r.status === 200) { var d = await r.json(); sha = d.sha; }
+        } catch (e) {}
+        onStep && onStep((sha ? '⬆️ 更新 ' : '🆕 新建 ') + repoPath + (attempt > 0 ? '（第 ' + attempt + ' 次重试）' : '') + ' …');
+        var res = await fetch('https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/contents/' + repoPath, {
+          method: 'PUT', headers: GH,
+          body: JSON.stringify({ message: msg, content: b64utf8(text), branch: 'main', sha: sha })
+        });
+        if (res.status === 200 || res.status === 201) return;
+        if ((res.status === 409 || res.status >= 500) && attempt < 4) {
+          await sleepMs(1500 * (attempt + 1));
+          continue;
+        }
+        throw new Error(repoPath + ' 上传失败 HTTP ' + res.status + (res.status === 404 ? '（令牌可能缺 repo 权限）' : res.status === 409 ? '（分支持续冲突，稍后再试）' : ''));
       }
     }
     await putFile('.github/workflows/ai-exam.yml', window.CLOUDJOB_ASSETS.yml, 'ci: install cloud exam runner (workflow)');
