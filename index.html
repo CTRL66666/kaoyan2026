@@ -14213,6 +14213,11 @@ function bind(el, next) {
   // id：advice / reviewPath / explain:<考点ID> / quiz:<考点ID>），
   // 切换页面后 render 据 BgTask.isRunning 恢复按钮/骨架状态
   var currentEl = null;   // 当前渲染容器引用，AI 完成后若仍在当前页则自动刷新
+  // currentEl 是复用的 #view 元素，切 tab 后仍非空且 isConnected；
+  // 异步回调（AI 完成/失败）必须确认 App.current 仍在本页才能渲染，否则会把热力图内容
+  // 写进用户正在看的其他页面（表现为「切页被强制拉回」）。
+  function onHeatmapPage() { return !!(window.App && App.current === 'heatmap'); }
+  function renderIfHere() { if (onHeatmapPage() && currentEl) render(currentEl); }
   var lastAdvice = null;  // 最近一次 AI 建议结果（会话内缓存，切页面后恢复显示）
   var searchQuery = '';   // 考点搜索关键词（科目内筛选）
   var reviewPath = null;  // AI 薄弱点复习路径 {subj, steps:[{idx,topicId,name,reason}], generatedAt}
@@ -14809,11 +14814,11 @@ function bind(el, next) {
           subj: subjTab, at: new Date().toISOString()
         };
         Toast.success('AI 建议已生成');
-        if (currentEl) render(currentEl);
+        renderIfHere();
       },
       onError: function (e) {
         Toast.warn('建议生成失败：' + e.message);
-        if (currentEl) render(currentEl);
+        renderIfHere();
       }
     });
     if (el) render(el);  // 立即刷新按钮为 disabled + 骨架
@@ -14876,11 +14881,11 @@ function bind(el, next) {
           generatedAt: new Date().toISOString()
         };
         Toast.success('复习路径已生成（' + reviewPath.steps.length + '步）');
-        if (currentEl) render(currentEl);
+        renderIfHere();
       },
       onError: function (e) {
         Toast.warn('复习路径生成失败：' + e.message);
-        if (currentEl) render(currentEl);
+        renderIfHere();
       }
     });
     if (el) render(el);
@@ -19906,11 +19911,11 @@ function bind(el, next) {
       onDone: function (result) {
         Store.update(function (s) { s.sprintData = s.sprintData || {}; s.sprintData.trends = result; });
         Toast.success('AI 趋势分析完成');
-        if (currentEl) render(currentEl);
+        renderIfHere();
       },
       onError: function (e) {
         Toast.warn('趋势分析失败：' + e.message);
-        if (currentEl) render(currentEl);
+        renderIfHere();
       }
     });
     if (el) render(el);
@@ -19964,11 +19969,11 @@ function bind(el, next) {
           });
         });
         Toast.success('已生成 ' + (result.reasons || []).length + ' 个考点的押题理由');
-        if (currentEl) render(currentEl);
+        renderIfHere();
       },
       onError: function (e) {
         Toast.warn('生成失败：' + e.message);
-        if (currentEl) render(currentEl);
+        renderIfHere();
       }
     });
     if (el) render(el);
@@ -20265,7 +20270,8 @@ function bind(el, next) {
         : '<div style="font-size:11.5px;color:var(--warn);margin-top:4px">⏳ 已排队但未接入执行器（完成配置向导后点「♻️ 重发」即跑）</div>';
     }
     if (st === 'dispatched') return '<div style="font-size:11.5px;color:var(--text-muted);margin-top:4px">🚀 已派发 · 等待云端启动（Actions 冷启动约 10~30s）…</div>';
-    if (st === 'error' || st === 'canceled') return '';
+    if (st === 'error') return '<div style="font-size:11.5px;color:#cf1322;margin-top:4px;line-height:1.6">🔴 ' + U.esc(j.stageMsg || '云端执行失败') + '<br><span style="color:var(--text-muted)">可点「♻️ 重发」重试；若反复失败，请到设置页检查 AI 接口/模型配置</span></div>';
+    if (st === 'canceled') return '';
     if (st === 'done') return cloudStageRailHtml(j, true) + cloudBarHtml(100);
     // running：阶段管线 + 进度（progress 字段由执行器回写；旧任务缺字段时按阶段估算）
     var rail = cloudStageRailHtml(j, false);
@@ -20396,18 +20402,18 @@ function bind(el, next) {
           Toast.show('☁️ 正在创建云端任务…', 'info');
           CloudJob.submit(prefs).then(function (job) {
             Toast.success(job.wfDispatched ? '☁️ 已派发！执行器接单中，关页也不影响' : '☁️ 已排队（未接过执行器，配置好后点「♻️ 重发」即跑）');
-            if (currentEl) render(currentEl); else if (el) render(el);
+            renderIfHere();
             cjStartAutoPoll();
           }).catch(function (e) {
             Toast.warn('提交失败：' + ((e && e.message) || e));
-            if (currentEl) render(currentEl);
+            renderIfHere();
           });
         } }
       ]
     });
   }
   function bindCloudJobs(el) {
-    function rerenderSafe() { if (currentEl) render(currentEl); else if (el) render(el); }
+    function rerenderSafe() { renderIfHere(); }
     var instBtn = el.querySelector('#cj-inst');
     if (instBtn) instBtn.onclick = function () {
       if (!window.CloudJob || !window.CLOUDJOB_ASSETS) { Toast.warn('安装包未随本页构建打入，请用最新构建的页面'); return; }
@@ -20456,7 +20462,7 @@ function bind(el, next) {
     el.querySelectorAll('[data-cj]').forEach(function (b) {
       b.onclick = function () {
         var id = b.getAttribute('data-cj'), act = b.getAttribute('data-act');
-        function rerender() { if (currentEl) render(currentEl); }
+        function rerender() { renderIfHere(); }
         function fail(e) { Toast.warn((e && e.message) || String(e)); rerender(); }
         if (act === 'refresh') CloudJob.refresh(id).then(rerender).catch(fail);
         else if (act === 'cancel') CloudJob.cancel(id).then(function () { Toast.success('已取消'); rerender(); }).catch(fail);
@@ -20513,37 +20519,46 @@ function bind(el, next) {
     }).catch(function () { cb && cb(); });
   }
   // 进行中云端任务的持续轮询：派发后每 ~6s 拉一次远端进度，进度条/阶段管线实时前进；
-  // 无进行中任务自动停，切页/销毁时停，避免后台空转与 render 循环。
+  // 无进行中任务自动停，切页/销毁时停，避免后台空转。
+  // 幂等单飞设计：cjBusy + cjTimer 双守卫——render→bindControls→cjAutoPoll 重入时直接退出，
+  // 杜绝「每轮渲染都重启轮询」造成的请求风暴与 Toast 反复弹。
   var cjTitle = '';
   var cjTimer = null;
-  // 是否仍在押题页（currentEl 是复用 #view 元素，切 tab 后仍非空，须用 App.current 判定）
+  var cjBusy = false;
+  // 是否仍在押题页（currentEl 是复用 #view 元素，切 tab 后仍非空且 isConnected，须用 App.current 判定）
   function cjOnSprintPage() { return !!(window.App && App.current === 'sprint'); }
-  // 进入押题页时静默轮询进行中任务（有状态变化才重渲染）
-  function cjAutoPoll(force) {
+  // 仅当真的停在押题页才重渲染。异步回调（getSetup/refreshAll/submit…）若裸渲染 currentEl，
+  // 会把押题内容写进用户已切到的其他页面 —— 表现就是「切页被强制拉回押题页」。
+  function renderIfHere() { if (cjOnSprintPage() && currentEl) render(currentEl); }
+  function cjAutoPoll() {
     if (!window.CloudJob) return;
     if (!cjOnSprintPage()) { cjStopAutoPoll(); return; }
     var hasActive = false;
     try { hasActive = (CloudJob.list() || []).some(function (j) { return CJ_ACTIVE.indexOf(j.status) >= 0; }); } catch (e) {}
     if (!hasActive || !currentEl) { cjStopAutoPoll(); return; }
+    if (cjBusy || cjTimer) return;   // 已有一轮在跑 / 已排队，幂等退出
+    cjBusy = true;
     CloudJob.refreshAll({ silent: true }).then(function () {
+      cjBusy = false;
       if (!cjOnSprintPage() || !currentEl) return;
       var doneNow = (CloudJob.list() || []).filter(function (j) { return j.status === 'done' && !j.resultImported; });
       if (doneNow.length && cjTitle !== String(doneNow.length)) {
         cjTitle = String(doneNow.length);
         Toast.success('☁️ ' + doneNow.length + ' 个云端任务已完成，可收卷导入');
       }
-      render(currentEl);
-      cjScheduleNext();
-    }).catch(function () { cjScheduleNext(); });
+      cjScheduleNext();   // 先排下一轮再渲染：render 会触发 bindControls→cjAutoPoll，靠 cjTimer 在场幂等退出
+      renderIfHere();
+    }).catch(function () { cjBusy = false; cjScheduleNext(); });
   }
   function cjScheduleNext() {
     if (!cjOnSprintPage()) return;
-    cjTimer = setTimeout(function () { cjAutoPoll(false); }, 6000);
+    cjTimer = setTimeout(function () { cjTimer = null; cjAutoPoll(); }, 6000);
   }
+  // 提交任务成功后的立即拉取（重置完成提示去重计数）
   function cjStartAutoPoll() {
     cjTitle = '';
     cjStopAutoPoll();
-    cjAutoPoll(true);
+    cjAutoPoll();
   }
   function cjStopAutoPoll() {
     if (cjTimer) { clearTimeout(cjTimer); cjTimer = null; }
@@ -20768,13 +20783,13 @@ function bind(el, next) {
         Toast.show('押题卷已生成：' + exam.title + '（' + exam.questions.length + '题）'
           + (userBp2 ? (checkN ? ' · 📐 蓝本校验 ' + checkN + ' 项偏差' : ' · 📐 蓝本校验通过') : ''),
           checkN ? 'info' : 'success', checkN ? 5000 : 3000);
-        if (currentEl) render(currentEl);
+        renderIfHere();
         // 自动打开押题卷（全屏考试页）
         openExam(exam.id, currentEl || el);
       },
       onError: function (e) {
         Toast.warn('组卷失败：' + e.message);
-        if (currentEl) render(currentEl);
+        renderIfHere();
       }
     });
     if (el) render(el);
@@ -21232,7 +21247,7 @@ function bind(el, next) {
     parPanel.flowDone = true;
     parClosePanel();
     Toast.success('已停止出题，载入 ' + doneQs.length + ' 题开始作答');
-    if (currentEl) render(currentEl);
+    renderIfHere();
     openExam(exam.id, currentEl || document.body);
   }
   // ---------- 并行出题主流程（规划 → 并行 → 重试 → 审查） ----------
@@ -21514,7 +21529,7 @@ function bind(el, next) {
             close();
             Toast.success('已还原原题');
             showChiefReport(exam, exam.chiefReview);
-            if (currentEl) render(currentEl);
+            renderIfHere();
           }
         },
         { label: '🔧 应用本次意见', kind: 'btn-primary',
@@ -21569,7 +21584,7 @@ function bind(el, next) {
         Toast.success('✓ 已按意见重写（累计 ' + q.optimizeCount + '/5 次）');
         // 重新打开报告让用户立即看到新题
         setTimeout(function () { showChiefReport(exam, exam.chiefReview); }, 300);
-        if (currentEl) render(currentEl);
+        renderIfHere();
       } else { Toast.warn('AI 重写返回为空，请原题或换个意见'); }
     }).catch(function (e) { Toast.warn('重写失败：' + (e.message || e)); });
   }
@@ -21590,7 +21605,7 @@ function bind(el, next) {
       });
       Toast.success('已还原原题');
       showChiefReport(exam, exam.chiefReview);
-      if (currentEl) render(currentEl);
+      renderIfHere();
     };
     var qs = exam.questions;
     var rows = (review.questions || []).map(function (rq) {
@@ -21824,7 +21839,7 @@ function bind(el, next) {
           (nRewrite ? '（已自动重写）' : '') + ' · 🔧 进入考试页可对单题循环优化' + (wasInExam ? '（已追加到当前卷面）' : ''),
           out.review.verdict === 'ok' ? 'success' : 'info', 4500
         );
-        if (currentEl) render(currentEl);
+        renderIfHere();
         if (!wasInExam) openExam(exam.id, currentEl || el);
         return exam;
       });
@@ -21838,12 +21853,12 @@ function bind(el, next) {
         });
         if (parPanel) { parPanel.flowDone = true; parRemoveFab(); parClosePanel(); }
         Toast.warn('并行组卷后续阶段失败：' + (e.message || e) + '，已完成题目已保留在押题卷列表');
-        if (currentEl) render(currentEl);
+        renderIfHere();
         return;
       }
       if (parPanel) { parPanel.flowDone = true; parRemoveFab(); parClosePanel(); }
       Toast.warn('并行组卷失败：' + (e.message || e));
-      if (currentEl) render(currentEl);
+      renderIfHere();
     });
   }
 
@@ -22232,7 +22247,7 @@ function bind(el, next) {
       : '';
     var checkN = (exam.blueprintCheck || []).length;
     Toast.show('📦 离线组卷完成：' + exam.questions.length + ' 题（本地题库 ' + pool.length + ' 题抽选）' + missTxt + (checkN ? ' · 📐 蓝本校验 ' + checkN + ' 项提示' : ' · 📐 蓝本校验通过'), out.shortfall.length || checkN ? 'info' : 'success', 5000);
-    if (currentEl) render(currentEl);
+    renderIfHere();
     openExam(exam.id, currentEl || el);
   }
 
@@ -22560,7 +22575,7 @@ function bind(el, next) {
       });
       if (float) { float.done(); setTimeout(function () { float.close(); }, 800); }
       Toast.success('变式题已加入我的题库（做对为止）');
-      if (currentEl) render(currentEl);
+      renderIfHere();
     }).catch(function (e) {
       if (float) { float.fail((e && e.message) || String(e)); setTimeout(function () { float.close(); }, 1500); }
       Toast.warn('变式生成失败：' + ((e && e.message) || String(e)));
@@ -22590,7 +22605,7 @@ function bind(el, next) {
       if (s.questionBank.length > 200) s.questionBank = s.questionBank.slice(0, 200);
     });
     Toast.success('已加入我的题库');
-    if (currentEl) render(currentEl);
+    renderIfHere();
   }
   // 手动加入错题（判对也能加；dedup 与交卷自动入画像共用 key 防重）
   function addQuestionToMistakes(examId, qi) {
@@ -22616,7 +22631,7 @@ function bind(el, next) {
   // 打开押题卷（全屏考试子页面）
   function openExam(examId, el) {
     examSession = { id: examId };
-    if (currentEl) render(currentEl);
+    renderIfHere();
   }
   function viewExam(examId, el) { openExam(examId, el); } // 兼容旧调用
 
@@ -22756,7 +22771,7 @@ function bind(el, next) {
     if (starBtn) starBtn.onclick = function () {
       Store.update(function (s) { var e = (s.sprintData.mockExams || []).find(function (x) { return x.id === examId; }); if (e) e.starred = !e.starred; });
       Toast.show(exam.starred ? '已取消标星' : '⭐ 已标星收藏', 'info', 1200);
-      if (currentEl) render(currentEl);
+      renderIfHere();
     };
     var shareExamBtn = el.querySelector('#sp-exam-share');
     if (shareExamBtn) shareExamBtn.onclick = function () {
@@ -23649,7 +23664,7 @@ function bind(el, next) {
           if (daily.ids.indexOf(id) < 0) daily.ids.push(id);
           s.sprintData.dailyDone = daily;
         });
-        if (currentEl) render(currentEl);
+        renderIfHere();
       };
     });
 
@@ -23657,10 +23672,10 @@ function bind(el, next) {
     var eBtn = el.querySelector('#sp-ai-exam'); if (eBtn) eBtn.onclick = function () { openExamConfig(el); };
     var cBtn = el.querySelector('#sp-cloud-exam'); if (cBtn) cBtn.onclick = function () { openCloudExamModal(el); };
     bindCloudJobs(el);
-    cjStartAutoPoll();
+    cjAutoPoll();   // 幂等入口：有进行中任务才启动轮询，重入安全（勿用 cjStartAutoPoll，会重置完成提示去重）
     loadCjSetup(function () {
-      // 配置状态回来后重渲染头部（四步清单打钩/就绪判定）
-      if (currentEl) render(currentEl); else render(el);
+      // 配置状态回来后重渲染头部（四步清单打钩/就绪判定）；异步回来可能已切页，必须守卫
+      renderIfHere();
     });
     var rushExam = el.querySelector('#sp-rush-exam');
     if (rushExam) rushExam.onclick = function () { saveExamPref({ diff: 'hard', count: 'lite' }); openExamConfig(el); };
@@ -36218,7 +36233,7 @@ function bind(el, next) {
 })();
 
 /* ===== cloudjob assets ===== */
-window.CLOUDJOB_ASSETS = {"yml":"# kaoyan2026 云端出卷执行器 workflow（2026-08-24）\n# 触发：本地工具通过 workflow_dispatch 派发（inputs.gist_id = 任务 Gist id）\n# 所需 repo secrets（仓库 Settings → Secrets and variables → Actions）：\n#   CLOUDJOB_GH_TOKEN     GitHub 令牌（需 gist 权限，用于读写任务 Gist）—— 必配\n#   CLOUDJOB_AI_ENDPOINT / CLOUDJOB_AI_KEY / CLOUDJOB_AI_MODEL —— 可选回退：\n#     本地工具提交任务时会把 AI 配置自动写进 job.json（存于用户本人 secret Gist，\n#     执行器优先读取；仅当任务未自带时才用这三个 secrets）。\nname: AI Exam Runner\n\non:\n  workflow_dispatch:\n    inputs:\n      gist_id:\n        description: 'CloudJob Gist ID'\n        required: true\n\njobs:\n  run-exam:\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n    steps:\n      - name: Checkout runner\n        uses: actions/checkout@v4\n\n      - name: Setup Node\n        uses: actions/setup-node@v4\n        with:\n          node-version: '20'\n\n      - name: Run cloud exam job\n        env:\n          GIST_ID: ${{ github.event.inputs.gist_id }}\n          GH_TOKEN: ${{ secrets.CLOUDJOB_GH_TOKEN }}\n          AI_ENDPOINT: ${{ secrets.CLOUDJOB_AI_ENDPOINT }}\n          AI_KEY: ${{ secrets.CLOUDJOB_AI_KEY }}\n          AI_MODEL: ${{ secrets.CLOUDJOB_AI_MODEL }}\n        run: node tools/cloud/ai-exam-runner.cjs\n","runner":"#!/usr/bin/env node\n/* ============================================================\n * kaoyan2026 云端出卷执行器（GitHub Actions 内运行，2026-08-24）\n * 流水线：读任务 → 总工规划(1 call) → 并发出题池(conc 4) → 蓝本硬校验(纯代码)\n *        → 总工程师审查(1 call) → 定向重写池(conc 3) → 终检 → result.json 回写 Gist\n * 环境变量（全部来自 repo secrets / dispatch inputs）：\n *   GIST_ID      任务 Gist id（workflow_dispatch inputs）\n *   GH_TOKEN     GitHub 令牌（需 gist 权限）\n *   AI_ENDPOINT  OpenAI 兼容接口地址（如 https://api.xxx.com/v1）\n *   AI_KEY       接口密钥\n *   AI_MODEL     模型名\n * 设计原则：任何阶段失败 → status.json 标 error + 原因；绝不把半成品标 done。\n *           用户在本地取消（status=canceled）→ 阶段边界检测到即退出。\n * ============================================================ */\n'use strict';\nconst https = require('https');\nconst { URL } = require('url');\n\nconst API = 'https://api.github.com';\nconst GIST_ID = process.env.GIST_ID || '';\nconst GH_TOKEN = process.env.GH_TOKEN || '';\n\nif (!GIST_ID || !GH_TOKEN) { console.error('缺 GIST_ID 或 GH_TOKEN'); process.exit(1); }\n\nfunction log(...a) { console.log('[runner]', ...a); }\nfunction sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\n// AI 配置：优先 job.json 里的 prefs.ai（本地工具自动写入，免配 secrets），回退 repo secrets。\n// 在主流程读到 job 后调用 initAiConf() 完成校验。\nlet JOB_AI = null;\nfunction aiConf(k) {\n  if (JOB_AI && JOB_AI[k]) return String(JOB_AI[k]);\n  return process.env['AI_' + k.toUpperCase()] || '';\n}\n\n// ---------- GitHub Gist ----------\nfunction ghReq(method, path, body) {\n  return new Promise((resolve, reject) => {\n    const data = body ? JSON.stringify(body) : null;\n    const req = https.request({\n      hostname: 'api.github.com', path, method,\n      headers: {\n        'Authorization': 'Bearer ' + GH_TOKEN,\n        'Accept': 'application/vnd.github+json',\n        'Content-Type': 'application/json',\n        'User-Agent': 'kaoyan2026-cloudjob-runner',\n        'Content-Length': data ? Buffer.byteLength(data) : 0\n      },\n      timeout: 30000\n    }, res => {\n      let txt = '';\n      res.on('data', c => txt += c);\n      res.on('end', () => {\n        if (res.statusCode === 204) return resolve(null);\n        let d = null;\n        try { d = txt ? JSON.parse(txt) : null; } catch (e) {}\n        if (res.statusCode >= 400) { const e = new Error('GitHub HTTP ' + res.statusCode + ' ' + txt.slice(0, 200)); e.status = res.statusCode; return reject(e); }\n        resolve(d);\n      });\n    });\n    req.on('error', reject);\n    req.on('timeout', () => req.destroy(new Error('GitHub 请求超时')));\n    if (data) req.write(data);\n    req.end();\n  });\n}\nasync function ghRetry(method, path, body, tries = 4) {\n  for (let i = 0; ; i++) {\n    try { return await ghReq(method, path, body); }\n    catch (e) {\n      if (i >= tries - 1 || (e.status && e.status < 500 && e.status !== 403)) throw e;\n      log('GitHub 请求失败重试', i + 1, e.message);\n      await sleep(2000 * (i + 1));\n    }\n  }\n}\nasync function setStatus(status, stage, msg, progress) {\n  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) } } };\n  try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }\n  catch (e) {\n    const hint = (e && e.status === 404)\n      ? '　👉 诊断：能读 job.json 却写不回 status，几乎可断定 CLOUDJOB_GH_TOKEN 对 Gist 缺「写」权限（请用 classic PAT 勾选 gist，或 fine-grained PAT 把 Gist 设为 Read & Write）'\n      : '';\n    log('!! 写状态失败（不中断主流程）：', e.message + hint);\n    return false;\n  }\n}\n\n// ---------- AI 调用（OpenAI 兼容 /chat/completions） ----------\nfunction aiCall(messages, opts = {}) {\n  const maxTok = opts.maxTokens || 3000;\n  // 本地 job.json 里 endpoint 是「完整请求 URL」（含 /chat/completions，如 openrouter 的\n  // /api/v1/chat/completions）；repo secrets 回退时可能是 base URL（如 /api/v1）。幂等拼接，\n  // 避免出现 /chat/completions/chat/completions 双拼导致 AI 404。\n  let endpoint = aiConf('endpoint').trim().replace(/\\/+$/, '');\n  if (!/\\/chat\\/completions$/.test(endpoint)) endpoint += '/chat/completions';\n  const body = JSON.stringify({ model: aiConf('model'), messages, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_tokens: maxTok });\n  return new Promise((resolve, reject) => {\n    const u = new URL(endpoint);\n    const req = https.request({\n      hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: 'POST',\n      headers: { 'Authorization': 'Bearer ' + aiConf('key'), 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },\n      timeout: opts.timeoutMs || 240000\n    }, res => {\n      let txt = '';\n      res.on('data', c => txt += c);\n      res.on('end', () => {\n        if (res.statusCode >= 400) return reject(new Error('AI HTTP ' + res.statusCode + ' ' + txt.slice(0, 300)));\n        try {\n          const d = JSON.parse(txt);\n          const msg = d.choices && d.choices[0] && d.choices[0].message;\n          resolve((msg && (msg.content || '')) || '');\n        } catch (e) { reject(new Error('AI 响应解析失败: ' + txt.slice(0, 200))); }\n      });\n    });\n    req.on('timeout', () => req.destroy(new Error('AI 调用超时')));\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\nasync function aiRetry(messages, opts, tries = 3) {\n  for (let i = 0; ; i++) {\n    try { return await aiCall(messages, opts); }\n    catch (e) {\n      if (i >= tries - 1) throw e;\n      log('AI 调用失败重试', i + 1, e.message);\n      await sleep(3000 * (i + 1));\n    }\n  }\n}\n// 宽容 JSON 抽取：剥代码围栏 → 找首个平衡的 {...} 或 [...]\nfunction extractJson(txt) {\n  let t = String(txt || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/g, '').trim();\n  try { return JSON.parse(t); } catch (e) {}\n  const starts = [t.indexOf('{'), t.indexOf('[')].filter(i => i >= 0);\n  if (!starts.length) throw new Error('输出中没有 JSON');\n  const s = Math.min(...starts);\n  const open = t[s], close = open === '{' ? '}' : ']';\n  let depth = 0, inStr = false, esc = false;\n  for (let i = s; i < t.length; i++) {\n    const ch = t[i];\n    if (inStr) { if (esc) esc = false; else if (ch === '\\\\') esc = true; else if (ch === '\"') inStr = false; continue; }\n    if (ch === '\"') inStr = true;\n    else if (ch === open) depth++;\n    else if (ch === close) { depth--; if (!depth) return JSON.parse(t.slice(s, i + 1)); }\n  }\n  throw new Error('JSON 不完整');\n}\n\n// ---------- 并发池 ----------\nasync function pool(items, conc, worker, onEachDone) {\n  const results = new Array(items.length);\n  let idx = 0, done = 0;\n  async function runOne() {\n    while (idx < items.length) {\n      const i = idx++;\n      try { results[i] = await worker(items[i], i); }\n      catch (e) { results[i] = { __err: (e && e.message) || String(e) }; log('worker 失败 @' + i, e.message); }\n      done++; if (onEachDone) onEachDone(done, items.length);\n    }\n  }\n  await Promise.all(Array.from({ length: Math.max(1, Math.min(conc, items.length)) }, runOne));\n  return results;\n}\n\n// ---------- 提示词（与 sprint.js 本地管线同风格，独立内联） ----------\nconst SUBJ_NAME = { math: '数学', ctrl: '专业课', eng: '英语', pol: '政治' };\nfunction plannerSystem(subj, prefs) {\n  const diffNote = prefs.diff === 'superhard'\n    ? '难度硬约束：全部为压轴难题（★4~★5），禁止基础题。'\n    : prefs.diff === 'hard'\n      ? '难度约束：约 70% 压轴难题（★4~★5），30% 中档（★3）。'\n      : '难度约束：约 60% 中档综合题（★3），40% 压轴题（★4~★5）。';\n  const n = prefs.count === 'full' ? 15 : prefs.count === 'lite' ? 8 : 12;\n  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题总工程师。请规划一份押题卷蓝图：共 ' + n + ' 题。'\n    + diffNote + '\\n要求：①覆盖不同考点，突出今年高频与考生薄弱方向 ②题型分布合理（选择题/填空题/解答题）③每题给出方向描述供出题 AI 执行。\\n'\n    + '只输出 JSON：{\"title\":\"卷名\",\"timeLimit\":分钟,\"questions\":[{\"topicName\":\"考点\",\"type\":\"choice|fill|solve\",\"diff\":\"easy|medium|hard\",\"star\":1-5,\"score\":分值,\"direction\":\"命题方向一句话\"}]}';\n}\nfunction questionSystem(subj) {\n  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确且解析完整（含关键步骤与易错点）。\\n'\n    + '只输出 JSON：{\"stem\":\"题干(LaTeX用$...$)\",\"type\":\"choice|fill|solve\",\"options\":[\"A. ..\",\"B. ..\",\"C. ..\",\"D. ..\"]或省略,\"answer\":\"正确答案\",\"solution\":\"详细解析\",\"trap\":\"常见陷阱一句话\",\"diff\":\"easy|medium|hard\",\"star\":1-5}';\n}\nfunction chiefSystem(subj) {\n  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '押题卷总审查工程师。逐题检查：①答案是否正确（自己验算关键步骤）②题干是否严谨无歧义 ③选项是否有双对/无解 ④解析是否支撑答案 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\\n'\n    + '只输出 JSON：{\"verdict\":\"ok|minor|major\",\"targetHardPct\":40,\"hardPct\":实际hard百分比,\"summary\":\"总评一句话\",\"needsRewrite\":[{\"index\":题号从1开始,\"reason\":\"问题\",\"fixHint\":\"修改指引\"}]}';\n}\n\n// ---------- 本地蓝本硬校验（纯代码，零幻觉防线） ----------\nfunction validateQuestion(q) {\n  if (!q || typeof q !== 'object') return '不是对象';\n  if (!q.stem || typeof q.stem !== 'string' || q.stem.length < 8) return '题干缺失或过短';\n  if (q.answer == null || q.answer === '') return '缺 answer';\n  if (q.type === 'choice') {\n    if (!Array.isArray(q.options) || q.options.length !== 4) return '选择题须 4 个选项';\n    const letters = q.options.map(o => String(o).trim().charAt(0).toUpperCase());\n    if (letters.join('') !== 'ABCD') return '选项前缀须 A/B/C/D（实为 ' + letters.join('') + '）';\n    const ans = String(q.answer).trim().charAt(0).toUpperCase();\n    if (letters.indexOf(ans) < 0) return 'answer 不在选项中';\n    // 双对粗检：answer 出现在 ≥2 个选项正文里\n    const ansBody = String(q.answer).trim().slice(1).trim();\n    if (ansBody.length > 6 && q.options.filter(o => String(o).indexOf(ansBody) >= 0).length > 1) return '疑似多个选项含相同答案内容';\n  }\n  if (!q.solution || String(q.solution).length < 10) return '解析缺失或过短';\n  return '';\n}\n// LaTeX 花括号平衡粗检（防 AI 漏花括号导致渲染崩坏）\nfunction braceBalanced(s) {\n  let n = 0;\n  s = String(s || '');\n  for (let i = 0; i < s.length; i++) {\n    const ch = s[i];\n    if (ch === '\\\\') { i++; continue; }\n    if (ch === '{') n++;\n    else if (ch === '}') n--;\n  }\n  return n === 0;\n}\n\n// ---------- 主流程 ----------\n(async function main() {\n  try {\n    // ① 读任务\n    let gist;\n    try { gist = await ghRetry('GET', '/gists/' + GIST_ID); }\n    catch (e) {\n      if (e.status === 404) throw new Error('找不到任务 Gist（404）：gist_id 传错，或 CLOUDJOB_GH_TOKEN 缺 gist 权限。GIST_ID=' + GIST_ID);\n      throw e;\n    }\n    if (!gist || !gist.files || !gist.files['job.json']) throw new Error('Gist 缺 job.json');\n    const job = JSON.parse(gist.files['job.json'].content);\n    const stNow = gist.files['status.json'] ? JSON.parse(gist.files['status.json'].content) : {};\n    if (stNow.status === 'canceled') { log('任务已被用户取消，直接退出'); return; }\n    const prefs = job.prefs || {};\n    // AI 配置：优先任务自带的 prefs.ai（本地工具写入 secret Gist），回退 repo secrets\n    JOB_AI = prefs.ai || null;\n    log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)');\n    if (!aiConf('endpoint') || !aiConf('key') || !aiConf('model')) {\n      throw new Error('缺 AI 配置：任务未携带（prefs.ai）且 repo secrets 也未配置');\n    }\n\n    // ①.5 自检模式：只验证链路（Gist 读写 + secret 有效 + AI 配置在场），不调 AI、不耗 token\n    if (prefs.check) {\n      const aiOk = !!(aiConf('endpoint') && aiConf('key') && aiConf('model'));\n      await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {\n        'result.json': { content: JSON.stringify({ cloudJobCheck: true, ok: true, aiConfigPresent: aiOk, checkedAt: new Date().toISOString() }) },\n        'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '🧪 自检通过：Gist 读写 ✓ · CLOUDJOB_GH_TOKEN ✓ · AI 配置在场' + (aiOk ? ' ✓' : ' ✗'), progress: 100, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) }\n      } });\n      log('🧪 自检完成');\n      return;\n    }\n    const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境\n    log('接单', job.jobId, JSON.stringify(prefs));\n\n    // ② 总工规划\n    await setStatus('running', 'planning', '总工程师正在规划蓝图…', 5);\n    const plan = extractJson(await aiRetry(\n      [{ role: 'system', content: plannerSystem(subj, prefs) },\n       { role: 'user', content: '请规划本卷蓝图。' }],\n      { maxTokens: 3500 }));\n    if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('蓝图规划失败：无 questions');\n    log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');\n\n    // ③ 并发出题池\n    await setStatus('running', 'generating', '并发出题中…', 10);\n    let questions = await pool(plan.questions, 4, async (pq, i) => {\n      const out = extractJson(await aiRetry(\n        [{ role: 'system', content: questionSystem(subj) },\n         { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],\n        { maxTokens: 2600 }));\n      out.topicName = pq.topicName || out.topicName || '';\n      out.score = out.score || pq.score || 5;\n      out.type = pq.type || out.type || 'solve';\n      return out;\n    }, (d, n) => { if (d % 3 === 0 || d === n) setStatus('running', 'generating', '并发出题中… ' + d + '/' + n, 10 + Math.round(d / n * 45)); });\n\n    // ④ 蓝本硬校验（纯代码）：坏题先标记，交由审查后统一重写\n    const localIssues = [];\n    questions.forEach((q, i) => {\n      const bad = validateQuestion(q);\n      const braceBad = !braceBalanced(q.stem) || !braceBalanced(q.solution);\n      if (bad || braceBad) localIssues.push({ index: i + 1, reason: bad + (braceBad ? '；LaTeX 花括号不平衡' : ''), fixHint: '修复结构问题，保持题意不变' });\n    });\n    log('本地硬校验：', localIssues.length, '题有问题');\n\n    // ⑤ 总工审查\n    await setStatus('running', 'reviewing', '总工程师审查中…', 58);\n    let review = {};\n    try {\n      review = extractJson(await aiRetry(\n        [{ role: 'system', content: chiefSystem(subj) },\n         { role: 'user', content: '审查这份押题卷（题号从1开始）：\\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || '').slice(0, 400), star: q.star })) ) }],\n        { maxTokens: 4000 })) || {};\n    } catch (e) { log('审查调用失败，仅按本地校验处理：', e.message); }\n    const rewriteList = [];\n    const seenRw = {};\n    ((review.needsRewrite) || []).forEach(r => { if (r && r.index && !seenRw[r.index]) { seenRw[r.index] = 1; rewriteList.push(r); } });\n    localIssues.forEach(li => { if (!seenRw[li.index]) { seenRw[li.index] = 1; rewriteList.push(li); } });\n    log('审查 verdict=', review.verdict || 'n/a', '待重写', rewriteList.length, '题');\n\n    // ⑥ 定向重写池\n    if (rewriteList.length) {\n      await setStatus('running', 'rewriting', '定向重写 ' + rewriteList.length + ' 题…', 68);\n      await pool(rewriteList, 3, async (rw) => {\n        const i = rw.index - 1;\n        const old = questions[i];\n        if (!old) return null;\n        const fixed = extractJson(await aiRetry(\n          [{ role: 'system', content: questionSystem(subj) },\n           { role: 'user', content: '重写这道题（原题如下）。必须修复：' + rw.reason + '。指引：' + (rw.fixHint || '') + '\\n原题：' + JSON.stringify(old) }],\n          { maxTokens: 2600 }));\n        fixed.topicName = old.topicName; fixed.score = old.score; fixed.type = old.type || fixed.type;\n        const bad = validateQuestion(fixed);\n        if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); return null; }\n        questions[i] = fixed;\n        return null;\n      }, (d, n) => setStatus('running', 'rewriting', '定向重写中… ' + d + '/' + n, 68 + Math.round(d / n * 20)));\n    }\n\n    // ⑦ 终检 + 打包\n    await setStatus('running', 'finalizing', '终检打包中…', 92);\n    const finalBad = [];\n    questions.forEach((q, i) => { const b = validateQuestion(q); if (b) finalBad.push((i + 1) + ':' + b); });\n    if (finalBad.length > Math.ceil(questions.length / 3)) throw new Error('终检不合格题过多（' + finalBad.length + '/' + questions.length + '），放弃交付：' + finalBad.join('; ').slice(0, 300));\n    // 剔除个别终检仍坏的题（宁缺毋滥），至少保留 60%\n    questions = questions.filter(q => !validateQuestion(q));\n    if (questions.length < 5) throw new Error('合格题不足 5 题，放弃交付');\n    const totalScore = questions.reduce((a, q) => a + (Number(q.score) || 5), 0);\n    const exam = {\n      title: plan.title || ('云端押题卷 · ' + (SUBJ_NAME[subj] || '')),\n      subject: subj,\n      timeLimit: plan.timeLimit || 120,\n      totalScore: totalScore,\n      questions: questions,\n      chiefReview: { verdict: review.verdict || (rewriteList.length ? 'minor' : 'ok'), hardPct: review.hardPct || null, targetHardPct: review.targetHardPct || null, summary: review.summary || '', rewrittenCount: rewriteList.length },\n      builtBy: 'cloud-actions',\n      generatedAt: new Date().toISOString()\n    };\n\n    // ⑧ 收卷回写\n    await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {\n      'result.json': { content: JSON.stringify(exam) },\n      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) }\n    } });\n    log('✅ 完成');\n  } catch (e) {\n    log('❌ 失败：', e.message);\n    await setStatus('error', '', '云端执行失败：' + ((e && e.message) || e));\n    process.exitCode = 1;\n  }\n})();\n"};
+window.CLOUDJOB_ASSETS = {"yml":"# kaoyan2026 云端出卷执行器 workflow（2026-08-24）\n# 触发：本地工具通过 workflow_dispatch 派发（inputs.gist_id = 任务 Gist id）\n# 所需 repo secrets（仓库 Settings → Secrets and variables → Actions）：\n#   CLOUDJOB_GH_TOKEN     GitHub 令牌（需 gist 权限，用于读写任务 Gist）—— 必配\n#   CLOUDJOB_AI_ENDPOINT / CLOUDJOB_AI_KEY / CLOUDJOB_AI_MODEL —— 可选回退：\n#     本地工具提交任务时会把 AI 配置自动写进 job.json（存于用户本人 secret Gist，\n#     执行器优先读取；仅当任务未自带时才用这三个 secrets）。\nname: AI Exam Runner\n\non:\n  workflow_dispatch:\n    inputs:\n      gist_id:\n        description: 'CloudJob Gist ID'\n        required: true\n\njobs:\n  run-exam:\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n    steps:\n      - name: Checkout runner\n        uses: actions/checkout@v4\n\n      - name: Setup Node\n        uses: actions/setup-node@v4\n        with:\n          node-version: '20'\n\n      - name: Run cloud exam job\n        env:\n          GIST_ID: ${{ github.event.inputs.gist_id }}\n          GH_TOKEN: ${{ secrets.CLOUDJOB_GH_TOKEN }}\n          AI_ENDPOINT: ${{ secrets.CLOUDJOB_AI_ENDPOINT }}\n          AI_KEY: ${{ secrets.CLOUDJOB_AI_KEY }}\n          AI_MODEL: ${{ secrets.CLOUDJOB_AI_MODEL }}\n        run: node tools/cloud/ai-exam-runner.cjs\n","runner":"#!/usr/bin/env node\n/* ============================================================\n * kaoyan2026 云端出卷执行器（GitHub Actions 内运行，2026-08-24）\n * 流水线：读任务 → 总工规划(1 call) → 并发出题池(conc 4) → 蓝本硬校验(纯代码)\n *        → 总工程师审查(1 call) → 定向重写池(conc 3) → 终检 → result.json 回写 Gist\n * 环境变量（全部来自 repo secrets / dispatch inputs）：\n *   GIST_ID      任务 Gist id（workflow_dispatch inputs）\n *   GH_TOKEN     GitHub 令牌（需 gist 权限）\n *   AI_ENDPOINT  OpenAI 兼容接口地址（如 https://api.xxx.com/v1）\n *   AI_KEY       接口密钥\n *   AI_MODEL     模型名\n * 设计原则：任何阶段失败 → status.json 标 error + 原因；绝不把半成品标 done。\n *           用户在本地取消（status=canceled）→ 阶段边界检测到即退出。\n * ============================================================ */\n'use strict';\nconst https = require('https');\nconst { URL } = require('url');\n\nconst API = 'https://api.github.com';\nconst GIST_ID = process.env.GIST_ID || '';\nconst GH_TOKEN = process.env.GH_TOKEN || '';\n\nif (!GIST_ID || !GH_TOKEN) { console.error('缺 GIST_ID 或 GH_TOKEN'); process.exit(1); }\n\nfunction log(...a) { console.log('[runner]', ...a); }\nfunction sleep(ms) { return new Promise(r => setTimeout(r, ms)); }\n\n// AI 配置：优先 job.json 里的 prefs.ai（本地工具自动写入，免配 secrets），回退 repo secrets。\n// 在主流程读到 job 后调用 initAiConf() 完成校验。\nlet JOB_AI = null;\nfunction aiConf(k) {\n  if (JOB_AI && JOB_AI[k]) return String(JOB_AI[k]);\n  return process.env['AI_' + k.toUpperCase()] || '';\n}\n\n// ---------- GitHub Gist ----------\nfunction ghReq(method, path, body) {\n  return new Promise((resolve, reject) => {\n    const data = body ? JSON.stringify(body) : null;\n    const req = https.request({\n      hostname: 'api.github.com', path, method,\n      headers: {\n        'Authorization': 'Bearer ' + GH_TOKEN,\n        'Accept': 'application/vnd.github+json',\n        'Content-Type': 'application/json',\n        'User-Agent': 'kaoyan2026-cloudjob-runner',\n        'Content-Length': data ? Buffer.byteLength(data) : 0\n      },\n      timeout: 30000\n    }, res => {\n      let txt = '';\n      res.on('data', c => txt += c);\n      res.on('end', () => {\n        if (res.statusCode === 204) return resolve(null);\n        let d = null;\n        try { d = txt ? JSON.parse(txt) : null; } catch (e) {}\n        if (res.statusCode >= 400) { const e = new Error('GitHub HTTP ' + res.statusCode + ' ' + txt.slice(0, 200)); e.status = res.statusCode; return reject(e); }\n        resolve(d);\n      });\n    });\n    req.on('error', reject);\n    req.on('timeout', () => req.destroy(new Error('GitHub 请求超时')));\n    if (data) req.write(data);\n    req.end();\n  });\n}\nasync function ghRetry(method, path, body, tries = 4) {\n  for (let i = 0; ; i++) {\n    try { return await ghReq(method, path, body); }\n    catch (e) {\n      if (i >= tries - 1 || (e.status && e.status < 500 && e.status !== 403)) throw e;\n      log('GitHub 请求失败重试', i + 1, e.message);\n      await sleep(2000 * (i + 1));\n    }\n  }\n}\nasync function setStatus(status, stage, msg, progress) {\n  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) } } };\n  try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }\n  catch (e) {\n    const hint = (e && e.status === 404)\n      ? '　👉 诊断：能读 job.json 却写不回 status，几乎可断定 CLOUDJOB_GH_TOKEN 对 Gist 缺「写」权限（请用 classic PAT 勾选 gist，或 fine-grained PAT 把 Gist 设为 Read & Write）'\n      : '';\n    log('!! 写状态失败（不中断主流程）：', e.message + hint);\n    return false;\n  }\n}\n\n// ---------- AI 调用（OpenAI 兼容 /chat/completions） ----------\nfunction aiCall(messages, opts = {}) {\n  const maxTok = opts.maxTokens || 3000;\n  // 本地 job.json 里 endpoint 是「完整请求 URL」（含 /chat/completions，如 openrouter 的\n  // /api/v1/chat/completions）；repo secrets 回退时可能是 base URL（如 /api/v1）。幂等拼接，\n  // 避免出现 /chat/completions/chat/completions 双拼导致 AI 404。\n  let endpoint = aiConf('endpoint').trim().replace(/\\/+$/, '');\n  if (!/\\/chat\\/completions$/.test(endpoint)) endpoint += '/chat/completions';\n  const body = JSON.stringify({ model: aiConf('model'), messages, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_tokens: maxTok });\n  return new Promise((resolve, reject) => {\n    const u = new URL(endpoint);\n    const req = https.request({\n      hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: 'POST',\n      headers: { 'Authorization': 'Bearer ' + aiConf('key'), 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },\n      timeout: opts.timeoutMs || 240000\n    }, res => {\n      let txt = '';\n      res.on('data', c => txt += c);\n      res.on('end', () => {\n        if (res.statusCode >= 400) return reject(new Error('AI HTTP ' + res.statusCode + ' ' + txt.slice(0, 300)));\n        try {\n          const d = JSON.parse(txt);\n          const ch0 = d.choices && d.choices[0];\n          const msg = ch0 && ch0.message;\n          const content = String((msg && msg.content) || '').trim();\n          if (!content) {\n            // 空正文诊断：思考模型把 max_tokens 全烧在 reasoning 上时 content 为空（finish_reason=length）\n            const fr = (ch0 && ch0.finish_reason) || '?';\n            const hasReason = !!(msg && (msg.reasoning_content || msg.reasoning));\n            throw new Error('AI 返回空正文（finish_reason=' + fr\n              + (hasReason ? '；模型只输出了思考内容没写答案——请换非思考模型、关闭思考模式或调大 max_tokens' : '；模型未输出任何内容')\n              + '）响应片段：' + txt.slice(0, 150));\n          }\n          resolve(content);\n        } catch (e) { if (e.message && e.message.indexOf('AI 返回空正文') === 0) throw e; reject(new Error('AI 响应解析失败: ' + txt.slice(0, 200))); }\n      });\n    });\n    req.on('timeout', () => req.destroy(new Error('AI 调用超时')));\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\nasync function aiRetry(messages, opts, tries = 3) {\n  for (let i = 0; ; i++) {\n    try { return await aiCall(messages, opts); }\n    catch (e) {\n      if (i >= tries - 1) throw e;\n      log('AI 调用失败重试', i + 1, e.message);\n      await sleep(3000 * (i + 1));\n    }\n  }\n}\n// 宽容 JSON 抽取：剥 <think> 思考块 → 剥代码围栏 → 找首个平衡的 {...} 或 [...]\nfunction extractJson(txt) {\n  let t = String(txt || '')\n    .replace(/<think>[\\s\\S]*?<\\/think>/gi, '')   // 思考模型的显式思考块\n    .replace(/<think>[\\s\\S]*$/i, '')             // 未闭合的思考块（后面不会再有正文了）\n    .trim();\n  t = t.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/g, '').trim();\n  try { return JSON.parse(t); } catch (e) {}\n  const starts = [t.indexOf('{'), t.indexOf('[')].filter(i => i >= 0);\n  if (!starts.length) throw new Error('输出中没有 JSON（原始输出前 160 字：' + t.slice(0, 160).replace(/\\s+/g, ' ') + '）');\n  const s = Math.min(...starts);\n  const open = t[s], close = open === '{' ? '}' : ']';\n  let depth = 0, inStr = false, esc = false;\n  for (let i = s; i < t.length; i++) {\n    const ch = t[i];\n    if (inStr) { if (esc) esc = false; else if (ch === '\\\\') esc = true; else if (ch === '\"') inStr = false; continue; }\n    if (ch === '\"') inStr = true;\n    else if (ch === open) depth++;\n    else if (ch === close) { depth--; if (!depth) return JSON.parse(t.slice(s, i + 1)); }\n  }\n  throw new Error('JSON 不完整/被截断（输出末尾：…' + t.slice(-100).replace(/\\s+/g, ' ') + '）。可尝试调大 max_tokens 或换模型');\n}\n\n// AI 调用 + 宽容 JSON 抽取一体化：网络/HTTP 错误仍由 aiRetry 重试；\n// 解析类失败（没 JSON / 被截断 / 空正文）在这里自动换一轮重问——单次坏响应不再炸全卷。\nasync function aiJson(messages, opts, tries = 3) {\n  for (let i = 0; ; i++) {\n    let out;\n    try { out = await aiRetry(messages, opts, 2); }\n    catch (e) { if (i >= tries - 1) throw e; await sleep(2000 * (i + 1)); continue; }\n    try { return extractJson(out); }\n    catch (e) {\n      log('JSON 解析失败，重问', i + 1, '/', tries, '：', ((e && e.message) || '').slice(0, 120));\n      if (i >= tries - 1) throw e;\n      await sleep(2500 * (i + 1));\n    }\n  }\n}\n\n// ---------- 并发池 ----------\nasync function pool(items, conc, worker, onEachDone) {\n  const results = new Array(items.length);\n  let idx = 0, done = 0;\n  async function runOne() {\n    while (idx < items.length) {\n      const i = idx++;\n      try { results[i] = await worker(items[i], i); }\n      catch (e) { results[i] = { __err: (e && e.message) || String(e) }; log('worker 失败 @' + i, e.message); }\n      done++; if (onEachDone) onEachDone(done, items.length);\n    }\n  }\n  await Promise.all(Array.from({ length: Math.max(1, Math.min(conc, items.length)) }, runOne));\n  return results;\n}\n\n// ---------- 提示词（与 sprint.js 本地管线同风格，独立内联） ----------\nconst SUBJ_NAME = { math: '数学', ctrl: '专业课', eng: '英语', pol: '政治' };\nfunction plannerSystem(subj, prefs) {\n  const diffNote = prefs.diff === 'superhard'\n    ? '难度硬约束：全部为压轴难题（★4~★5），禁止基础题。'\n    : prefs.diff === 'hard'\n      ? '难度约束：约 70% 压轴难题（★4~★5），30% 中档（★3）。'\n      : '难度约束：约 60% 中档综合题（★3），40% 压轴题（★4~★5）。';\n  const n = prefs.count === 'full' ? 15 : prefs.count === 'lite' ? 8 : 12;\n  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题总工程师。请规划一份押题卷蓝图：共 ' + n + ' 题。'\n    + diffNote + '\\n要求：①覆盖不同考点，突出今年高频与考生薄弱方向 ②题型分布合理（选择题/填空题/解答题）③每题给出方向描述供出题 AI 执行。\\n'\n    + '只输出 JSON：{\"title\":\"卷名\",\"timeLimit\":分钟,\"questions\":[{\"topicName\":\"考点\",\"type\":\"choice|fill|solve\",\"diff\":\"easy|medium|hard\",\"star\":1-5,\"score\":分值,\"direction\":\"命题方向一句话\"}]}';\n}\nfunction questionSystem(subj) {\n  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确且解析完整（含关键步骤与易错点）。\\n'\n    + '只输出 JSON：{\"stem\":\"题干(LaTeX用$...$)\",\"type\":\"choice|fill|solve\",\"options\":[\"A. ..\",\"B. ..\",\"C. ..\",\"D. ..\"]或省略,\"answer\":\"正确答案\",\"solution\":\"详细解析\",\"trap\":\"常见陷阱一句话\",\"diff\":\"easy|medium|hard\",\"star\":1-5}';\n}\nfunction chiefSystem(subj) {\n  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '押题卷总审查工程师。逐题检查：①答案是否正确（自己验算关键步骤）②题干是否严谨无歧义 ③选项是否有双对/无解 ④解析是否支撑答案 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\\n'\n    + '只输出 JSON：{\"verdict\":\"ok|minor|major\",\"targetHardPct\":40,\"hardPct\":实际hard百分比,\"summary\":\"总评一句话\",\"needsRewrite\":[{\"index\":题号从1开始,\"reason\":\"问题\",\"fixHint\":\"修改指引\"}]}';\n}\n\n// ---------- 本地蓝本硬校验（纯代码，零幻觉防线） ----------\nfunction validateQuestion(q) {\n  if (!q || typeof q !== 'object') return '不是对象';\n  if (!q.stem || typeof q.stem !== 'string' || q.stem.length < 8) return '题干缺失或过短';\n  if (q.answer == null || q.answer === '') return '缺 answer';\n  if (q.type === 'choice') {\n    if (!Array.isArray(q.options) || q.options.length !== 4) return '选择题须 4 个选项';\n    const letters = q.options.map(o => String(o).trim().charAt(0).toUpperCase());\n    if (letters.join('') !== 'ABCD') return '选项前缀须 A/B/C/D（实为 ' + letters.join('') + '）';\n    const ans = String(q.answer).trim().charAt(0).toUpperCase();\n    if (letters.indexOf(ans) < 0) return 'answer 不在选项中';\n    // 双对粗检：answer 出现在 ≥2 个选项正文里\n    const ansBody = String(q.answer).trim().slice(1).trim();\n    if (ansBody.length > 6 && q.options.filter(o => String(o).indexOf(ansBody) >= 0).length > 1) return '疑似多个选项含相同答案内容';\n  }\n  if (!q.solution || String(q.solution).length < 10) return '解析缺失或过短';\n  return '';\n}\n// LaTeX 花括号平衡粗检（防 AI 漏花括号导致渲染崩坏）\nfunction braceBalanced(s) {\n  let n = 0;\n  s = String(s || '');\n  for (let i = 0; i < s.length; i++) {\n    const ch = s[i];\n    if (ch === '\\\\') { i++; continue; }\n    if (ch === '{') n++;\n    else if (ch === '}') n--;\n  }\n  return n === 0;\n}\n\n// ---------- 主流程 ----------\n(async function main() {\n  try {\n    // ① 读任务\n    let gist;\n    try { gist = await ghRetry('GET', '/gists/' + GIST_ID); }\n    catch (e) {\n      if (e.status === 404) throw new Error('找不到任务 Gist（404）：gist_id 传错，或 CLOUDJOB_GH_TOKEN 缺 gist 权限。GIST_ID=' + GIST_ID);\n      throw e;\n    }\n    if (!gist || !gist.files || !gist.files['job.json']) throw new Error('Gist 缺 job.json');\n    const job = JSON.parse(gist.files['job.json'].content);\n    const stNow = gist.files['status.json'] ? JSON.parse(gist.files['status.json'].content) : {};\n    if (stNow.status === 'canceled') { log('任务已被用户取消，直接退出'); return; }\n    const prefs = job.prefs || {};\n    // AI 配置：优先任务自带的 prefs.ai（本地工具写入 secret Gist），回退 repo secrets\n    JOB_AI = prefs.ai || null;\n    log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)');\n    if (!aiConf('endpoint') || !aiConf('key') || !aiConf('model')) {\n      throw new Error('缺 AI 配置：任务未携带（prefs.ai）且 repo secrets 也未配置');\n    }\n\n    // ①.5 自检模式：只验证链路（Gist 读写 + secret 有效 + AI 配置在场），不调 AI、不耗 token\n    if (prefs.check) {\n      const aiOk = !!(aiConf('endpoint') && aiConf('key') && aiConf('model'));\n      await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {\n        'result.json': { content: JSON.stringify({ cloudJobCheck: true, ok: true, aiConfigPresent: aiOk, checkedAt: new Date().toISOString() }) },\n        'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '🧪 自检通过：Gist 读写 ✓ · CLOUDJOB_GH_TOKEN ✓ · AI 配置在场' + (aiOk ? ' ✓' : ' ✗'), progress: 100, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) }\n      } });\n      log('🧪 自检完成');\n      return;\n    }\n    const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境\n    log('接单', job.jobId, JSON.stringify(prefs));\n\n    // ② 总工规划\n    await setStatus('running', 'planning', '总工程师正在规划蓝图…', 5);\n    const plan = await aiJson(\n      [{ role: 'system', content: plannerSystem(subj, prefs) },\n       { role: 'user', content: '请规划本卷蓝图。' }],\n      { maxTokens: 3500 });\n    if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('蓝图规划失败：无 questions');\n    log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');\n\n    // ③ 并发出题池\n    await setStatus('running', 'generating', '并发出题中…', 10);\n    let questions = await pool(plan.questions, 4, async (pq, i) => {\n      const out = await aiJson(\n        [{ role: 'system', content: questionSystem(subj) },\n         { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],\n        { maxTokens: 3200 });\n      out.topicName = pq.topicName || out.topicName || '';\n      out.score = out.score || pq.score || 5;\n      out.type = pq.type || out.type || 'solve';\n      return out;\n    }, (d, n) => { if (d % 3 === 0 || d === n) setStatus('running', 'generating', '并发出题中… ' + d + '/' + n, 10 + Math.round(d / n * 45)); });\n\n    // ④ 蓝本硬校验（纯代码）：坏题先标记，交由审查后统一重写\n    const localIssues = [];\n    questions.forEach((q, i) => {\n      const bad = validateQuestion(q);\n      const braceBad = !braceBalanced(q.stem) || !braceBalanced(q.solution);\n      if (bad || braceBad) localIssues.push({ index: i + 1, reason: bad + (braceBad ? '；LaTeX 花括号不平衡' : ''), fixHint: '修复结构问题，保持题意不变' });\n    });\n    log('本地硬校验：', localIssues.length, '题有问题');\n\n    // ⑤ 总工审查\n    await setStatus('running', 'reviewing', '总工程师审查中…', 58);\n    let review = {};\n    try {\n      review = await aiJson(\n        [{ role: 'system', content: chiefSystem(subj) },\n         { role: 'user', content: '审查这份押题卷（题号从1开始）：\\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || '').slice(0, 400), star: q.star })) ) }],\n        { maxTokens: 4000 }) || {};\n    } catch (e) { log('审查调用失败，仅按本地校验处理：', e.message); }\n    const rewriteList = [];\n    const seenRw = {};\n    ((review.needsRewrite) || []).forEach(r => { if (r && r.index && !seenRw[r.index]) { seenRw[r.index] = 1; rewriteList.push(r); } });\n    localIssues.forEach(li => { if (!seenRw[li.index]) { seenRw[li.index] = 1; rewriteList.push(li); } });\n    log('审查 verdict=', review.verdict || 'n/a', '待重写', rewriteList.length, '题');\n\n    // ⑥ 定向重写池\n    if (rewriteList.length) {\n      await setStatus('running', 'rewriting', '定向重写 ' + rewriteList.length + ' 题…', 68);\n      await pool(rewriteList, 3, async (rw) => {\n        const i = rw.index - 1;\n        const old = questions[i];\n        if (!old) return null;\n        const fixed = await aiJson(\n          [{ role: 'system', content: questionSystem(subj) },\n           { role: 'user', content: '重写这道题（原题如下）。必须修复：' + rw.reason + '。指引：' + (rw.fixHint || '') + '\\n原题：' + JSON.stringify(old) }],\n          { maxTokens: 3200 });\n        fixed.topicName = old.topicName; fixed.score = old.score; fixed.type = old.type || fixed.type;\n        const bad = validateQuestion(fixed);\n        if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); return null; }\n        questions[i] = fixed;\n        return null;\n      }, (d, n) => setStatus('running', 'rewriting', '定向重写中… ' + d + '/' + n, 68 + Math.round(d / n * 20)));\n    }\n\n    // ⑦ 终检 + 打包\n    await setStatus('running', 'finalizing', '终检打包中…', 92);\n    const finalBad = [];\n    questions.forEach((q, i) => { const b = validateQuestion(q); if (b) finalBad.push((i + 1) + ':' + b); });\n    if (finalBad.length > Math.ceil(questions.length / 3)) throw new Error('终检不合格题过多（' + finalBad.length + '/' + questions.length + '），放弃交付：' + finalBad.join('; ').slice(0, 300));\n    // 剔除个别终检仍坏的题（宁缺毋滥），至少保留 60%\n    questions = questions.filter(q => !validateQuestion(q));\n    if (questions.length < 5) throw new Error('合格题不足 5 题，放弃交付');\n    const totalScore = questions.reduce((a, q) => a + (Number(q.score) || 5), 0);\n    const exam = {\n      title: plan.title || ('云端押题卷 · ' + (SUBJ_NAME[subj] || '')),\n      subject: subj,\n      timeLimit: plan.timeLimit || 120,\n      totalScore: totalScore,\n      questions: questions,\n      chiefReview: { verdict: review.verdict || (rewriteList.length ? 'minor' : 'ok'), hardPct: review.hardPct || null, targetHardPct: review.targetHardPct || null, summary: review.summary || '', rewrittenCount: rewriteList.length },\n      builtBy: 'cloud-actions',\n      generatedAt: new Date().toISOString()\n    };\n\n    // ⑧ 收卷回写\n    await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {\n      'result.json': { content: JSON.stringify(exam) },\n      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) }\n    } });\n    log('✅ 完成');\n  } catch (e) {\n    log('❌ 失败：', e.message);\n    await setStatus('error', '', '云端执行失败：' + ((e && e.message) || e));\n    process.exitCode = 1;\n  }\n})();\n"};
 
 </script>
 </body>
