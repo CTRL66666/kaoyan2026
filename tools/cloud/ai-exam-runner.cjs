@@ -76,17 +76,27 @@ async function ghRetry(method, path, body, tries = 4) {
 }
 async function setStatus(status, stage, msg, progress) {
   const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) } } };
-  try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); }
-  catch (e) { log('!! 写状态失败（不中断主流程）：', e.message); }
+  try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
+  catch (e) {
+    const hint = (e && e.status === 404)
+      ? '　👉 诊断：能读 job.json 却写不回 status，几乎可断定 CLOUDJOB_GH_TOKEN 对 Gist 缺「写」权限（请用 classic PAT 勾选 gist，或 fine-grained PAT 把 Gist 设为 Read & Write）'
+      : '';
+    log('!! 写状态失败（不中断主流程）：', e.message + hint);
+    return false;
+  }
 }
 
 // ---------- AI 调用（OpenAI 兼容 /chat/completions） ----------
 function aiCall(messages, opts = {}) {
   const maxTok = opts.maxTokens || 3000;
-  const endpoint = aiConf('endpoint').replace(/\/+$/, '');
+  // 本地 job.json 里 endpoint 是「完整请求 URL」（含 /chat/completions，如 openrouter 的
+  // /api/v1/chat/completions）；repo secrets 回退时可能是 base URL（如 /api/v1）。幂等拼接，
+  // 避免出现 /chat/completions/chat/completions 双拼导致 AI 404。
+  let endpoint = aiConf('endpoint').trim().replace(/\/+$/, '');
+  if (!/\/chat\/completions$/.test(endpoint)) endpoint += '/chat/completions';
   const body = JSON.stringify({ model: aiConf('model'), messages, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_tokens: maxTok });
   return new Promise((resolve, reject) => {
-    const u = new URL(endpoint + '/chat/completions');
+    const u = new URL(endpoint);
     const req = https.request({
       hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: 'POST',
       headers: { 'Authorization': 'Bearer ' + aiConf('key'), 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
@@ -227,6 +237,17 @@ function braceBalanced(s) {
     log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)');
     if (!aiConf('endpoint') || !aiConf('key') || !aiConf('model')) {
       throw new Error('缺 AI 配置：任务未携带（prefs.ai）且 repo secrets 也未配置');
+    }
+
+    // ①.5 自检模式：只验证链路（Gist 读写 + secret 有效 + AI 配置在场），不调 AI、不耗 token
+    if (prefs.check) {
+      const aiOk = !!(aiConf('endpoint') && aiConf('key') && aiConf('model'));
+      await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
+        'result.json': { content: JSON.stringify({ cloudJobCheck: true, ok: true, aiConfigPresent: aiOk, checkedAt: new Date().toISOString() }) },
+        'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '🧪 自检通过：Gist 读写 ✓ · CLOUDJOB_GH_TOKEN ✓ · AI 配置在场' + (aiOk ? ' ✓' : ' ✗'), progress: 100, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) }
+      } });
+      log('🧪 自检完成');
+      return;
     }
     const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境
     log('接单', job.jobId, JSON.stringify(prefs));
