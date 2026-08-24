@@ -108,9 +108,19 @@ function aiCall(messages, opts = {}) {
         if (res.statusCode >= 400) return reject(new Error('AI HTTP ' + res.statusCode + ' ' + txt.slice(0, 300)));
         try {
           const d = JSON.parse(txt);
-          const msg = d.choices && d.choices[0] && d.choices[0].message;
-          resolve((msg && (msg.content || '')) || '');
-        } catch (e) { reject(new Error('AI 响应解析失败: ' + txt.slice(0, 200))); }
+          const ch0 = d.choices && d.choices[0];
+          const msg = ch0 && ch0.message;
+          const content = String((msg && msg.content) || '').trim();
+          if (!content) {
+            // 空正文诊断：思考模型把 max_tokens 全烧在 reasoning 上时 content 为空（finish_reason=length）
+            const fr = (ch0 && ch0.finish_reason) || '?';
+            const hasReason = !!(msg && (msg.reasoning_content || msg.reasoning));
+            throw new Error('AI 返回空正文（finish_reason=' + fr
+              + (hasReason ? '；模型只输出了思考内容没写答案——请换非思考模型、关闭思考模式或调大 max_tokens' : '；模型未输出任何内容')
+              + '）响应片段：' + txt.slice(0, 150));
+          }
+          resolve(content);
+        } catch (e) { if (e.message && e.message.indexOf('AI 返回空正文') === 0) throw e; reject(new Error('AI 响应解析失败: ' + txt.slice(0, 200))); }
       });
     });
     req.on('timeout', () => req.destroy(new Error('AI 调用超时')));
@@ -129,12 +139,16 @@ async function aiRetry(messages, opts, tries = 3) {
     }
   }
 }
-// 宽容 JSON 抽取：剥代码围栏 → 找首个平衡的 {...} 或 [...]
+// 宽容 JSON 抽取：剥 <think> 思考块 → 剥代码围栏 → 找首个平衡的 {...} 或 [...]
 function extractJson(txt) {
-  let t = String(txt || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/g, '').trim();
+  let t = String(txt || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')   // 思考模型的显式思考块
+    .replace(/<think>[\s\S]*$/i, '')             // 未闭合的思考块（后面不会再有正文了）
+    .trim();
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/g, '').trim();
   try { return JSON.parse(t); } catch (e) {}
   const starts = [t.indexOf('{'), t.indexOf('[')].filter(i => i >= 0);
-  if (!starts.length) throw new Error('输出中没有 JSON');
+  if (!starts.length) throw new Error('输出中没有 JSON（原始输出前 160 字：' + t.slice(0, 160).replace(/\s+/g, ' ') + '）');
   const s = Math.min(...starts);
   const open = t[s], close = open === '{' ? '}' : ']';
   let depth = 0, inStr = false, esc = false;
@@ -145,7 +159,23 @@ function extractJson(txt) {
     else if (ch === open) depth++;
     else if (ch === close) { depth--; if (!depth) return JSON.parse(t.slice(s, i + 1)); }
   }
-  throw new Error('JSON 不完整');
+  throw new Error('JSON 不完整/被截断（输出末尾：…' + t.slice(-100).replace(/\s+/g, ' ') + '）。可尝试调大 max_tokens 或换模型');
+}
+
+// AI 调用 + 宽容 JSON 抽取一体化：网络/HTTP 错误仍由 aiRetry 重试；
+// 解析类失败（没 JSON / 被截断 / 空正文）在这里自动换一轮重问——单次坏响应不再炸全卷。
+async function aiJson(messages, opts, tries = 3) {
+  for (let i = 0; ; i++) {
+    let out;
+    try { out = await aiRetry(messages, opts, 2); }
+    catch (e) { if (i >= tries - 1) throw e; await sleep(2000 * (i + 1)); continue; }
+    try { return extractJson(out); }
+    catch (e) {
+      log('JSON 解析失败，重问', i + 1, '/', tries, '：', ((e && e.message) || '').slice(0, 120));
+      if (i >= tries - 1) throw e;
+      await sleep(2500 * (i + 1));
+    }
+  }
 }
 
 // ---------- 并发池 ----------
@@ -254,20 +284,20 @@ function braceBalanced(s) {
 
     // ② 总工规划
     await setStatus('running', 'planning', '总工程师正在规划蓝图…', 5);
-    const plan = extractJson(await aiRetry(
+    const plan = await aiJson(
       [{ role: 'system', content: plannerSystem(subj, prefs) },
        { role: 'user', content: '请规划本卷蓝图。' }],
-      { maxTokens: 3500 }));
+      { maxTokens: 3500 });
     if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('蓝图规划失败：无 questions');
     log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');
 
     // ③ 并发出题池
     await setStatus('running', 'generating', '并发出题中…', 10);
     let questions = await pool(plan.questions, 4, async (pq, i) => {
-      const out = extractJson(await aiRetry(
+      const out = await aiJson(
         [{ role: 'system', content: questionSystem(subj) },
          { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],
-        { maxTokens: 2600 }));
+        { maxTokens: 3200 });
       out.topicName = pq.topicName || out.topicName || '';
       out.score = out.score || pq.score || 5;
       out.type = pq.type || out.type || 'solve';
@@ -287,10 +317,10 @@ function braceBalanced(s) {
     await setStatus('running', 'reviewing', '总工程师审查中…', 58);
     let review = {};
     try {
-      review = extractJson(await aiRetry(
+      review = await aiJson(
         [{ role: 'system', content: chiefSystem(subj) },
          { role: 'user', content: '审查这份押题卷（题号从1开始）：\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || '').slice(0, 400), star: q.star })) ) }],
-        { maxTokens: 4000 })) || {};
+        { maxTokens: 4000 }) || {};
     } catch (e) { log('审查调用失败，仅按本地校验处理：', e.message); }
     const rewriteList = [];
     const seenRw = {};
@@ -305,10 +335,10 @@ function braceBalanced(s) {
         const i = rw.index - 1;
         const old = questions[i];
         if (!old) return null;
-        const fixed = extractJson(await aiRetry(
+        const fixed = await aiJson(
           [{ role: 'system', content: questionSystem(subj) },
            { role: 'user', content: '重写这道题（原题如下）。必须修复：' + rw.reason + '。指引：' + (rw.fixHint || '') + '\n原题：' + JSON.stringify(old) }],
-          { maxTokens: 2600 }));
+          { maxTokens: 3200 });
         fixed.topicName = old.topicName; fixed.score = old.score; fixed.type = old.type || fixed.type;
         const bad = validateQuestion(fixed);
         if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); return null; }
