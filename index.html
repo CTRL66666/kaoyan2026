@@ -5929,7 +5929,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     var st = null;
     try { st = JSON.parse(stRaw); } catch (e) {}
     if (!st) throw new Error('status.json 解析失败');
-    var patch = { status: st.status || 'running', stage: st.stage || '', stageMsg: st.msg || '', updatedAtRemote: st.updatedAt || '' };
+    var patch = { status: st.status || 'running', stage: st.stage || '', stageMsg: st.msg || '', updatedAtRemote: st.updatedAt || '', progress: (typeof st.progress === 'number') ? st.progress : null };
     if (st.status === 'done') patch.doneAt = st.updatedAt || nowIso();
     if (st.status === 'error') patch.error = st.msg || '云端执行失败';
     updateJob(jobId, patch);
@@ -6034,6 +6034,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     planning: '🧠 总工规划中', generating: '⚙️ 并发出题中', validating: '📐 蓝本校验中',
     reviewing: '🔍 总审查中', rewriting: '🔧 定向重写中', finalizing: '✅ 终检打包中'
   };
+  // 流水线阶段顺序（供 UI 画阶段进度管线；与执行器 setStatus 真实写入的阶段保持一致）
+  var STAGE_ORDER = ['planning', 'generating', 'reviewing', 'rewriting', 'finalizing'];
   var STATUS_META = {
     creating:   { label: '创建中', cls: '#8c8c8c' },
     queued:     { label: '已排队', cls: '#d46b08' },
@@ -6063,7 +6065,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     list: jobs, find: findJob,
       getToken: getToken, setToken: setToken, hasToken: hasToken,
       REPO: REPO_OWNER + '/' + REPO_NAME, WF_FILE: WF_FILE,
-      STAGE_CN: STAGE_CN, STATUS_META: STATUS_META,
+      STAGE_CN: STAGE_CN, STAGE_ORDER: STAGE_ORDER, STATUS_META: STATUS_META,
       stageLabel: stageLabel, statusColor: statusColor,
       validateResultExam: validateResultExam
     };
@@ -20214,8 +20216,67 @@ function bind(el, next) {
   // ==================== ☁️ 云端出卷（CloudJob 接线，2026-08-24） ====================
   // 长耗时 AI 组卷托管到 GitHub Actions：本地只 提交 → 轮询 → 收卷，关页/断网不影响云端执行。
   var CJ_ACTIVE = ['creating', 'queued', 'dispatched', 'running'];
-  var cjLastPoll = 0;   // 自动轮询节流（≥30s 一次），防 render 循环
   var cjSetup = null;   // 四步配置状态缓存（loadCjSetup 异步回填）
+  // —— 云端任务进度可视化：进度条 + 阶段管线（极简黑白灰，禁用渐变/阴影） ——
+  function cloudBarHtml(pct) {
+    var done = pct >= 100;
+    var fill = done ? 'var(--ok)' : '#722ed1';
+    var label = done ? '100% · 完成' : (Math.round(pct) + '%');
+    return '<div style="display:flex;align-items:center;gap:8px;margin-top:4px">'
+      + '<div style="flex:1;height:6px;background:var(--line);border-radius:3px;overflow:hidden">'
+      + '<div style="height:100%;width:' + Math.max(0, Math.min(100, pct)) + '%;background:' + fill + ';border-radius:3px;transition:width .45s ease"></div></div>'
+      + '<span style="font-size:11px;color:' + fill + ';font-weight:600;min-width:46px;text-align:right">' + label + '</span></div>';
+  }
+  function cloudStageRailHtml(j, allDone) {
+    var order = (window.CloudJob && CloudJob.STAGE_ORDER) || ['planning', 'generating', 'reviewing', 'rewriting', 'finalizing'];
+    var SHORT = { planning: '规划', generating: '出题', reviewing: '审查', rewriting: '重写', finalizing: '终检' };
+    var cur = j.stage || '';
+    var curIdx = cur ? order.indexOf(cur) : -1;
+    var n = order.length;
+    var states = order.map(function (s, i) {
+      if (allDone) return 'past';
+      if (curIdx < 0) return 'future';
+      if (i < curIdx) return 'past';
+      if (i === curIdx) return 'now';
+      return 'future';
+    });
+    var doneFrac = allDone ? 1 : (curIdx < 0 ? 0 : curIdx / (n - 1));
+    var html = '<div style="position:relative;margin-top:8px;padding-bottom:14px">'
+      + '<div style="position:absolute;left:0;right:0;top:4px;height:2px;background:var(--line)"></div>';
+    if (doneFrac > 0) html += '<div style="position:absolute;left:0;top:4px;height:2px;width:' + (doneFrac * 100) + '%;background:var(--ok)"></div>';
+    html += '<div style="position:relative;display:flex;justify-content:space-between">';
+    order.forEach(function (s, i) {
+      var state = states[i];
+      var dotBg = state === 'past' ? 'var(--ok)' : state === 'now' ? '#722ed1' : 'var(--line)';
+      var txtColor = state === 'now' ? '#722ed1' : state === 'past' ? 'var(--ok)' : 'var(--text-muted)';
+      var txtWeight = state === 'now' ? 600 : 400;
+      html += '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;width:' + (100 / n) + '%">'
+        + '<span style="width:11px;height:11px;border-radius:50%;background:' + dotBg + ';display:inline-block;border:2px solid transparent"></span>'
+        + '<span style="font-size:10px;color:' + txtColor + ';font-weight:' + txtWeight + '">' + SHORT[s] + (state === 'now' ? ' ···' : '') + '</span></div>';
+    });
+    return html + '</div></div>';
+  }
+  function cloudProgressHtml(j) {
+    var st = j.status;
+    if (st === 'creating') return '<div style="font-size:11.5px;color:var(--text-muted);margin-top:4px">⏳ 任务已创建，等待派发…</div>';
+    if (st === 'queued') {
+      return j.wfDispatched
+        ? '<div style="font-size:11.5px;color:var(--text-muted);margin-top:4px">⏳ 已排队，等待云端接单…</div>'
+        : '<div style="font-size:11.5px;color:var(--warn);margin-top:4px">⏳ 已排队但未接入执行器（完成配置向导后点「♻️ 重发」即跑）</div>';
+    }
+    if (st === 'dispatched') return '<div style="font-size:11.5px;color:var(--text-muted);margin-top:4px">🚀 已派发 · 等待云端启动（Actions 冷启动约 10~30s）…</div>';
+    if (st === 'error' || st === 'canceled') return '';
+    if (st === 'done') return cloudStageRailHtml(j, true) + cloudBarHtml(100);
+    // running：阶段管线 + 进度（progress 字段由执行器回写；旧任务缺字段时按阶段估算）
+    var rail = cloudStageRailHtml(j, false);
+    var pct = null;
+    if (typeof j.progress === 'number') pct = j.progress;
+    else {
+      var est = { planning: 8, generating: 40, reviewing: 60, rewriting: 84, finalizing: 94 };
+      if (j.stage && est[j.stage] != null) pct = est[j.stage];
+    }
+    return rail + (pct == null ? '' : cloudBarHtml(pct));
+  }
   function cloudJobRowHtml(j) {
     var color = CloudJob.statusColor(j);
     var meta = [];
@@ -20239,6 +20300,7 @@ function bind(el, next) {
       + '<span class="btn-row" style="margin:0;flex-wrap:wrap">' + btns + '</span></div>'
       + '<div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">' + meta.join(' ')
       + (j.stageMsg ? ' · ' + U.esc(j.stageMsg) : '') + '</div>'
+      + cloudProgressHtml(j)
       + (st === 'error' && j.error ? '<div style="color:var(--danger);font-size:11.5px;margin-top:2px">🔴 ' + U.esc(j.error) + '</div>' : '')
       + '</div>';
   }
@@ -20335,7 +20397,7 @@ function bind(el, next) {
           CloudJob.submit(prefs).then(function (job) {
             Toast.success(job.wfDispatched ? '☁️ 已派发！执行器接单中，关页也不影响' : '☁️ 已排队（未接过执行器，配置好后点「♻️ 重发」即跑）');
             if (currentEl) render(currentEl); else if (el) render(el);
-            cjAutoPoll(true);
+            cjStartAutoPoll();
           }).catch(function (e) {
             Toast.warn('提交失败：' + ((e && e.message) || e));
             if (currentEl) render(currentEl);
@@ -20450,22 +20512,41 @@ function bind(el, next) {
       cb && cb();
     }).catch(function () { cb && cb(); });
   }
-  // 进入押题页时静默轮询进行中任务（30s 节流；有状态变化才重渲染）
+  // 进行中云端任务的持续轮询：派发后每 ~6s 拉一次远端进度，进度条/阶段管线实时前进；
+  // 无进行中任务自动停，切页/销毁时停，避免后台空转与 render 循环。
+  var cjTitle = '';
+  var cjTimer = null;
+  // 是否仍在押题页（currentEl 是复用 #view 元素，切 tab 后仍非空，须用 App.current 判定）
+  function cjOnSprintPage() { return !!(window.App && App.current === 'sprint'); }
+  // 进入押题页时静默轮询进行中任务（有状态变化才重渲染）
   function cjAutoPoll(force) {
-    if (!window.CloudJob || !currentEl) return;
-    var now = Date.now();
-    if (!force && now - cjLastPoll < 30000) return;
+    if (!window.CloudJob) return;
+    if (!cjOnSprintPage()) { cjStopAutoPoll(); return; }
     var hasActive = false;
     try { hasActive = (CloudJob.list() || []).some(function (j) { return CJ_ACTIVE.indexOf(j.status) >= 0; }); } catch (e) {}
-    if (!hasActive) return;
-    cjLastPoll = now;
+    if (!hasActive || !currentEl) { cjStopAutoPoll(); return; }
     CloudJob.refreshAll({ silent: true }).then(function () {
-      if (currentEl) {
-        var doneNow = (CloudJob.list() || []).filter(function (j) { return j.status === 'done' && !j.resultImported; });
-        if (doneNow.length) Toast.success('☁️ ' + doneNow.length + ' 个云端任务已完成，可收卷导入');
-        render(currentEl);
+      if (!cjOnSprintPage() || !currentEl) return;
+      var doneNow = (CloudJob.list() || []).filter(function (j) { return j.status === 'done' && !j.resultImported; });
+      if (doneNow.length && cjTitle !== String(doneNow.length)) {
+        cjTitle = String(doneNow.length);
+        Toast.success('☁️ ' + doneNow.length + ' 个云端任务已完成，可收卷导入');
       }
-    });
+      render(currentEl);
+      cjScheduleNext();
+    }).catch(function () { cjScheduleNext(); });
+  }
+  function cjScheduleNext() {
+    if (!cjOnSprintPage()) return;
+    cjTimer = setTimeout(function () { cjAutoPoll(false); }, 6000);
+  }
+  function cjStartAutoPoll() {
+    cjTitle = '';
+    cjStopAutoPoll();
+    cjAutoPoll(true);
+  }
+  function cjStopAutoPoll() {
+    if (cjTimer) { clearTimeout(cjTimer); cjTimer = null; }
   }
 
   function openExamConfig(el) {
@@ -23576,7 +23657,7 @@ function bind(el, next) {
     var eBtn = el.querySelector('#sp-ai-exam'); if (eBtn) eBtn.onclick = function () { openExamConfig(el); };
     var cBtn = el.querySelector('#sp-cloud-exam'); if (cBtn) cBtn.onclick = function () { openCloudExamModal(el); };
     bindCloudJobs(el);
-    cjAutoPoll(false);
+    cjStartAutoPoll();
     loadCjSetup(function () {
       // 配置状态回来后重渲染头部（四步清单打钩/就绪判定）
       if (currentEl) render(currentEl); else render(el);
