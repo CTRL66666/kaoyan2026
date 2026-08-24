@@ -3663,6 +3663,8 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         sentCount: 0,        // 累计发布条数（统计展示用）
         autoCheck: false     // 进入本页时是否自动拉取好友更新
       },
+      // ---- 云端出卷任务队列（CloudJob，2026-08-24）----
+      cloudJobs: [],              // [{id,gistId,title,subject,prefs,status,stage,stageMsg,error,wfDispatched,resultImported,createdAt,doneAt}] 长耗时 AI 组卷托管 GitHub Actions 执行的本地任务台账（cloudjob.js 维护）
       settings: { targetSchool: 'undecided', examDate: '2026-12-26', weeklyTargetHours: 50, onboarded: false,
         examConfig: { mathType: 'shuyi', engType: 'yingyi', profName: '自控原理' },
         // ---- 以下字段均可被 AI/用户改写，原为代码内硬编码规则 ----
@@ -5605,6 +5607,328 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   // 仅供单测使用（Node 环境），浏览器中 module 未定义，不影响
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { genOps: genOps, applyOps: applyOps, collHashLive: collHashLive, mergeOpFiles: mergeOpFiles, genOpFileName: genOpFileName, coreOf: coreOf, liveCoreJson: liveCoreJson };
+  }
+})();
+
+
+/* ===== js/core/cloudjob.js ===== */
+/* ==================== 云端出卷任务队列（CloudJob，2026-08-24） ====================
+ * 长耗时 AI 组卷托管到 GitHub Actions 云端执行：本地只负责 提交 → 轮询 → 收卷。
+ * 本地可随时关闭工具；任务与结果都落在专属 secret Gist（每任务一个）：
+ *   job.json     任务参数（科目/难度/题量/思考模式/蓝本快照）
+ *   status.json  执行状态（queued→dispatched→running(planning|generating|reviewing|rewriting)→done|error|canceled）
+ *   result.json  成品卷（stage=done 后由执行器写入，结构与 mockExams 条目一致）
+ * 触发链路：本机 wftoken（带 workflow scope）调 workflow_dispatch；
+ * 执行器在 Actions 里读 job.json，AI Key 从 repo secrets 读，绝不进 Gist 明文。
+ * 无 wftoken 时任务仍可排队（status 停在 queued），装好执行器后一键重发即可。
+ */
+(function () {
+  'use strict';
+
+  var REPO_OWNER = 'CTRL66666';
+  var REPO_NAME = 'kaoyan2026';
+  var WF_FILE = 'ai-exam.yml';
+  var TOKEN_KEY = 'kaoyan2026_wftoken';   // localStorage 独立存储，不进云同步（安全边界）
+  var MAX_JOBS = 20;                      // 本地任务列表上限（超出裁最旧已完结）
+
+  // ---------- 小工具 ----------
+  function U2() { return window.U; }
+  function nowIso() { return new Date().toISOString(); }
+  function jobs() { return (window.Store.get().cloudJobs = window.Store.get().cloudJobs || []); }
+  function findJob(id) { return jobs().find(function (j) { return j.id === id; }); }
+
+  function updateJob(id, patch) {
+    window.Store.update(function (s) {
+      s.cloudJobs = s.cloudJobs || [];
+      var j = s.cloudJobs.find(function (x) { return x.id === id; });
+      if (j) Object.keys(patch).forEach(function (k) { j[k] = patch[k]; });
+    });
+  }
+  function removeJob(id) {
+    window.Store.update(function (s) {
+      s.cloudJobs = (s.cloudJobs || []).filter(function (x) { return x.id !== id; });
+    });
+  }
+
+  // ---------- 执行器令牌（workflow scope，localStorage 独立存） ----------
+  function getToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+  function setToken(tok) {
+    try {
+      if (tok) localStorage.setItem(TOKEN_KEY, String(tok).trim());
+      else localStorage.removeItem(TOKEN_KEY);
+    } catch (e) {}
+  }
+  function hasToken() { return !!getToken(); }
+
+  function needCloud() {
+    if (!window.Cloud) { var e0 = new Error('云同步模块未加载'); e0.status = 0; throw e0; }
+    var v = Cloud.isLoggedIn;
+    var logged = typeof v === 'function' ? !!v() : !!v;   // 兼容 getter / 函数两种形态
+    if (!logged) { var e = new Error('未登录云同步（先到设置页登录 GitHub）'); e.status = 0; throw e; }
+  }
+
+  // ---------- Gist 文件读写（走 Cloud.gistReq，复用同步令牌但不碰同步游标） ----------
+  async function gistGet(id) {
+    var r = await Cloud.gistReq('/gists/' + id, {});
+    return r.data;
+  }
+  function gistFile(gistData, name) {
+    var f = gistData && gistData.files && gistData.files[name];
+    return f ? f.content : null;
+  }
+  // >1MB 截断保护：改抓 raw_url（secret gist 的 raw_url 匿名可读）
+  async function fileTextFull(f) {
+    if (!f) return null;
+    if (f.truncated && f.raw_url) {
+      var r = await fetch(f.raw_url);
+      if (!r.ok) throw new Error('raw 拉取失败 HTTP ' + r.status);
+      return await r.text();
+    }
+    return f.content;
+  }
+  function gistFiles(job) {
+    return {
+      'job.json': { content: JSON.stringify({ ver: 1, jobId: job.id, prefs: job.prefs, createdAt: job.createdAt }, null, 1) },
+      'status.json': { content: JSON.stringify({ status: 'queued', stage: '', msg: '已排队，等待执行器接单', progress: 0, updatedAt: nowIso() }, null, 1) }
+      // result.json 不预建：执行器完成后经 PATCH 新增（collectResult 对缺失文件报「还没生成」）
+    };
+  }
+
+  // ---------- workflow_dispatch 触发 ----------
+  async function dispatch(jobId) {
+    var tok = getToken();
+    if (!tok) return false;   // 未配置执行器令牌 → 排队等待
+    var res = await fetch('https://api.github.com/repos/' + REPO_OWNER + '/' + REPO_NAME + '/actions/workflows/' + WF_FILE + '/dispatches', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: 'main', inputs: { gist_id: jobId } })
+    });
+    if (res.status === 204) return true;
+    if (res.status === 401 || res.status === 403) throw new Error('执行器令牌无效或缺 workflow 权限（HTTP ' + res.status + '）');
+    if (res.status === 404) throw new Error('执行器尚未安装（仓库里没有 ai-exam.yml），先跑安装器');
+    throw new Error('触发失败 HTTP ' + res.status);
+  }
+
+  // ---------- 结果校验（收卷前的硬防线，零幻觉：不合格直接报错不硬导） ----------
+  function validateResultExam(exam) {
+    if (!exam || typeof exam !== 'object') return 'result 不是对象';
+    if (!Array.isArray(exam.questions) || !exam.questions.length) return 'questions 为空';
+    for (var i = 0; i < exam.questions.length; i++) {
+      var q = exam.questions[i];
+      if (!q || !q.stem) return '第' + (i + 1) + '题缺题干';
+      if (q.answer == null || q.answer === '') return '第' + (i + 1) + '题缺答案';
+      if (q.type === 'choice') {
+        if (!Array.isArray(q.options) || q.options.length < 2) return '第' + (i + 1) + '题选择题缺选项';
+        var ans = String(q.answer).trim().charAt(0).toUpperCase();
+        var letters = q.options.map(function (o) { return String(o || '').trim().charAt(0).toUpperCase(); });
+        if (letters.indexOf(ans) < 0) return '第' + (i + 1) + '题答案不在选项中';
+      }
+    }
+    return '';
+  }
+
+  // ---------- 对外 API ----------
+  // 提交云端出卷任务。prefs: {subject,diff,count,think,blueprint?}（blueprint 可选，蓝本快照）
+  async function submit(prefs) {
+    needCloud();
+    prefs = prefs || {};
+    var id = (U2() && U2().uid) ? U2().uid() : ('cj' + Date.now() + Math.random().toString(16).slice(2, 8));
+    var job = {
+      id: id, gistId: '',
+      title: '☁️ 云端押题卷 · ' + nowIso().slice(5, 16).replace('T', ' '),
+      subject: prefs.subject || 'auto',
+      prefs: { subject: prefs.subject || 'auto', diff: prefs.diff || 'mix', count: prefs.count || 'std', think: !!prefs.think, blueprint: prefs.blueprint || null },
+      status: 'creating', stage: '', stageMsg: '', error: '',
+      wfDispatched: false, resultImported: false,
+      createdAt: nowIso(), submittedAt: nowIso(), doneAt: ''
+    };
+    // ① 建 Gist（job + status + result 占位）
+    var r = await Cloud.gistReq('/gists', {
+      method: 'POST',
+      body: JSON.stringify({ description: '[kaoyan2026] cloud-exam-job ' + id, public: false, files: gistFiles(job) })
+    });
+    if (!r.data || !r.data.id) throw new Error('创建任务 Gist 失败');
+    job.gistId = r.data.id;
+    window.Store.update(function (s) {
+      s.cloudJobs = s.cloudJobs || [];
+      s.cloudJobs.unshift(job);
+      trimJobs(s.cloudJobs);
+    });
+    // ② 触发 workflow（无令牌则保持 queued）
+    try {
+      var ok = await dispatch(id);
+      updateJob(job.id, { status: ok ? 'dispatched' : 'queued', wfDispatched: !!ok,
+        stageMsg: ok ? '已触发云端执行器，排队启动中…' : '已排队（执行器未接入，装好后点「重发」即跑）' });
+    } catch (e) {
+      updateJob(job.id, { status: 'error', error: (e && e.message) || String(e), stageMsg: '触发失败' });
+      throw e;
+    }
+    return findJob(id);
+  }
+
+  function trimJobs(list) {
+    // 上限保护：保留全部进行中，裁最旧的已完结（fin 按列表顺序，shift 弹出最旧）
+    var DONE = { done: 1, error: 1, canceled: 1 };
+    var fin = list.filter(function (j) { return DONE[j.status]; });
+    while (list.length > MAX_JOBS && fin.length) {
+      var old = fin.shift();
+      var i = list.indexOf(old);
+      if (i >= 0) list.splice(i, 1);
+    }
+  }
+
+  // 刷新单个任务状态（拉 status.json；done 时不动 result——收卷单独拉，避免大 payload 反复传输）
+  async function refresh(jobId) {
+    needCloud();
+    var job = findJob(jobId);
+    if (!job || !job.gistId) throw new Error('任务不存在');
+    var data = await gistGet(job.gistId);
+    var stRaw = await fileTextFull(data.files && data.files['status.json']);
+    var st = null;
+    try { st = JSON.parse(stRaw); } catch (e) {}
+    if (!st) throw new Error('status.json 解析失败');
+    var patch = { status: st.status || 'running', stage: st.stage || '', stageMsg: st.msg || '', updatedAtRemote: st.updatedAt || '' };
+    if (st.status === 'done') patch.doneAt = st.updatedAt || nowIso();
+    if (st.status === 'error') patch.error = st.msg || '云端执行失败';
+    updateJob(jobId, patch);
+    return findJob(jobId);
+  }
+
+  // 一键刷新全部进行中任务（sprint 页进入时静默调用）
+  async function refreshAll(opts) {
+    var active = jobs().filter(function (j) { return j.status !== 'done' && j.status !== 'error' && j.status !== 'canceled'; });
+    var results = await Promise.all(active.map(function (j) {
+      return refresh(j.id).then(function () { return null; }).catch(function (e) { return { id: j.id, err: e }; });
+    }));
+    var errs = results.filter(Boolean);
+    if (errs.length && !(opts && opts.silent)) console.warn('[CloudJob] 刷新失败', errs);
+    return errs.length === 0;
+  }
+
+  // 收卷：拉 result.json 校验后导入 sprintData.mockExams（幂等：resultImported 标记）
+  async function collectResult(jobId) {
+    needCloud();
+    var job = findJob(jobId);
+    if (!job) throw new Error('任务不存在');
+    if (job.resultImported) throw new Error('该任务成果已导入过（去押题卷列表找）');
+    var data = await gistGet(job.gistId);
+    var raw = await fileTextFull(data.files && data.files['result.json']);
+    if (!raw) throw new Error('result.json 还没生成（云端可能仍在写或失败）');
+    var exam = null;
+    try { exam = JSON.parse(raw); } catch (e) { throw new Error('result.json 不是合法 JSON'); }
+    if (exam && exam.cloudJobPending) throw new Error('成品还没生成（云端可能仍在执行或失败，先刷新状态看看）');
+    var bad = validateResultExam(exam);
+    if (bad) throw new Error('成品校验未通过：' + bad);
+    // 归一化补全（防执行器漏字段）
+    exam.id = exam.id || (U2() && U2().uid ? U2().uid() : jobId);
+    exam.title = exam.title || '云端押题卷';
+    exam.subject = exam.subject || job.prefs.subject;
+    exam.createdAt = exam.createdAt || nowIso();
+    exam.builtBy = 'cloud';
+    exam.cloudJobId = jobId;
+    exam.completedAt = null; exam.score = null; exam.duration = null;
+    window.Store.update(function (s) {
+      s.sprintData = s.sprintData || {};
+      s.sprintData.mockExams = s.sprintData.mockExams || [];
+      // 幂等双保险：同 cloudJobId 已存在就不重复插
+      if (!s.sprintData.mockExams.some(function (x) { return x.cloudJobId === jobId; })) {
+        s.sprintData.mockExams.unshift(exam);
+      }
+    });
+    updateJob(jobId, { resultImported: true, status: 'done' });
+    return exam;
+  }
+
+  // 取消：本地标记 + 远端 status 写 canceled（执行器在阶段边界检查；已在跑的单阶段会跑完再停）
+  async function cancel(jobId) {
+    needCloud();
+    var job = findJob(jobId);
+    if (!job || !job.gistId) throw new Error('任务不存在');
+    if (job.status === 'done') throw new Error('任务已完成，无需取消');
+    await Cloud.gistReq('/gists/' + job.gistId, {
+      method: 'PATCH',
+      body: JSON.stringify({ files: { 'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '用户已取消', progress: 0, updatedAt: nowIso() }) } } })
+    });
+    updateJob(jobId, { status: 'canceled', stageMsg: '已取消' });
+  }
+
+  // 重试/重发：清空远端三件套回到 queued 并重新 dispatch（error / canceled / queued(未接入) 都可走这里）
+  async function retry(jobId) {
+    needCloud();
+    var job = findJob(jobId);
+    if (!job || !job.gistId) throw new Error('任务不存在');
+    await Cloud.gistReq('/gists/' + job.gistId, {
+      method: 'PATCH',
+      body: JSON.stringify({ files: {
+        'status.json': { content: JSON.stringify({ status: 'queued', stage: '', msg: '重新入队', progress: 0, updatedAt: nowIso() }) },
+        'result.json': { content: JSON.stringify({ cloudJobPending: true }) }
+      } })
+    });
+    updateJob(jobId, { status: 'dispatching', error: '', resultImported: false, retryAt: nowIso() });
+    try {
+      var ok = await dispatch(jobId);
+      updateJob(jobId, { status: ok ? 'dispatched' : 'queued', wfDispatched: !!ok,
+        stageMsg: ok ? '已重新触发执行器' : '已排队（执行器未接入）' });
+    } catch (e) {
+      updateJob(jobId, { status: 'error', error: (e && e.message) || String(e) });
+      throw e;
+    }
+    return findJob(jobId);
+  }
+
+  // 删除：删远端 Gist + 移除本地记录（不可逆，UI 层需二次确认）
+  async function remove(jobId) {
+    needCloud();
+    var job = findJob(jobId);
+    if (job && job.gistId) {
+      try { await Cloud.gistReq('/gists/' + job.gistId, { method: 'DELETE' }); }
+      catch (e) { if (e.status !== 404) throw e; }   // 远端已没了就算成功
+    }
+    removeJob(jobId);
+  }
+
+  // ---------- 状态展示辅助（供 UI 层复用） ----------
+  var STAGE_CN = {
+    planning: '🧠 总工规划中', generating: '⚙️ 并发出题中', validating: '📐 蓝本校验中',
+    reviewing: '🔍 总审查中', rewriting: '🔧 定向重写中', finalizing: '✅ 终检打包中'
+  };
+  var STATUS_META = {
+    creating:   { label: '创建中', cls: '#8c8c8c' },
+    queued:     { label: '已排队', cls: '#d46b08' },
+    dispatched: { label: '已派发', cls: '#096dd9' },
+    running:    { label: '执行中', cls: '#722ed1' },
+    done:       { label: '✅ 完成', cls: '#237804' },
+    error:      { label: '🔴 失败', cls: '#cf1322' },
+    canceled:   { label: '已取消', cls: '#8c8c8c' }
+  };
+  function stageLabel(j) {
+    if (j.stage && STAGE_CN[j.stage]) return STAGE_CN[j.stage];
+    var m = STATUS_META[j.status] || { label: j.status || '?' };
+    return m.label;
+  }
+  function statusColor(j) {
+    var m = STATUS_META[j.status];
+    return m ? m.cls : '#8c8c8c';
+  }
+
+  // ---------- 导出 ----------
+  if (typeof window !== 'undefined') {
+    window.CloudJob = {
+      submit: submit, refresh: refresh, refreshAll: refreshAll,
+      collectResult: collectResult, cancel: cancel, retry: retry, remove: remove,
+      list: jobs, find: findJob,
+      getToken: getToken, setToken: setToken, hasToken: hasToken,
+      REPO: REPO_OWNER + '/' + REPO_NAME, WF_FILE: WF_FILE,
+      STAGE_CN: STAGE_CN, STATUS_META: STATUS_META,
+      stageLabel: stageLabel, statusColor: statusColor,
+      validateResultExam: validateResultExam
+    };
+  }
+  // 仅供 Node 单测（vm 沙箱直接取 window.CloudJob._pure）
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { _pure: { validateResultExam: validateResultExam, gistFiles: gistFiles, stageLabel: stageLabel, statusColor: statusColor, trimJobs: trimJobs, STATUS_META: STATUS_META } };
   }
 })();
 
@@ -19209,11 +19533,14 @@ function bind(el, next) {
       + '<div class="btn-row" style="margin:10px 0;flex-wrap:wrap">'
       + '<button class="btn btn-primary btn-sm" id="sp-ai-trend"' + (BgTask.isRunning('trend') ? ' disabled' : '') + '>' + (BgTask.isRunning('trend') ? '🔄 趋势分析中…' : '📈 AI 趋势分析') + '</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-ai-exam"' + (BgTask.isRunning('exam') ? ' disabled' : '') + '>' + (BgTask.isRunning('exam') ? '🔄 组卷中…' : '📝 生成押题卷') + '</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-cloud-exam" title="长耗时组卷托管到 GitHub Actions 云端执行，本地可关页随时回来收卷">☁️ 云端出卷</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-ai-reason"' + (BgTask.isRunning('reason') ? ' disabled' : '') + '>' + (BgTask.isRunning('reason') ? '🔄 生成理由中…' : '🧠 生成押题理由') + '</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-rush-plan">🗺️ 冲刺路径</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-hit-track">🎯 命中追踪</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-img">🖼 导出图片</button>'
       + '</div>'
+      // 【云端出卷】任务队列卡（CloudJob：提交/轮询/收卷，本地可关页）
+      + cloudJobsCardHtml()
 
       // 【轮11】每日押题推荐卡：今天主攻 Top3（按分+日期滚动）
       + (function () {
@@ -19718,6 +20045,180 @@ function bind(el, next) {
   }
 
   // 生成押题卷配置弹窗
+  // ==================== ☁️ 云端出卷（CloudJob 接线，2026-08-24） ====================
+  // 长耗时 AI 组卷托管到 GitHub Actions：本地只 提交 → 轮询 → 收卷，关页/断网不影响云端执行。
+  var CJ_ACTIVE = ['creating', 'queued', 'dispatched', 'running'];
+  var cjLastPoll = 0;   // 自动轮询节流（≥30s 一次），防 render 循环
+  function cloudJobRowHtml(j) {
+    var color = CloudJob.statusColor(j);
+    var meta = [];
+    meta.push('<span style="color:' + color + ';font-weight:600">' + U.esc(CloudJob.stageLabel(j)) + '</span>');
+    if (j.subject && j.subject !== 'auto') meta.push('<span class="tag" style="margin:0">' + subjName(j.subject) + '</span>');
+    var diffCn = { mix: '标准', hard: '强化', superhard: '超难' };
+    if (j.prefs) meta.push('<span class="tag" style="margin:0">' + U.esc(diffCn[j.prefs.diff] || j.prefs.diff || '') + '</span>');
+    var st = j.status, btns = '';
+    var isActive = CJ_ACTIVE.indexOf(st) >= 0;
+    if (isActive) {
+      btns += '<button class="btn btn-ghost btn-sm" data-cj="' + j.id + '" data-act="refresh">🔄 刷新</button>';
+      btns += '<button class="btn btn-ghost btn-sm" data-cj="' + j.id + '" data-act="cancel">✖ 取消</button>';
+    }
+    if (st === 'done' && !j.resultImported) btns += '<button class="btn btn-primary btn-sm" data-cj="' + j.id + '" data-act="collect">📥 收卷导入</button>';
+    if (st === 'done' && j.resultImported) btns += '<span class="muted-sm" style="font-size:11px">✓ 已导入押题卷列表</span>';
+    if (st === 'error' || st === 'canceled' || (st === 'queued' && !j.wfDispatched)) btns += '<button class="btn btn-ghost btn-sm" data-cj="' + j.id + '" data-act="retry">♻️ 重发</button>';
+    btns += '<button class="btn btn-ghost btn-sm" data-cj="' + j.id + '" data-act="del" title="删除任务（连远端 Gist 一起删，不可恢复）">🗑</button>';
+    return '<div style="border-top:1px dashed var(--line);padding:7px 0">'
+      + '<div style="display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap;align-items:center">'
+      + '<span style="font-size:12.5px;font-weight:500">' + U.esc(j.title) + '</span>'
+      + '<span class="btn-row" style="margin:0;flex-wrap:wrap">' + btns + '</span></div>'
+      + '<div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">' + meta.join(' ')
+      + (j.stageMsg ? ' · ' + U.esc(j.stageMsg) : '') + '</div>'
+      + (st === 'error' && j.error ? '<div style="color:var(--danger);font-size:11.5px;margin-top:2px">🔴 ' + U.esc(j.error) + '</div>' : '')
+      + '</div>';
+  }
+  function cloudJobsCardHtml() {
+    if (!window.CloudJob) return '';
+    var list = [];
+    try { list = (CloudJob.list() || []).slice(); } catch (e) {}
+    var activeN = list.filter(function (j) { return CJ_ACTIVE.indexOf(j.status) >= 0; }).length;
+    var tok = false;
+    try { tok = CloudJob.hasToken(); } catch (e) {}
+    var head = '<div class="card-title-sm">☁️ 云端出卷任务' + (list.length ? '（共 ' + list.length + ' · 进行中 ' + activeN + '）' : '')
+      + '<span style="float:right;font-size:11px;color:' + (tok ? 'var(--ok)' : 'var(--warn)') + '">' + (tok ? '✓ 执行器已接入' : '⚠ 执行器未接入') + '</span></div>';
+    var rows = list.slice(0, 8).map(cloudJobRowHtml).join('');
+    var execBox = '<details style="margin-top:6px"><summary style="font-size:11.5px;cursor:pointer;opacity:.75">⚙ 执行器设置（GitHub 令牌 · workflow 权限）</summary>'
+      + '<div style="margin-top:6px">'
+      + '<input id="cj-token" class="input input-sm" type="password" placeholder="' + (tok ? '已保存 ✓（输入新值可覆盖）' : '粘贴带 workflow 权限的 GitHub PAT') + '" value="">'
+      + '<div class="btn-row" style="margin-top:4px">'
+      + '<button class="btn btn-primary btn-sm" id="cj-tok-save">保存令牌</button>'
+      + (tok ? '<button class="btn btn-ghost btn-sm" id="cj-tok-clear">清除</button>' : '')
+      + '</div>'
+      + '<div class="muted-sm" style="font-size:11px;margin-top:4px">执行器 = GitHub Actions 在云端跑 AI 组卷流水线（总工规划→并发出题→硬校验→总审查→定向重写）。仓库 ' + U.esc(CloudJob.REPO) + ' · 工作流 ' + U.esc(CloudJob.WF_FILE)
+      + '。首次使用先在电脑上运行 tools/install_cloudjob.py 安装执行器并配置 secrets；提交后关掉工具任务照常跑。</div>'
+      + '</div></details>';
+    return '<div class="card" style="margin:8px 0;background:var(--bg-muted)" id="cj-card">' + head
+      + (rows || '<div class="muted-sm" style="font-size:12px;padding:4px 0">还没有云端任务。点上方「☁️ 云端出卷」把长耗时组卷托管出去——提交后可以关掉工具/断网，随时回来看进度、收卷导入。</div>')
+      + execBox + '</div>';
+  }
+  function openCloudExamModal(el) {
+    if (!window.CloudJob) { Toast.warn('云端出卷模块未加载'); return; }
+    var lv = window.Cloud ? Cloud.isLoggedIn : false;
+    var logged = typeof lv === 'function' ? !!lv() : !!lv;
+    if (!logged) { Toast.warn('云端出卷需要先登录 GitHub 云同步（去设置页登录）'); return; }
+    var p = examPref();
+    var subjOpts = [['auto', '🤖 自动推断'], ['math', '数学'], ['ctrl', '专业课'], ['pol', '政治'], ['eng', '英语']]
+      .map(function (x) { return '<option value="' + x[0] + '"' + (p.subject === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
+    var diffOpts = [['mix', '标准（medium 60% + hard 40%）'], ['hard', '强化（hard 为主 70%）'], ['superhard', '🔴 超难特训（100% hard）']]
+      .map(function (x) { return '<option value="' + x[0] + '"' + (p.diff === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
+    var cntOpts = [['std', '标准卷（约12题）'], ['lite', '精简卷（约8题）'], ['full', '强化卷（约15题）']]
+      .map(function (x) { return '<option value="' + x[0] + '"' + (p.count === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
+    var tokOk = false;
+    try { tokOk = CloudJob.hasToken(); } catch (e) {}
+    Modal.open({
+      title: '☁️ 云端出卷（GitHub Actions 托管）', dismissable: true,
+      html: '<div class="form-col">'
+        + '<label class="fld fld-full"><span>科目</span><select id="cj-subj" class="input">' + subjOpts + '</select></label>'
+        + '<label class="fld fld-full"><span>难度风格</span><select id="cj-diff" class="input">' + diffOpts + '</select></label>'
+        + '<label class="fld fld-full"><span>题量</span><select id="cj-count" class="input">' + cntOpts + '</select></label>'
+        + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="cj-think"' + (p.think ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⏳ 启用思考模式（质量更高，云端耗时更长）</span></label>'
+        + '<div class="alert ' + (tokOk ? 'alert-ok' : 'alert-warn') + '" style="margin-top:8px;font-size:12.5px">'
+        + (tokOk ? '✓ 执行器令牌已配置：提交后自动触发云端执行。'
+                 : '⚠ 尚未配置执行器令牌：任务会先排队（不丢失），在「☁️ 任务卡 → ⚙ 执行器设置」里存入带 workflow 权限的 GitHub PAT 后点「重发」即跑。')
+        + '</div>'
+        + '<div class="muted-sm" style="margin-top:4px">流水线：总工程师规划 → 多 AI 并发出题 → 蓝本硬校验 → 总审查 → 定向重写 → 终检。全程状态实时写回任务卡，本地随时可关闭。</div>'
+        + '</div>',
+      actions: [
+        { label: '取消', kind: 'btn-ghost' },
+        { label: '☁️ 提交任务', kind: 'btn-primary', onClick: function (close) {
+          var prefs = {
+            subject: (document.getElementById('cj-subj') || {}).value || 'auto',
+            diff: (document.getElementById('cj-diff') || {}).value || 'mix',
+            count: (document.getElementById('cj-count') || {}).value || 'std',
+            think: !!(document.getElementById('cj-think') || {}).checked
+          };
+          close();
+          Toast.show('☁️ 正在创建云端任务…', 'info');
+          CloudJob.submit(prefs).then(function (job) {
+            Toast.success(job.wfDispatched ? '☁️ 已派发！执行器接单中，关页也不影响' : '☁️ 已排队（执行器未接入：配好令牌后点「重发」即跑）');
+            if (currentEl) render(currentEl); else if (el) render(el);
+            cjAutoPoll(true);
+          }).catch(function (e) {
+            Toast.warn('提交失败：' + ((e && e.message) || e));
+            if (currentEl) render(currentEl);
+          });
+        } }
+      ]
+    });
+  }
+  function bindCloudJobs(el) {
+    el.querySelectorAll('[data-cj]').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-cj'), act = b.getAttribute('data-act');
+        function rerender() { if (currentEl) render(currentEl); }
+        function fail(e) { Toast.warn((e && e.message) || String(e)); rerender(); }
+        if (act === 'refresh') CloudJob.refresh(id).then(rerender).catch(fail);
+        else if (act === 'cancel') CloudJob.cancel(id).then(function () { Toast.success('已取消'); rerender(); }).catch(fail);
+        else if (act === 'collect') {
+          b.disabled = true; b.textContent = '📥 收卷中…';
+          CloudJob.collectResult(id).then(function (exam) {
+            Toast.success('✅ 已导入《' + exam.title + '》（' + exam.questions.length + ' 题）');
+            rerender();
+            openExam(exam.id, currentEl || el);
+          }).catch(function (e) { b.disabled = false; b.textContent = '📥 收卷导入'; fail(e); });
+        }
+        else if (act === 'retry') {
+          b.disabled = true;
+          CloudJob.retry(id).then(function () { Toast.success('♻️ 已重新派发'); rerender(); }).catch(function (e) { b.disabled = false; fail(e); });
+        }
+        else if (act === 'del') {
+          Modal.open({
+            title: '删除云端任务？', dismissable: true,
+            html: '<div style="font-size:13px">将删除本地记录 <b>和远端任务 Gist</b>（含成品卷，如未导入则一并丢失）。不可恢复，确定？</div>',
+            actions: [
+              { label: '再想想', kind: 'btn-ghost' },
+              { label: '🗑 确认删除', kind: 'btn-primary', onClick: function (close) {
+                close();
+                CloudJob.remove(id).then(function () { Toast.success('已删除'); rerender(); }).catch(fail);
+              } }
+            ]
+          });
+        }
+      };
+    });
+    var tokSave = el.querySelector('#cj-tok-save');
+    if (tokSave) tokSave.onclick = function () {
+      var inp = el.querySelector('#cj-token');
+      var v = inp && inp.value.trim();
+      if (!v) { Toast.warn('先粘贴 GitHub PAT（需 workflow 权限）'); return; }
+      CloudJob.setToken(v);
+      inp.value = '';
+      Toast.success('✓ 执行器令牌已保存（仅存本机 localStorage）');
+      rerender();
+    };
+    var tokClear = el.querySelector('#cj-tok-clear');
+    if (tokClear) tokClear.onclick = function () {
+      CloudJob.setToken('');
+      Toast.show('已清除执行器令牌', 'info');
+      rerender();
+    };
+  }
+  // 进入押题页时静默轮询进行中任务（30s 节流；有状态变化才重渲染）
+  function cjAutoPoll(force) {
+    if (!window.CloudJob || !currentEl) return;
+    var now = Date.now();
+    if (!force && now - cjLastPoll < 30000) return;
+    var hasActive = false;
+    try { hasActive = (CloudJob.list() || []).some(function (j) { return CJ_ACTIVE.indexOf(j.status) >= 0; }); } catch (e) {}
+    if (!hasActive) return;
+    cjLastPoll = now;
+    CloudJob.refreshAll({ silent: true }).then(function () {
+      if (currentEl) {
+        var doneNow = (CloudJob.list() || []).filter(function (j) { return j.status === 'done' && !j.resultImported; });
+        if (doneNow.length) Toast.success('☁️ ' + doneNow.length + ' 个云端任务已完成，可收卷导入');
+        render(currentEl);
+      }
+    });
+  }
+
   function openExamConfig(el) {
     var p = examPref();
     var subjOpts = [
@@ -22824,6 +23325,9 @@ function bind(el, next) {
 
     var tBtn = el.querySelector('#sp-ai-trend'); if (tBtn) tBtn.onclick = function () { aiTrend(el); };
     var eBtn = el.querySelector('#sp-ai-exam'); if (eBtn) eBtn.onclick = function () { openExamConfig(el); };
+    var cBtn = el.querySelector('#sp-cloud-exam'); if (cBtn) cBtn.onclick = function () { openCloudExamModal(el); };
+    bindCloudJobs(el);
+    cjAutoPoll(false);
     var rushExam = el.querySelector('#sp-rush-exam');
     if (rushExam) rushExam.onclick = function () { saveExamPref({ diff: 'hard', count: 'lite' }); openExamConfig(el); };
     var rBtn = el.querySelector('#sp-ai-reason'); if (rBtn) rBtn.onclick = function () { aiReasons(el); };
