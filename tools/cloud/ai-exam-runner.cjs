@@ -211,7 +211,12 @@ function braceBalanced(s) {
 (async function main() {
   try {
     // ① 读任务
-    const gist = await ghRetry('GET', '/gists/' + GIST_ID);
+    let gist;
+    try { gist = await ghRetry('GET', '/gists/' + GIST_ID); }
+    catch (e) {
+      if (e.status === 404) throw new Error('找不到任务 Gist（404）：gist_id 传错，或 CLOUDJOB_GH_TOKEN 缺 gist 权限。GIST_ID=' + GIST_ID);
+      throw e;
+    }
     if (!gist || !gist.files || !gist.files['job.json']) throw new Error('Gist 缺 job.json');
     const job = JSON.parse(gist.files['job.json'].content);
     const stNow = gist.files['status.json'] ? JSON.parse(gist.files['status.json'].content) : {};
