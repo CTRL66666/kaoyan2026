@@ -3659,6 +3659,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         nick: '',            // 我的昵称（对方收件时显示来源）
         friends: [],         // 好友 [{id(对方的分享GistID), name, addedAt, lastOkAt, lastErr}]
         recvIds: {},         // 已导入去重表 {uid: 导入时间戳}，防止重复导入同一份内容
+        receivedTexts: [],   // 收到的自由笔记 [{id,title,content,from,at}]（上限50）
         sentCount: 0,        // 累计发布条数（统计展示用）
         autoCheck: false     // 进入本页时是否自动拉取好友更新
       },
@@ -34045,7 +34046,12 @@ function bind(el, next) {
   var SHARE_DESC = 'kaoyan2026-share';
   var MAX_ITEMS = 50;      // 我的分享箱容量上限（超出裁最旧）
   var MAX_PACK = 80;       // 单次打包题数上限（控制 share.json 体积 <1MB 免截断）
-  var KIND_LABEL = { quiz: '📝 题目', quizpack: '📚 题包', exam: '📄 押题卷', text: '🗒 笔记' };
+  var MAX_VOCAB = 300;     // 单次单词包上限
+  var MAX_TEXT = 20000;    // 自由文本长度上限（约1万汉字）
+  var MAX_TEXTS = 50;      // 收到的笔记留存上限
+  var CODE_PREFIX = 'KY1.'; // 分享码前缀（版本化，便于未来扩展格式）
+  var KIND_LABEL = { quiz: '📝 题目', quizpack: '📚 题包', exam: '📄 押题卷',
+    pol: '🗳 背诵卡', vocab: '📖 单词包', playbook: '🧩 方法卡', text: '🗒 笔记' };
 
   // ---------- 纯函数层（Node 可测） ----------
   function makeUid() {
@@ -34102,6 +34108,70 @@ function bind(el, next) {
     return { uid: makeUid(), kind: String(kind || 'text'), title: String(title || '未命名'),
       from: String(from || '好友'), at: new Date().toISOString(), item: payload };
   }
+  // ---------- 新内容类型净化器（v2 自由度扩展） ----------
+  function sanitizePolCard(c) {
+    c = c || {};
+    return {
+      topic: String(c.topic || '未命名大题'), subject: String(c.subject || 'pol'),
+      points: Array.isArray(c.points) ? c.points.map(String).slice(0, 30) : [],
+      keywords: Array.isArray(c.keywords) ? c.keywords.map(String).slice(0, 20) : [],
+      source: String(c.source || ''), year: c.year != null ? String(c.year) : '',
+      priority: String(c.priority || ''), hint: String(c.hint || '')
+    };
+  }
+  function sanitizeVocabPack(list) {
+    return (Array.isArray(list) ? list : []).slice(0, MAX_VOCAB).map(function (w) {
+      w = w || {};
+      return { word: String(w.word || ''), phonetic: String(w.phonetic || ''),
+        pos: String(w.pos || ''), meaning: String(w.meaning || ''),
+        example: String(w.example || ''), exampleCn: String(w.exampleCn || '') };
+    }).filter(function (w) { return w.word; });
+  }
+  function sanitizePlaybook(p) {
+    p = p || {};
+    return {
+      title: String(p.title || '未命名方法卡'), subject: String(p.subject || 'math'),
+      tags: Array.isArray(p.tags) ? p.tags.map(String).slice(0, 8) : [],
+      recognize: String(p.recognize || ''),
+      steps: Array.isArray(p.steps) ? p.steps.slice(0, 15).map(function (s) {
+        s = s || {};
+        return { name: String(s.name || ''), do: String(s.do || ''), tip: String(s.tip || '') };
+      }) : [],
+      pitfalls: String(p.pitfalls || ''), verify: String(p.verify || '')
+    };
+  }
+  function sanitizeText(t) {
+    return { content: String((t && t.content) || '').slice(0, MAX_TEXT) };
+  }
+  // ---------- 分享码（跨好友自由传：任意聊天工具粘贴即可导入，无需加好友） ----------
+  function utf8B64Encode(str) {
+    if (typeof btoa === 'function') return btoa(unescape(encodeURIComponent(str)));
+    return Buffer.from(str, 'utf8').toString('base64');
+  }
+  function utf8B64Decode(b64) {
+    if (typeof atob === 'function') return decodeURIComponent(escape(atob(b64)));
+    return Buffer.from(b64, 'base64').toString('utf8');
+  }
+  // 条目 → 文本分享码；失败返回 null（不抛错）
+  function encodeShareCode(it) {
+    try {
+      it = it || {};
+      if (!it.kind || !it.item) return null;
+      var payload = { v: 1, kind: String(it.kind), title: String(it.title || '未命名'), uid: String(it.uid || makeUid()), item: it.item };
+      return CODE_PREFIX + utf8B64Encode(JSON.stringify(payload));
+    } catch (e) { return null; }
+  }
+  // 文本分享码 → 条目形态 {kind,title,uid,item}；非法返回 null
+  function decodeShareCode(code) {
+    try {
+      code = String(code || '').trim();
+      if (code.indexOf(CODE_PREFIX) !== 0) return null;
+      var obj = JSON.parse(utf8B64Decode(code.slice(CODE_PREFIX.length)));
+      if (!obj || !obj.kind || !obj.item) return null;
+      if (!KIND_LABEL[obj.kind]) return null;
+      return { kind: String(obj.kind), title: String(obj.title || '未命名'), uid: String(obj.uid || makeUid()), item: obj.item };
+    } catch (e) { return null; }
+  }
   // 把一条收件导入到 state（纯变异，供测试与浏览器共用）；返回导入摘要文本
   function importIntoState(state, it, fromName) {
     it = it || {}; fromName = fromName || it.from || '好友';
@@ -34139,6 +34209,50 @@ function bind(el, next) {
         ex.createdAt = it.at || new Date().toISOString();
         ex.sharedIn = true;                       // 标记为他人分享卷（UI 可识别）
         state.sprintData.mockExams.unshift(ex); n = 1;
+      }
+    } else if (it.kind === 'pol') {
+      // 政治背诵卡：进 Leitner 盒第 1 格，明天到期
+      state.polRecite = state.polRecite || [];
+      var pid0 = 'sh-' + it.uid;
+      if (!state.polRecite.some(function (x) { return x.id === pid0; })) {
+        var pc = sanitizePolCard(it.item);
+        var due = new Date(); due.setDate(due.getDate() + 1);
+        pc.id = pid0; pc.box = 1;
+        pc.due = due.getFullYear() + '-' + String(due.getMonth() + 1).padStart(2, '0') + '-' + String(due.getDate()).padStart(2, '0');
+        pc.createdAt = it.at || new Date().toISOString();
+        pc.source = pc.source || ('来自 ' + fromName);
+        state.polRecite.push(pc); n = 1;
+      }
+    } else if (it.kind === 'vocab') {
+      // 单词包：逐词去重（按 word 精确匹配），不覆盖已有学习进度
+      state.vocab = state.vocab || [];
+      (Array.isArray(it.item) ? it.item : []).forEach(function (raw) {
+        var w = sanitizeVocabPack([raw])[0];
+        if (!w) return;
+        if (state.vocab.some(function (x) { return x.word === w.word; })) return;
+        w.id = 'sh-' + it.uid + '-' + w.word;
+        w.source = 'shared'; w.createdAt = it.at || new Date().toISOString();
+        state.vocab.push(w); n++;
+      });
+    } else if (it.kind === 'playbook') {
+      state.playbooks = state.playbooks || [];
+      var bid = 'sh-' + it.uid;
+      if (!state.playbooks.some(function (x) { return x.id === bid; })) {
+        var pb = sanitizePlaybook(it.item);
+        pb.id = bid; pb.uses = 0; pb.sharedIn = true;
+        pb.createdAt = it.at || new Date().toISOString();
+        pb.source = '来自 ' + fromName;
+        state.playbooks.push(pb); n = 1;
+      }
+    } else if (it.kind === 'text') {
+      // 自由笔记：无天然归宿，存入收件笔记区（可复制全文）
+      share.receivedTexts = Array.isArray(share.receivedTexts) ? share.receivedTexts : [];
+      var tid = 'sh-' + it.uid;
+      if (!share.receivedTexts.some(function (x) { return x.id === tid; })) {
+        share.receivedTexts.unshift({ id: tid, title: String(it.title || '未命名笔记'),
+          content: sanitizeText(it.item).content, from: fromName, at: it.at || new Date().toISOString() });
+        if (share.receivedTexts.length > MAX_TEXTS) share.receivedTexts.length = MAX_TEXTS;
+        n = 1;
       }
     }
     share.recvIds[it.uid] = Date.now();
@@ -34269,6 +34383,61 @@ function bind(el, next) {
     var clean = sanitizeExamForShare(exam);
     return publish('exam', clean.title + '（' + clean.questions.length + ' 题）', clean, btnEl);
   }
+  function publishPolCard(card, btnEl) {
+    if (!card) return Promise.resolve(false);
+    var clean = sanitizePolCard(card);
+    return publish('pol', clean.topic, clean, btnEl);
+  }
+  function publishVocabPack(list, btnEl) {
+    var arr = sanitizeVocabPack(list);
+    if (!arr.length) { Toast.warn('没有可分享的单词'); return Promise.resolve(false); }
+    return publish('vocab', '单词包（' + arr.length + ' 词）', arr, btnEl);
+  }
+  function publishPlaybook(pb, btnEl) {
+    if (!pb) return Promise.resolve(false);
+    var clean = sanitizePlaybook(pb);
+    return publish('playbook', clean.title, clean, btnEl);
+  }
+  function publishText(title, content, btnEl) {
+    content = String(content || '').trim();
+    if (!content) { Toast.warn('内容为空'); return Promise.resolve(false); }
+    if (content.length > MAX_TEXT) { Toast.warn('内容过长（上限约1万汉字）'); return Promise.resolve(false); }
+    return publish('text', String(title || '').trim() || '笔记 · ' + content.slice(0, 20), { content: content }, btnEl);
+  }
+
+  // ---------- 分享码 ----------
+  // 为已有条目生成分享码（收件箱/我的箱子通用）
+  function makeCode(it) {
+    var code = encodeShareCode(it);
+    if (!code) { Toast.warn('该内容无法生成分享码'); return null; }
+    copyText(code, '🔗 分享码已复制（' + Math.round(code.length / 1024) + 'KB），发给任何人粘贴即可导入');
+    return code;
+  }
+  // 粘贴分享码导入（无需加好友）；返回摘要或 null
+  function importCode(codeStr, fromName) {
+    var it = decodeShareCode(codeStr);
+    if (!it) { Toast.show('❌ 分享码无效或不完整', 'error', 2600); return null; }
+    if ((st().recvIds || {})[it.uid]) { Toast.warn('这份内容已导入过'); return null; }
+    var summary = '';
+    Store.update(function (d) { summary = importIntoState(d, it, fromName || '分享码'); });
+    Toast.success('📥 已从分享码导入：' + summary, 2400);
+    if (window.Cloud && Cloud.schedulePush) Cloud.schedulePush();
+    return it;
+  }
+
+  // ---------- 分享箱管理（查看/删除我发布的条目） ----------
+  async function deleteBoxItem(uid) {
+    var s = st();
+    if (!s.myGistId) throw new Error('还没有分享档案');
+    var box;
+    try { box = await readBox(s.myGistId); }
+    catch (e) { if (e.status === 404) throw new Error('分享档案已被删除'); throw e; }
+    var before = box.items.length;
+    box.items = box.items.filter(function (x) { return x.uid !== uid; });
+    if (box.items.length === before) return false;
+    await writeBox(s.myGistId, box);
+    return true;
+  }
 
   // ---------- 接收 ----------
   async function checkUpdates() {
@@ -34310,6 +34479,10 @@ function bind(el, next) {
     var g = Store.get();
     if (it.kind === 'quiz') return (g.quizBank || []).some(function (x) { return x.id === 'sh-' + it.uid; });
     if (it.kind === 'exam') return ((g.sprintData || {}).mockExams || []).some(function (x) { return x.id === 'sh-' + it.uid; });
+    if (it.kind === 'pol') return (g.polRecite || []).some(function (x) { return x.id === 'sh-' + it.uid; });
+    if (it.kind === 'playbook') return (g.playbooks || []).some(function (x) { return x.id === 'sh-' + it.uid; });
+    var sh = g.share || {};
+    if (it.kind === 'text') return (sh.receivedTexts || []).some(function (x) { return x.id === 'sh-' + it.uid; });
     return false;
   }
   function importChecked(uids, friendName) {
@@ -34359,11 +34532,16 @@ function bind(el, next) {
       any = true;
       return head + grp.items.map(function (entry) {
         var it = entry.it;
-        return '<label class="mis-row" style="border-left-color:#2563eb;display:flex;align-items:flex-start;gap:8px;cursor:pointer">'
+        return '<div class="mis-row" style="border-left-color:#2563eb"><div class="mis-head">'
+          + '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;flex:1;min-width:0">'
           + '<input type="checkbox" class="recv-chk" data-friend="' + U.esc(grp.friend.name) + '" data-uid="' + U.esc(it.uid) + '"' + (entry.mine ? ' disabled title="已拥有"' : ' checked') + ' style="margin-top:3px">'
           + '<span style="flex:1;min-width:0"><span class="tag">' + (KIND_LABEL[it.kind] || '📦') + '</span> '
           + '<b style="font-size:12.5px">' + U.esc(it.title) + '</b>'
-          + '<span class="muted-sm" style="font-size:11px;margin-left:4px">' + U.esc(it.from || '') + ' · ' + fmtTime(it.at) + (entry.mine ? ' · 已拥有' : '') + '</span></span></label>';
+          + '<span class="muted-sm" style="font-size:11px;margin-left:4px">' + U.esc(it.from || '') + ' · ' + fmtTime(it.at) + (entry.mine ? ' · 已拥有' : '') + '</span></span></label></div>'
+          + '<div class="mis-actions">'
+          + '<button class="btn btn-sm btn-ghost sc-preview" data-friend="' + U.esc(grp.friend.name) + '" data-uid="' + U.esc(it.uid) + '">👁 预览</button>'
+          + (entry.mine ? '' : '<button class="btn btn-sm btn-ghost sc-recv-code" data-friend="' + U.esc(grp.friend.name) + '" data-uid="' + U.esc(it.uid) + '">🔗 转发为分享码</button>')
+          + '</div></div>';
       }).join('');
     }).join('');
     return html + (any ? '' : '<div class="muted-sm" style="margin-top:6px">全部好友都暂无新内容 ✓</div>');
@@ -34390,8 +34568,10 @@ function bind(el, next) {
       + (s.myGistId
         ? '<div class="form-grid"><label>昵称（对方看到的名字）<input class="input" id="sc-nick" value="' + U.esc(s.nick) + '" maxlength="12"></label></div>'
           + '<div style="margin-top:6px;font-size:12px" class="muted-sm">我的分享 ID：<code style="user-select:all;font-size:11px">' + U.esc(shortId(s.myGistId)) + '</code>'
-          + ' · 已分享 <b>' + (s.sentCount || 0) + '</b> 条'
-          + (s.autoCheck ? ' · <span style="color:var(--ok)">进入本页自动检查已开启</span>' : '') + '</div>'
+          + ' · 已分享 <b>' + (s.sentCount || 0) + '</b> 条</div>'
+          + '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:4px;cursor:pointer">'
+          + '<input type="checkbox" id="sc-autochk"' + (s.autoCheck ? ' checked' : '') + '> 进入本页时自动检查好友更新'
+          + '</label>'
         : '<div class="empty">首次使用会自动创建专属分享档案（secret Gist）。<br>把生成的 ID 发给同学，TA 添加后你们即可互传题目和试卷。</div>'
           + (loggedIn() ? '' : '<div class="alert alert-warn" style="margin-top:8px">分享协作需要先登录 GitHub（仅需 gist 权限，与云同步共用同一登录）。'
             + '<div class="btn-row" style="margin-top:8px"><button class="btn btn-sm btn-primary" id="sc-login">🔑 登录 GitHub</button>'
@@ -34412,8 +34592,9 @@ function bind(el, next) {
             + (f.lastErr ? '<span style="color:var(--danger)">⚠ 上次检查失败：' + U.esc(f.lastErr) + '</span>'
               : (f.lastOkAt ? '上次成功检查 ' + fmtTime(f.lastOkAt) : '尚未检查过'))
             + '</div>'
-            + '<div class="mis-actions"><button class="btn btn-sm btn-ghost sc-fr-del" data-id="' + U.esc(f.id) + '" data-name="' + U.esc(f.name) + '">删除</button></div></div>';
-        }).join('') : '<div class="empty">还没有好友。让同学在 TA 的「分享协作」页复制 ID 发给你。</div>')
+            + '<div class="mis-actions"><button class="btn btn-sm btn-ghost sc-fr-rename" data-id="' + U.esc(f.id) + '">✏️ 改名</button>'
+            + '<button class="btn btn-sm btn-ghost sc-fr-del" data-id="' + U.esc(f.id) + '" data-name="' + U.esc(f.name) + '">删除</button></div></div>';
+        }).join('') : '<div class="empty">还没有好友。让同学在 TA 的「分享协作」页复制 ID 发给你。<br>没有好友也能用：下方「🔗 分享码」可跨好友自由传内容。</div>')
       + '</div>'
       // ===== 收件箱 =====
       + '<div class="card"><div class="card-title-row"><span class="card-title">📥 收件箱</span>'
@@ -34422,9 +34603,33 @@ function bind(el, next) {
       + '<div id="sc-inbox">' + inboxHtml() + '</div></div>'
       // ===== 快捷分享 =====
       + '<div class="card"><div class="card-title-row"><span class="card-title">📤 快捷分享</span>'
-      + (bankN ? '<button class="link-btn" id="sc-share-bank">打包分享整个题库（' + Math.min(bankN, MAX_PACK) + ' 题）</button>' : '') + '</div>'
-      + examsHtml()
+      + '<button class="link-btn" id="sc-manage-box">🗂 管理我的分享箱</button></div>'
+      + (examsHtml() || '')
+      + '<div class="btn-row" style="margin-top:6px;flex-wrap:wrap">'
+      + (bankN ? '<button class="btn btn-sm btn-ghost" id="sc-share-bank">📚 打包题库（' + Math.min(bankN, MAX_PACK) + ' 题）</button>'
+              + '<button class="btn btn-sm btn-ghost" id="sc-pick-quiz">✅ 挑题打包（' + bankN + ' 题中选）</button>' : '')
+      + (((Store.get().vocab) || []).length ? '<button class="btn btn-sm btn-ghost" id="sc-share-vocab">📖 分享单词本（' + Store.get().vocab.length + ' 词）</button>' : '')
+      + '</div></div>'
+      // ===== 自由文本 =====
+      + '<div class="card"><div class="card-title-sm">🗒 自由分享（任意内容）</div>'
+      + '<input class="input" id="sc-text-title" placeholder="标题（可留空）" maxlength="40" style="margin-bottom:6px">'
+      + '<textarea class="input" id="sc-text-body" placeholder="粘贴/输入任何内容：笔记、知识点总结、计划、链接…（好友收到后在收件笔记区查看，也可生成分享码发给任何人）" rows="4"></textarea>'
+      + '<div class="btn-row" style="margin-top:6px"><button class="btn btn-sm btn-primary" id="sc-text-send">📤 分享给好友</button>'
+      + '<button class="btn btn-sm btn-ghost" id="sc-text-code">🔗 生成分享码（无需好友）</button></div>'
+      + ((st().receivedTexts || []).length ? '<div class="card-title-sm" style="margin-top:10px">📥 收到的笔记（' + st().receivedTexts.length + '）</div>'
+        + st().receivedTexts.map(function (t) {
+          return '<div class="mis-row" style="border-left-color:#7c3aed"><div class="mis-head">'
+            + '<span class="tag" style="background:#7c3aed">' + U.esc(t.title) + '</span><span class="mis-date">' + U.esc(t.from || '') + ' · ' + fmtTime(t.at) + '</span></div>'
+            + '<div class="mis-actions"><button class="btn btn-sm btn-ghost sc-text-view" data-id="' + U.esc(t.id) + '">👁 查看</button>'
+            + '<button class="btn btn-sm btn-ghost sc-text-copy" data-id="' + U.esc(t.id) + '">📋 复制全文</button>'
+            + '<button class="btn btn-sm btn-ghost sc-text-del" data-id="' + U.esc(t.id) + '">删除</button></div></div>';
+        }).join('') : '')
       + '</div>'
+      // ===== 分享码 =====
+      + '<div class="card"><div class="card-title-sm">🔗 分享码导入</div>'
+      + '<div class="muted-sm" style="font-size:12px;margin-bottom:6px">把别人发你的分享码（KY1. 开头）粘贴到下面即可导入——<b>不需要加好友、不需要对方在线</b>。题目/试卷/背诵卡/单词包/方法卡/笔记都支持。</div>'
+      + '<textarea class="input" id="sc-code-in" placeholder="KY1.xxxx…" rows="3"></textarea>'
+      + '<div class="btn-row" style="margin-top:6px"><button class="btn btn-sm btn-primary" id="sc-code-import">📥 导入分享码</button></div></div>'
       // ===== 说明 =====
       + '<div class="card"><div class="card-title-sm">ℹ️ 工作原理与隐私</div>'
       + '<div class="muted-sm" style="font-size:12px;line-height:1.8">'
@@ -34490,6 +34695,34 @@ function bind(el, next) {
         }, true);
       };
     });
+    // 好友改名（行内弹窗）
+    el.querySelectorAll('.sc-fr-rename').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id');
+        var fr = st().friends.find(function (x) { return x.id === id; });
+        if (!fr) return;
+        Modal.open({
+          title: '✏️ 修改备注名',
+          html: '<input class="input" id="sc-rename-in" value="' + U.esc(fr.name) + '" maxlength="12">',
+          actions: [{ label: '保存', kind: 'btn-primary', id: 'sc-rename-ok' }, { label: '取消' }]
+        });
+        var inp = document.getElementById('sc-rename-in');
+        if (inp) inp.focus();
+        var okBtn = document.getElementById('sc-rename-ok');
+        if (okBtn) okBtn.onclick = function () {
+          var v = ((inp && inp.value) || '').trim();
+          if (!v) { Toast.warn('名字不能为空'); return; }
+          Store.update(function (d) {
+            d.share.friends = (d.share.friends || []).map(function (x) {
+              return x.id === id ? Object.assign({}, x, { name: v }) : x;
+            });
+          });
+          Toast.success('已改名为「' + v + '」', 1500);
+          if (Modal.close) Modal.close();
+          render(el);
+        };
+      };
+    });
     var checkBtn = el.querySelector('#sc-check');
     checkBtn.onclick = async function () {
       if (!st().friends.length) { Toast.warn('先添加一位好友吧'); return; }
@@ -34511,6 +34744,207 @@ function bind(el, next) {
       };
     });
 
+    // ===== v2 自由度扩展绑定 =====
+    // autoCheck 开关
+    var autoChk = el.querySelector('#sc-autochk');
+    if (autoChk) autoChk.onchange = function () {
+      Store.update(function (d) { d.share.autoCheck = !!autoChk.checked; });
+      Toast.show(autoChk.checked ? '✅ 已开启：进入本页自动检查' : '已关闭自动检查', 'info', 1600);
+    };
+    // 收件箱条目预览
+    function findInboxEntry(fname, uid) {
+      if (!_inbox) return null;
+      var grp = _inbox.find(function (g) { return g.friend.name === fname; });
+      if (!grp) return null;
+      return grp.items.find(function (en) { return en.it.uid === uid; }) || null;
+    }
+    function previewModal(it) {
+      var body = '';
+      var d = it.item || {};
+      if (it.kind === 'quiz') {
+        body = '<div class="quiz-stem">' + fmtBody(d.stem) + '</div>'
+          + '<div class="card-title-sm" style="margin-top:10px">答案</div><div class="report">' + fmtBody(d.answer) + '</div>'
+          + '<div class="card-title-sm">解析</div><div class="report">' + fmtBody(d.solution) + '</div>';
+      } else if (it.kind === 'quizpack') {
+        body = (Array.isArray(d) ? d : []).map(function (q, i) {
+          return '<div style="padding:6px 0;border-bottom:1px solid var(--border)"><b>' + (i + 1) + '. </b>' + fmtBody(q && q.stem).slice(0, 200) + '</div>';
+        }).join('') || '<div class="empty">空题包</div>';
+      } else if (it.kind === 'exam') {
+        body = '<div class="muted-sm" style="font-size:12px">' + U.esc(d.title) + ' · 限时' + (d.timeLimit || 180) + '分钟</div>'
+          + (Array.isArray(d.questions) ? d.questions : []).map(function (q, i) {
+            return '<div style="padding:6px 0;border-bottom:1px solid var(--border)"><b>' + (i + 1) + '. </b>' + fmtBody(q && q.stem).slice(0, 200) + '</div>';
+          }).join('');
+      } else if (it.kind === 'pol') {
+        body = '<div class="report"><b>' + U.esc(d.topic) + '</b></div>'
+          + '<div class="card-title-sm" style="margin-top:8px">要点</div><div class="report">'
+          + ((d.points || []).map(function (p, i) { return (i + 1) + '. ' + U.esc(p); }).join('<br>') || '—') + '</div>'
+          + ((d.keywords || []).length ? '<div class="card-title-sm" style="margin-top:8px">关键词</div><div class="report">' + d.keywords.map(function (k) { return '<span class="tag">' + U.esc(k) + '</span>'; }).join(' ') : '');
+      } else if (it.kind === 'vocab') {
+        body = (Array.isArray(d) ? d : []).map(function (w) {
+          return '<div style="padding:4px 0;border-bottom:1px solid var(--border)"><b>' + U.esc(w.word) + '</b> <span class="muted-sm">' + U.esc(w.pos || '') + ' ' + U.esc(w.phonetic || '') + '</span><br><span style="font-size:12px">' + U.esc(w.meaning || '') + '</span></div>';
+        }).join('') || '<div class="empty">空单词包</div>';
+      } else if (it.kind === 'playbook') {
+        body = '<div class="report"><b>' + U.esc(d.title) + '</b></div>'
+          + (d.recognize ? '<div class="card-title-sm" style="margin-top:8px">何时用</div><div class="report">' + fmtBody(d.recognize) + '</div>' : '')
+          + '<div class="card-title-sm" style="margin-top:8px">步骤</div><div class="report">'
+          + ((d.steps || []).map(function (s, i) { return (i + 1) + '. <b>' + U.esc(s.name) + '</b>：' + U.esc(s.do) + (s.tip ? '（💡' + U.esc(s.tip) + '）' : ''); }).join('<br>') || '—') + '</div>'
+          + (d.pitfalls ? '<div class="alert alert-warn" style="margin-top:8px">💣 ' + fmtBody(d.pitfalls) + '</div>' : '');
+      } else if (it.kind === 'text') {
+        body = '<div class="report" style="white-space:pre-wrap">' + U.esc(String(d.content || '').slice(0, 5000)) + '</div>';
+      } else body = '<pre style="font-size:11px;overflow:auto;max-height:50vh">' + U.esc(JSON.stringify(d, null, 2).slice(0, 5000)) + '</pre>';
+      Modal.open({
+        title: (KIND_LABEL[it.kind] || '📦') + ' ' + it.title,
+        wide: true,
+        html: '<div style="max-height:60vh;overflow:auto;font-size:13px;line-height:1.7">' + body + '</div>',
+        actions: [{ label: '关闭', kind: 'btn-ghost' }]
+      });
+    }
+    function fmtBody(s) {
+      s = String(s == null ? '' : s);
+      if (window.Tex && Tex.renderInline) { try { return Tex.renderInline(s); } catch (e) {} }
+      return U.esc(s);
+    }
+    el.querySelectorAll('.sc-preview').forEach(function (b) {
+      b.onclick = function () {
+        var en = findInboxEntry(b.getAttribute('data-friend'), b.getAttribute('data-uid'));
+        if (en) previewModal(en.it);
+      };
+    });
+    // 收件转发为分享码
+    el.querySelectorAll('.sc-recv-code').forEach(function (b) {
+      b.onclick = function () {
+        var en = findInboxEntry(b.getAttribute('data-friend'), b.getAttribute('data-uid'));
+        if (en) makeCode(en.it);
+      };
+    });
+    // 自由文本分享
+    var txtSend = el.querySelector('#sc-text-send');
+    if (txtSend) txtSend.onclick = function () {
+      var title = el.querySelector('#sc-text-title').value;
+      var body = el.querySelector('#sc-text-body').value;
+      publishText(title, body, txtSend);
+    };
+    var txtCode = el.querySelector('#sc-text-code');
+    if (txtCode) txtCode.onclick = function () {
+      var title = el.querySelector('#sc-text-title').value.trim();
+      var content = el.querySelector('#sc-text-body').value.trim();
+      if (!content) { Toast.warn('内容为空'); return; }
+      makeCode(makeItem('text', title || '笔记 · ' + content.slice(0, 20), st().nick, { content: content }));
+    };
+    // 收到的笔记操作
+    function findText(id) { return (st().receivedTexts || []).find(function (x) { return x.id === id; }); }
+    el.querySelectorAll('.sc-text-view').forEach(function (b) {
+      b.onclick = function () {
+        var t = findText(b.getAttribute('data-id'));
+        if (!t) return;
+        Modal.open({ title: '🗒 ' + t.title, wide: true,
+          html: '<div style="max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:13px;line-height:1.8" class="report">' + U.esc(t.content.slice(0, 8000)) + '</div>',
+          actions: [{ label: '复制全文', kind: 'btn-primary', id: 'sc-tv-copy' }, { label: '关闭', kind: 'btn-ghost' }] });
+        var cb = document.getElementById('sc-tv-copy');
+        if (cb) cb.onclick = function () { copyText(t.content, '📋 全文已复制'); };
+      };
+    });
+    el.querySelectorAll('.sc-text-copy').forEach(function (b) {
+      b.onclick = function () {
+        var t = findText(b.getAttribute('data-id'));
+        if (t) copyText(t.content, '📋 全文已复制');
+      };
+    });
+    el.querySelectorAll('.sc-text-del').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.getAttribute('data-id');
+        Store.update(function (d) {
+          d.share.receivedTexts = (d.share.receivedTexts || []).filter(function (x) { return x.id !== id; });
+        });
+        render(el);
+      };
+    });
+    // 分享码导入
+    var codeBtn = el.querySelector('#sc-code-import');
+    if (codeBtn) codeBtn.onclick = function () {
+      var ta = el.querySelector('#sc-code-in');
+      var code = (ta.value || '').trim();
+      if (!code) { Toast.warn('先粘贴分享码'); return; }
+      var r = importCode(code);
+      if (r) { ta.value = ''; App.refresh(); }
+    };
+    // 挑题打包（多选弹窗）
+    var pickBtn = el.querySelector('#sc-pick-quiz');
+    if (pickBtn) pickBtn.onclick = function () {
+      var bank = Store.get().quizBank || [];
+      if (!bank.length) { Toast.warn('题库为空'); return; }
+      var rows = bank.map(function (q, i) {
+        return '<label style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);cursor:pointer;align-items:flex-start">'
+          + '<input type="checkbox" class="pk-chk" data-i="' + i + '" style="margin-top:3px">'
+          + '<span style="flex:1;min-width:0;font-size:12.5px"><span class="tag" style="background:#d48806">' + U.esc(q.topicName) + '</span> '
+          + U.esc(String(q.stem || '').replace(/[$\\]/g, '').slice(0, 60)) + '</span></label>';
+      }).join('');
+      Modal.open({
+        title: '✅ 挑选题目打包分享（' + bank.length + ' 题中选）', wide: true,
+        html: '<div style="max-height:55vh;overflow:auto">' + rows + '</div>'
+          + '<div class="muted-sm" style="font-size:11px;margin-top:6px">上限 ' + MAX_PACK + ' 题</div>',
+        actions: [{ label: '📤 分享选中', kind: 'btn-primary', id: 'sc-pick-ok' }, { label: '取消', kind: 'btn-ghost' }]
+      });
+      var okBtn = document.getElementById('sc-pick-ok');
+      if (okBtn) okBtn.onclick = function () {
+        var idx = [];
+        document.querySelectorAll('.pk-chk:checked').forEach(function (c) { idx.push(parseInt(c.getAttribute('data-i'), 10)); });
+        if (!idx.length) { Toast.warn('还没勾选题目'); return; }
+        publishQuizPack(idx.map(function (i) { return bank[i]; }), okBtn);
+        if (Modal.close) Modal.close();
+      };
+    };
+    // 分享单词本
+    var vocabBtn = el.querySelector('#sc-share-vocab');
+    if (vocabBtn) vocabBtn.onclick = function () { publishVocabPack(Store.get().vocab || [], vocabBtn); };
+    // 管理我的分享箱
+    var mgBtn = el.querySelector('#sc-manage-box');
+    if (mgBtn) mgBtn.onclick = async function () {
+      if (!st().myGistId) { Toast.warn('还没有分享档案'); return; }
+      mgBtn.disabled = true; mgBtn.textContent = '⏳ 拉取中…';
+      try {
+        var box = await readBox(st().myGistId);
+        mgBtn.disabled = false; mgBtn.textContent = '🗂 管理我的分享箱';
+        if (!box.items.length) { Toast.warn('分享箱是空的'); return; }
+        var rows = box.items.map(function (it) {
+          return '<div class="mis-row" style="border-left-color:#64748b"><div class="mis-head">'
+            + '<span class="tag">' + (KIND_LABEL[it.kind] || '📦') + '</span>'
+            + '<span style="flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + U.esc(it.title) + '</span>'
+            + '<span class="mis-date">' + fmtTime(it.at) + '</span></div>'
+            + '<div class="mis-actions"><button class="btn btn-sm btn-ghost sc-box-code" data-uid="' + U.esc(it.uid) + '">🔗 分享码</button>'
+            + '<button class="btn btn-sm btn-ghost sc-box-del" data-uid="' + U.esc(it.uid) + '" style="color:var(--danger)">删除</button></div></div>';
+        }).join('');
+        Modal.open({
+          title: '🗂 我的分享箱（' + box.items.length + '/' + MAX_ITEMS + '）', wide: true,
+          html: '<div style="max-height:60vh;overflow:auto">' + rows + '</div>'
+            + '<div class="muted-sm" style="font-size:11px;margin-top:6px">删除后，好友下次检查将不再看到该内容（已导入的不受影响）。</div>',
+          actions: [{ label: '关闭', kind: 'btn-ghost' }]
+        });
+        document.querySelectorAll('.sc-box-del').forEach(function (db) {
+          db.onclick = async function () {
+            db.disabled = true; db.textContent = '…';
+            try {
+              await deleteBoxItem(db.getAttribute('data-uid'));
+              Toast.success('已从分享箱删除', 1500);
+              var row = db.closest('.mis-row');
+              if (row) row.remove();
+              if (Modal.open && !document.querySelector('.sc-box-del')) { /* 全删空时留壳即可 */ }
+            } catch (e) { Toast.show('❌ 删除失败：' + (e.message || e), 'error', 2600); db.disabled = false; db.textContent = '删除'; }
+          };
+        });
+        document.querySelectorAll('.sc-box-code').forEach(function (cb) {
+          cb.onclick = function () {
+            var uid = cb.getAttribute('data-uid');
+            var it2 = box.items.find(function (x) { return x.uid === uid; });
+            if (it2) makeCode(it2);
+          };
+        });
+      } catch (e) {
+        mgBtn.disabled = false; mgBtn.textContent = '🗂 管理我的分享箱';
+        Toast.show('❌ 拉取失败：' + (e.message || e), 'error', 2800);
+      }
+    };
+
     // 自动检查开关（进入本页时若开启则静默拉一次）
     var s2 = st();
     if (s2.autoCheck && s2.friends.length && !_inbox && loggedIn()) {
@@ -34531,15 +34965,20 @@ function bind(el, next) {
 
   if (typeof window !== 'undefined') {
     window.ShareCenterModule = { render: render };
-    // 供 quiz.js / sprint.js 一行调用；checkUpdates/importAllNew 供自动轮询与测试复用
+    // 供其它模块一行调用；checkUpdates/importAllNew 供自动轮询与测试复用
     window.ShareCenter = { publishQuiz: publishQuiz, publishQuizPack: publishQuizPack, publishExam: publishExam,
-      checkUpdates: checkUpdates, importAllNew: importAllNew };
+      publishPolCard: publishPolCard, publishVocabPack: publishVocabPack, publishPlaybook: publishPlaybook,
+      publishText: publishText, makeCode: makeCode, importCode: importCode,
+      deleteBoxItem: deleteBoxItem, checkUpdates: checkUpdates, importAllNew: importAllNew };
   }
 
   // Node 可测纯函数层
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { _pure: { makeUid: makeUid, normalizeBox: normalizeBox, capItems: capItems, filterNew: filterNew,
-      sanitizeQuiz: sanitizeQuiz, sanitizeExamForShare: sanitizeExamForShare, makeItem: makeItem, importIntoState: importIntoState } };
+      sanitizeQuiz: sanitizeQuiz, sanitizeExamForShare: sanitizeExamForShare, sanitizePolCard: sanitizePolCard,
+      sanitizeVocabPack: sanitizeVocabPack, sanitizePlaybook: sanitizePlaybook, sanitizeText: sanitizeText,
+      encodeShareCode: encodeShareCode, decodeShareCode: decodeShareCode,
+      makeItem: makeItem, importIntoState: importIntoState } };
   }
 })();
 
