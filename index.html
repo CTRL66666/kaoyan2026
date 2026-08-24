@@ -5745,9 +5745,11 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       createdAt: nowIso(), submittedAt: nowIso(), doneAt: ''
     };
     // ① 建 Gist（job + status + result 占位）
+    // 【注意】Cloud.gistReq 底层 apiReq 会自行 JSON.stringify(opts.body)，这里必须传对象——
+    // 手动 stringify 会双重编码 → GitHub 422 Unprocessable Entity（2026-08-24 真机踩坑）
     var r = await Cloud.gistReq('/gists', {
       method: 'POST',
-      body: JSON.stringify({ description: '[kaoyan2026] cloud-exam-job ' + id, public: false, files: gistFiles(job) })
+      body: { description: '[kaoyan2026] cloud-exam-job ' + id, public: false, files: gistFiles(job) }
     });
     if (!r.data || !r.data.id) throw new Error('创建任务 Gist 失败');
     job.gistId = r.data.id;
@@ -5849,7 +5851,7 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     if (job.status === 'done') throw new Error('任务已完成，无需取消');
     await Cloud.gistReq('/gists/' + job.gistId, {
       method: 'PATCH',
-      body: JSON.stringify({ files: { 'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '用户已取消', progress: 0, updatedAt: nowIso() }) } } })
+      body: { files: { 'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '用户已取消', progress: 0, updatedAt: nowIso() }) } } }
     });
     updateJob(jobId, { status: 'canceled', stageMsg: '已取消' });
   }
@@ -5861,10 +5863,10 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     if (!job || !job.gistId) throw new Error('任务不存在');
     await Cloud.gistReq('/gists/' + job.gistId, {
       method: 'PATCH',
-      body: JSON.stringify({ files: {
+      body: { files: {
         'status.json': { content: JSON.stringify({ status: 'queued', stage: '', msg: '重新入队', progress: 0, updatedAt: nowIso() }) },
         'result.json': { content: JSON.stringify({ cloudJobPending: true }) }
-      } })
+      } }
     });
     updateJob(jobId, { status: 'dispatching', error: '', resultImported: false, retryAt: nowIso() });
     try {
