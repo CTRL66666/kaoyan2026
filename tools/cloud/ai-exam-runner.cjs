@@ -109,7 +109,7 @@ async function _setStatus(status, stage, msg, progress) {
 
 // ---------- AI 调用（OpenAI 兼容 /chat/completions） ----------
 function aiCall(messages, opts = {}) {
-  const maxTok = opts.maxTokens || 3000;
+  const maxTok = opts.maxTokens || 8000;   // 默认 8000；出卷/审查/重写都需要充裕输出空间（思考模型开时一半耗在 reasoning 上）
   // 本地 job.json 里 endpoint 是「完整请求 URL」（含 /chat/completions，如 openrouter 的
   // /api/v1/chat/completions）；repo secrets 回退时可能是 base URL（如 /api/v1）。幂等拼接，
   // 避免出现 /chat/completions/chat/completions 双拼导致 AI 404。
@@ -221,8 +221,9 @@ function extractJson(txt) {
 // AI 调用 + 宽容 JSON 抽取一体化：网络/HTTP 错误由 aiRetry 重试；
 // 解析类失败（没 JSON / 被截断 / 空正文）自动换一轮重问。
 // 「空正文/finish_reason=length」= 思考模型把 token 全烧在 reasoning 上：优先「关思考」重试，
-// 仍空再翻倍 max_tokens（上限 12000）——这是云端对齐本地后能跑通的关键，避免三小时卡死。
+// 仍空再翻倍 max_tokens（上限 32768 ≈ 65536 的一半）——云端对齐本地后能跑通的关键，避免三小时卡死。
 async function aiJson(messages, opts, tries = 3) {
+  const MAX_TOK = 32768;
   let o = Object.assign({ think: JOB_THINK }, opts || {});
   for (let i = 0; ; i++) {
     let out;
@@ -231,9 +232,9 @@ async function aiJson(messages, opts, tries = 3) {
       const m = (e && e.message) || '';
       if (/空正文|finish_reason=length/.test(m)) {
         if (!(o._thinkOff)) { o = Object.assign({}, o, { _thinkOff: true, think: false }); log('思考模型烧光 token 致空正文 → 关思考重试'); }
-        else if ((o.maxTokens || 3000) < 12000) { o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 3000) * 2, 12000) }); log('关思考仍空正文，max_tokens 翻倍至', o.maxTokens, '重试'); }
-      } else if (/JSON 不完整/.test(m) && (o.maxTokens || 3000) < 12000) {
-        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 3000) * 2, 12000) });
+        else if ((o.maxTokens || 8000) < MAX_TOK) { o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 8000) * 2, MAX_TOK) }); log('关思考仍空正文，max_tokens 翻倍至', o.maxTokens, '重试'); }
+      } else if (/JSON 不完整/.test(m) && (o.maxTokens || 8000) < MAX_TOK) {
+        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 8000) * 2, MAX_TOK) });
         log('疑似输出截断，max_tokens 翻倍至', o.maxTokens, '重试');
       }
       if (i >= tries - 1) throw e;
@@ -243,8 +244,8 @@ async function aiJson(messages, opts, tries = 3) {
     try { return extractJson(out); }
     catch (e) {
       log('JSON 解析失败，重问', i + 1, '/', tries, '：', ((e && e.message) || '').slice(0, 120));
-      if (/JSON 不完整/.test((e && e.message) || '') && (o.maxTokens || 3000) < 12000) {
-        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 3000) * 2, 12000) });
+      if (/JSON 不完整/.test((e && e.message) || '') && (o.maxTokens || 8000) < MAX_TOK) {
+        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 8000) * 2, MAX_TOK) });
         log('疑似输出截断，max_tokens 翻倍至', o.maxTokens, '重试');
       }
       if (i >= tries - 1) throw e;
@@ -406,7 +407,7 @@ function braceBalanced(s) {
     const plan = await aiJson(
       [{ role: 'system', content: plannerSystem(subj, prefs) },
        { role: 'user', content: '请规划本卷蓝图。' }],
-      { maxTokens: 3500 });
+      { maxTokens: 8000 });
     if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('蓝图规划失败：无 questions');
     log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');
     pushLog('🗺 蓝图《' + (plan.title || '未命名卷') + '》规划完成：共 ' + plan.questions.length + ' 题 · 限时 ' + (plan.timeLimit || 120) + ' 分钟');
@@ -427,7 +428,7 @@ function braceBalanced(s) {
       const out = await aiJson(
         [{ role: 'system', content: questionSystem(subj) },
          { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],
-        { maxTokens: 3200 });
+        { maxTokens: 8000 });
       out.topicName = pq.topicName || out.topicName || '';
       out.score = out.score || pq.score || 5;
       out.type = pq.type || out.type || 'solve';
@@ -464,7 +465,7 @@ function braceBalanced(s) {
       review = await aiJson(
         [{ role: 'system', content: chiefSystem(subj) },
          { role: 'user', content: '审查这份押题卷（题号从1开始）：\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || '').slice(0, 400), star: q.star })) ) }],
-        { maxTokens: 4000 }) || {};
+        { maxTokens: 8000 }) || {};
     } catch (e) { log('审查调用失败，仅按本地校验处理：', e.message); }
     const rewriteList = [];
     const seenRw = {};
@@ -486,7 +487,7 @@ function braceBalanced(s) {
         const fixed = await aiJson(
           [{ role: 'system', content: questionSystem(subj) },
            { role: 'user', content: '重写这道题（原题如下）。必须修复：' + rw.reason + '。指引：' + (rw.fixHint || '') + '\n原题：' + JSON.stringify(old) }],
-          { maxTokens: 3200 });
+          { maxTokens: 8000 });
         fixed.topicName = old.topicName; fixed.score = old.score; fixed.type = old.type || fixed.type;
         const bad = validateQuestion(fixed);
         if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); pushLog('⚠️ 第' + rw.index + '题重写后仍不合格，保留原题'); const q = QS[i]; if (q) { q.st = 'done'; q.err = '重写未过，保留原题'; } return null; }
