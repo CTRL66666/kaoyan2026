@@ -84,6 +84,8 @@ function pushLog(msg) {
 // ---------- 逐题状态跟踪（写进 status.json.qs，前端浮窗渲染逐题卡片墙） ----------
 // st: wait=排队中 / run=出题中 / done=完成 / fail=生成失败 / rewrite=重写中
 const QS = [];
+// 已出合格题目（用于「停止并保存」——取消时把已完成的题攒成 partial 卷）
+let SAVED = [];
 
 // setStatus 串行化：多 worker 并发完成时 PATCH 同一 gist 文件，链式排队避免互踩/乱序
 let _stChain = Promise.resolve();
@@ -231,16 +233,43 @@ async function aiJson(messages, opts, tries = 3) {
   }
 }
 
+// ---------- 取消信号（独立 cancel.json 承载） ----------
+// 为什么不能把 canceled 写进 status.json：setStatus 每一轮都会 PATCH 覆盖 status.json，
+// 前端写进去的 canceled 会被下一轮 running 覆盖冲掉 → 取消信号丢失。独立 cancel.json 不被覆盖。
+let _cancelCache = null;
+class CancelError extends Error { constructor(m) { super(m); this.name = 'CancelError'; } }
+async function checkCancel(force) {
+  if (_cancelCache && !force) return _cancelCache;
+  try {
+    const g = await ghRetry('GET', '/gists/' + GIST_ID);
+    const f = g && g.files && g.files['cancel.json'];
+    if (f && f.content) _cancelCache = JSON.parse(f.content);
+  } catch (e) { /* 取消探测失败忽略，不拖垮主流程 */ }
+  return _cancelCache;
+}
+// 阶段边界检查点：若已取消 → 抛 CancelError 退出主流程（由 catch 落 partial/取消处理）
+async function cancelCheckpoint() {
+  const c = await checkCancel(true);
+  if (c && c.canceled) throw new CancelError((c.savePartial === false) ? 'user-cancel-no-save' : 'user-cancel-save');
+}
+
 // ---------- 并发池 ----------
 async function pool(items, conc, worker, onEachDone) {
   const results = new Array(items.length);
   let idx = 0, done = 0;
   async function runOne() {
     while (idx < items.length) {
+      const ci = await checkCancel();
+      if (ci && ci.canceled) break;                       // 已取消：不再取新题
       const i = idx++;
       try { results[i] = await worker(items[i], i); }
-      catch (e) { results[i] = { __err: (e && e.message) || String(e) }; log('worker 失败 @' + i, e.message); }
+      catch (e) {
+        if (e && e.name === 'CancelError') { results[i] = { __canceled: true }; break; }
+        results[i] = { __err: (e && e.message) || String(e) }; log('worker 失败 @' + i, e.message);
+      }
       done++; if (onEachDone) onEachDone(done, items.length);
+      const ci2 = await checkCancel();
+      if (ci2 && ci2.canceled) break;                     // 刚做完一题发现已取消：停
     }
   }
   await Promise.all(Array.from({ length: Math.max(1, Math.min(conc, items.length)) }, runOne));
@@ -360,6 +389,8 @@ function braceBalanced(s) {
     let genDone = 0;
     const genTotal = plan.questions.length;
     let questions = await pool(plan.questions, 4, async (pq, i) => {
+      const ci = await checkCancel();
+      if (ci && ci.canceled) throw new CancelError('cancel');
       QS[i].st = 'run';
       QS[i].t0 = Date.now();
       await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
@@ -370,17 +401,21 @@ function braceBalanced(s) {
       out.topicName = pq.topicName || out.topicName || '';
       out.score = out.score || pq.score || 5;
       out.type = pq.type || out.type || 'solve';
-      QS[i].st = 'done';
-      QS[i].sec = Math.round((Date.now() - QS[i].t0) / 1000);
-      QS[i].stem = String(out.stem || '').slice(0, 140);
-      QS[i].ans = String(out.answer || '').slice(0, 60);
-      genDone++;
-      pushLog('✅ 第' + (i + 1) + '题出好了 · ' + (out.topicName || '?') + ' · ★' + (out.star || '?') + '（' + genDone + '/' + genTotal + '）');
-      await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
+      if (!validateQuestion(out)) {
+        QS[i].st = 'done';
+        QS[i].sec = Math.round((Date.now() - QS[i].t0) / 1000);
+        QS[i].stem = String(out.stem || '').slice(0, 140);
+        QS[i].ans = String(out.answer || '').slice(0, 60);
+        genDone++;
+        SAVED.push(out);   // 合格题攒进 SAVED，「停止并保存」时打包成 partial 卷
+        pushLog('✅ 第' + (i + 1) + '题出好了 · ' + (out.topicName || '?') + ' · ★' + (out.star || '?') + '（' + genDone + '/' + genTotal + '）');
+        await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
+      }
       return out;
     });
-    // 池结束后：仍处 run 状态的题 = 生成失败（pool 吞掉了异常）
+    // 池结束后：仍处 run 状态的题 = 生成失败或取消（pool 吞掉了异常）
     QS.forEach(q => { if (q.st === 'run') { q.st = 'fail'; q.err = '生成失败'; } });
+    await cancelCheckpoint();   // 出题阶段完成 → 检查取消（已出 SAVED 题可保存）
 
     // ④ 蓝本硬校验（纯代码）：坏题先标记，交由审查后统一重写
     const localIssues = [];
@@ -408,6 +443,7 @@ function braceBalanced(s) {
     log('审查 verdict=', review.verdict || 'n/a', '待重写', rewriteList.length, '题');
     pushLog('🧐 总审查 verdict=' + (review.verdict || 'n/a') + (review.summary ? '（' + String(review.summary).slice(0, 60) + '）' : '') + '，待重写 ' + rewriteList.length + ' 题');
     rewriteList.forEach(rw => pushLog('　第' + rw.index + '题需重写：' + String(rw.reason || '').slice(0, 50)));
+    await cancelCheckpoint();   // 审查完成 → 检查取消
 
     // ⑥ 定向重写池
     if (rewriteList.length) {
@@ -432,6 +468,7 @@ function braceBalanced(s) {
     }
 
     // ⑦ 终检 + 打包
+    await cancelCheckpoint();   // 终检前最后一道取消检查
     await setStatus('running', 'finalizing', '终检打包中…', 92);
     const finalBad = [];
     questions.forEach((q, i) => { const b = validateQuestion(q); if (b) finalBad.push((i + 1) + ':' + b); });
@@ -459,6 +496,30 @@ function braceBalanced(s) {
     } });
     log('✅ 完成');
   } catch (e) {
+    // 取消路径：用户主动停止 → 按 savePartial 决定是否把已出合格题打包成 partial 卷
+    if (e && e.name === 'CancelError') {
+      const wantSave = !(e.message === 'user-cancel-no-save');
+      const cands = (SAVED || []).filter(q => q && q.stem);
+      if (wantSave && cands.length) {
+        const partial = {
+          title: '☁️ 云端押题卷（部分 · ' + cands.length + ' 题）',
+          subject: ((gist && gist.files && gist.files['job.json']) ? JSON.parse(gist.files['job.json'].content).prefs : {}).subject || 'math',
+          timeLimit: 120, totalScore: cands.reduce((a, q) => a + (Number(q.score) || 5), 0),
+          questions: cands, partial: true, cancelReason: '用户停止时保存已出题目',
+          builtBy: 'cloud-actions', generatedAt: new Date().toISOString()
+        };
+        await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
+          'result.json': { content: JSON.stringify(partial) },
+          'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v4' }) }
+        } });
+        log('⏹ 已停止并保存', cands.length, '题');
+      } else {
+        await setStatus('canceled', '', '⏹ 已停止（未保存题目）', 100);
+        log('⏹ 已停止，未保存');
+      }
+      process.exitCode = 0;
+      return;
+    }
     log('❌ 失败：', e.message);
     await setStatus('error', '', '云端执行失败：' + ((e && e.message) || e));
     process.exitCode = 1;
