@@ -113,14 +113,17 @@ function aiCall(messages, opts = {}) {
           const content = String((msg && msg.content) || '').trim();
           if (!content) {
             // 空正文诊断：思考模型把 max_tokens 全烧在 reasoning 上时 content 为空（finish_reason=length）
+            // 必须用 reject 而非 throw——此处处于 res.on('end') 事件回调内，throw 会变成
+            // 未捕获异常直接崩掉进程，主流程 catch→setStatus('error') 永远执行不到，
+            // 任务状态就冻结在半路（12 小时假运行的根因）。
             const fr = (ch0 && ch0.finish_reason) || '?';
             const hasReason = !!(msg && (msg.reasoning_content || msg.reasoning));
-            throw new Error('AI 返回空正文（finish_reason=' + fr
+            return reject(new Error('AI 返回空正文（finish_reason=' + fr
               + (hasReason ? '；模型只输出了思考内容没写答案——请换非思考模型、关闭思考模式或调大 max_tokens' : '；模型未输出任何内容')
-              + '）响应片段：' + txt.slice(0, 150));
+              + '）响应片段：' + txt.slice(0, 150)));
           }
           resolve(content);
-        } catch (e) { if (e.message && e.message.indexOf('AI 返回空正文') === 0) throw e; reject(new Error('AI 响应解析失败: ' + txt.slice(0, 200))); }
+        } catch (e) { reject(new Error('AI 响应解析失败: ' + txt.slice(0, 200))); }
       });
     });
     req.on('timeout', () => req.destroy(new Error('AI 调用超时')));
@@ -162,16 +165,31 @@ function extractJson(txt) {
   throw new Error('JSON 不完整/被截断（输出末尾：…' + t.slice(-100).replace(/\s+/g, ' ') + '）。可尝试调大 max_tokens 或换模型');
 }
 
-// AI 调用 + 宽容 JSON 抽取一体化：网络/HTTP 错误仍由 aiRetry 重试；
-// 解析类失败（没 JSON / 被截断 / 空正文）在这里自动换一轮重问——单次坏响应不再炸全卷。
+// AI 调用 + 宽容 JSON 抽取一体化：网络/HTTP 错误由 aiRetry 重试；
+// 解析类失败（没 JSON / 被截断 / 空正文）自动换一轮重问，且若是「思考耗尽 token」类
+// 失败（空正文/截断），下一轮把 max_tokens 翻倍（上限 12000）再试——单次坏响应不再炸全卷。
 async function aiJson(messages, opts, tries = 3) {
+  let o = opts || {};
   for (let i = 0; ; i++) {
     let out;
-    try { out = await aiRetry(messages, opts, 2); }
-    catch (e) { if (i >= tries - 1) throw e; await sleep(2000 * (i + 1)); continue; }
+    try { out = await aiRetry(messages, o, 2); }
+    catch (e) {
+      const m = (e && e.message) || '';
+      if (/空正文|finish_reason=length|JSON 不完整/.test(m) && (o.maxTokens || 3000) < 12000) {
+        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 3000) * 2, 12000) });
+        log('疑似思考耗尽 token，max_tokens 翻倍至', o.maxTokens, '重试');
+      }
+      if (i >= tries - 1) throw e;
+      await sleep(2000 * (i + 1));
+      continue;
+    }
     try { return extractJson(out); }
     catch (e) {
       log('JSON 解析失败，重问', i + 1, '/', tries, '：', ((e && e.message) || '').slice(0, 120));
+      if (/JSON 不完整/.test((e && e.message) || '') && (o.maxTokens || 3000) < 12000) {
+        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 3000) * 2, 12000) });
+        log('疑似输出截断，max_tokens 翻倍至', o.maxTokens, '重试');
+      }
       if (i >= tries - 1) throw e;
       await sleep(2500 * (i + 1));
     }
