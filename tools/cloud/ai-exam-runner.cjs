@@ -81,9 +81,19 @@ function pushLog(msg) {
   if (RUN_LOG.length > 50) RUN_LOG.splice(0, RUN_LOG.length - 50);   // 只留最近 50 条
 }
 
-async function setStatus(status, stage, msg, progress) {
+// ---------- 逐题状态跟踪（写进 status.json.qs，前端浮窗渲染逐题卡片墙） ----------
+// st: wait=排队中 / run=出题中 / done=完成 / fail=生成失败 / rewrite=重写中
+const QS = [];
+
+// setStatus 串行化：多 worker 并发完成时 PATCH 同一 gist 文件，链式排队避免互踩/乱序
+let _stChain = Promise.resolve();
+function setStatus(status, stage, msg, progress) {
+  _stChain = _stChain.then(() => _setStatus(status, stage, msg, progress)).catch(() => {});
+  return _stChain;
+}
+async function _setStatus(status, stage, msg, progress) {
   pushLog((stage ? '[' + stage + '] ' : '') + (msg || ''));
-  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) } } };
+  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) } } };
   try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
   catch (e) {
     const hint = (e && e.status === 404)
@@ -144,6 +154,23 @@ async function aiRetry(messages, opts, tries = 3) {
   for (let i = 0; ; i++) {
     try { return await aiCall(messages, opts); }
     catch (e) {
+      const m = (e && e.message) || '';
+      const sm = m.match(/^AI HTTP (\d{3})/);
+      const code = sm ? Number(sm[1]) : 0;
+      // 401/403：令牌无效/无权限——重试毫无意义，立即失败并点破最常见根因
+      if (code === 401 || code === 403) {
+        throw new Error(m + '　👉 诊断：令牌无效或无权限。最常见根因是 endpoint 与 key 不匹配'
+          + '（例如 endpoint 填了 api.agnes-ai.cn 但 key 还是 OpenRouter 的 sk-or-v1-…）。'
+          + '请到押题页配置向导换成该平台自己的 key，保存后重新提交/重发任务');
+      }
+      // 其他 4xx（除 429/408）：请求本身有问题（模型名错/参数错），重试也不会好
+      if (code && code >= 400 && code < 500 && code !== 429 && code !== 408) throw e;
+      // 429 限流：退避加倍重试（限流是暂时的，多等一会儿比失败好）
+      if (code === 429 && i < tries - 1) {
+        log('AI 限流 429，退避', 15 * (i + 1), 's 后重试');
+        await sleep(15000 * (i + 1));
+        continue;
+      }
       if (i >= tries - 1) throw e;
       log('AI 调用失败重试', i + 1, e.message);
       await sleep(3000 * (i + 1));
@@ -308,6 +335,12 @@ function braceBalanced(s) {
     const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境
     log('接单', job.jobId, JSON.stringify(prefs));
     pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?'));
+    // key/endpoint 匹配预检：最常见的 401 根因，开跑前先提醒（写进日志，浮窗可见）
+    {
+      const ep = aiConf('endpoint') || '', key = aiConf('key') || '';
+      if (/sk-or-v1-/.test(key) && !/openrouter\.ai/i.test(ep)) pushLog('⚠️ key 是 OpenRouter 的（sk-or-v1-…）但 endpoint 不是 openrouter.ai——大概率会 401，请换该平台自己的 key');
+      else if (/sk-ant-/.test(key) && !/anthropic/i.test(ep)) pushLog('⚠️ key 是 Anthropic 的（sk-ant-…）但 endpoint 不是 anthropic——大概率会 401');
+    }
 
     // ② 总工规划
     await setStatus('running', 'planning', '总工程师正在规划蓝图…', 5);
@@ -319,10 +352,17 @@ function braceBalanced(s) {
     log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');
     pushLog('🗺 蓝图《' + (plan.title || '未命名卷') + '》规划完成：共 ' + plan.questions.length + ' 题 · 限时 ' + (plan.timeLimit || 120) + ' 分钟');
     plan.questions.forEach((pq, i) => pushLog('　第' + (i + 1) + '题 ' + (pq.topicName || '?') + ' · ' + (pq.type || '?') + ' · ★' + (pq.star || '?')));
+    // 初始化逐题状态墙（浮窗卡片数据源）
+    plan.questions.forEach((pq, i) => QS.push({ i: i + 1, topic: String(pq.topicName || '?').slice(0, 30), star: pq.star || '?', type: pq.type || '?', score: pq.score || 5, st: 'wait' }));
+    await setStatus('running', 'generating', '并发出题中… 0/' + plan.questions.length, 10);
 
     // ③ 并发出题池
-    await setStatus('running', 'generating', '并发出题中…', 10);
+    let genDone = 0;
+    const genTotal = plan.questions.length;
     let questions = await pool(plan.questions, 4, async (pq, i) => {
+      QS[i].st = 'run';
+      QS[i].t0 = Date.now();
+      await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
       const out = await aiJson(
         [{ role: 'system', content: questionSystem(subj) },
          { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],
@@ -330,9 +370,17 @@ function braceBalanced(s) {
       out.topicName = pq.topicName || out.topicName || '';
       out.score = out.score || pq.score || 5;
       out.type = pq.type || out.type || 'solve';
-      pushLog('✅ 第' + (i + 1) + '题出好了 · ' + (out.topicName || '?') + ' · ★' + (out.star || '?'));
+      QS[i].st = 'done';
+      QS[i].sec = Math.round((Date.now() - QS[i].t0) / 1000);
+      QS[i].stem = String(out.stem || '').slice(0, 140);
+      QS[i].ans = String(out.answer || '').slice(0, 60);
+      genDone++;
+      pushLog('✅ 第' + (i + 1) + '题出好了 · ' + (out.topicName || '?') + ' · ★' + (out.star || '?') + '（' + genDone + '/' + genTotal + '）');
+      await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
       return out;
-    }, (d, n) => { if (d % 3 === 0 || d === n) setStatus('running', 'generating', '并发出题中… ' + d + '/' + n, 10 + Math.round(d / n * 45)); });
+    });
+    // 池结束后：仍处 run 状态的题 = 生成失败（pool 吞掉了异常）
+    QS.forEach(q => { if (q.st === 'run') { q.st = 'fail'; q.err = '生成失败'; } });
 
     // ④ 蓝本硬校验（纯代码）：坏题先标记，交由审查后统一重写
     const localIssues = [];
@@ -364,6 +412,7 @@ function braceBalanced(s) {
     // ⑥ 定向重写池
     if (rewriteList.length) {
       await setStatus('running', 'rewriting', '定向重写 ' + rewriteList.length + ' 题…', 68);
+      rewriteList.forEach(rw => { const q = QS[rw.index - 1]; if (q) q.st = 'rewrite'; });
       await pool(rewriteList, 3, async (rw) => {
         const i = rw.index - 1;
         const old = questions[i];
@@ -374,8 +423,9 @@ function braceBalanced(s) {
           { maxTokens: 3200 });
         fixed.topicName = old.topicName; fixed.score = old.score; fixed.type = old.type || fixed.type;
         const bad = validateQuestion(fixed);
-        if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); pushLog('⚠️ 第' + rw.index + '题重写后仍不合格，保留原题'); return null; }
+        if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); pushLog('⚠️ 第' + rw.index + '题重写后仍不合格，保留原题'); const q = QS[i]; if (q) { q.st = 'done'; q.err = '重写未过，保留原题'; } return null; }
         questions[i] = fixed;
+        const q = QS[i]; if (q) { q.st = 'done'; q.stem = String(fixed.stem || '').slice(0, 140); q.ans = String(fixed.answer || '').slice(0, 60); }
         pushLog('✏️ 第' + rw.index + '题重写完成');
         return null;
       }, (d, n) => setStatus('running', 'rewriting', '定向重写中… ' + d + '/' + n, 68 + Math.round(d / n * 20)));
@@ -405,7 +455,7 @@ function braceBalanced(s) {
     pushLog('📦 终检通过：' + questions.length + ' 题 · 总分 ' + totalScore + ' · 即将回写');
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
       'result.json': { content: JSON.stringify(exam) },
-      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) }
+      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) }
     } });
     log('✅ 完成');
   } catch (e) {
