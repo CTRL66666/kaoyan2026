@@ -74,8 +74,16 @@ async function ghRetry(method, path, body, tries = 4) {
     }
   }
 }
+// ---------- 过程事件日志（写进 status.json.log，前端 aiFloat 浮窗实时可视化） ----------
+const RUN_LOG = [];
+function pushLog(msg) {
+  RUN_LOG.push({ t: new Date().toISOString(), msg: String(msg) });
+  if (RUN_LOG.length > 50) RUN_LOG.splice(0, RUN_LOG.length - 50);   // 只留最近 50 条
+}
+
 async function setStatus(status, stage, msg, progress) {
-  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) } } };
+  pushLog((stage ? '[' + stage + '] ' : '') + (msg || ''));
+  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) } } };
   try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
   catch (e) {
     const hint = (e && e.status === 404)
@@ -299,6 +307,7 @@ function braceBalanced(s) {
     }
     const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境
     log('接单', job.jobId, JSON.stringify(prefs));
+    pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?'));
 
     // ② 总工规划
     await setStatus('running', 'planning', '总工程师正在规划蓝图…', 5);
@@ -308,6 +317,8 @@ function braceBalanced(s) {
       { maxTokens: 3500 });
     if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('蓝图规划失败：无 questions');
     log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');
+    pushLog('🗺 蓝图《' + (plan.title || '未命名卷') + '》规划完成：共 ' + plan.questions.length + ' 题 · 限时 ' + (plan.timeLimit || 120) + ' 分钟');
+    plan.questions.forEach((pq, i) => pushLog('　第' + (i + 1) + '题 ' + (pq.topicName || '?') + ' · ' + (pq.type || '?') + ' · ★' + (pq.star || '?')));
 
     // ③ 并发出题池
     await setStatus('running', 'generating', '并发出题中…', 10);
@@ -319,6 +330,7 @@ function braceBalanced(s) {
       out.topicName = pq.topicName || out.topicName || '';
       out.score = out.score || pq.score || 5;
       out.type = pq.type || out.type || 'solve';
+      pushLog('✅ 第' + (i + 1) + '题出好了 · ' + (out.topicName || '?') + ' · ★' + (out.star || '?'));
       return out;
     }, (d, n) => { if (d % 3 === 0 || d === n) setStatus('running', 'generating', '并发出题中… ' + d + '/' + n, 10 + Math.round(d / n * 45)); });
 
@@ -330,6 +342,7 @@ function braceBalanced(s) {
       if (bad || braceBad) localIssues.push({ index: i + 1, reason: bad + (braceBad ? '；LaTeX 花括号不平衡' : ''), fixHint: '修复结构问题，保持题意不变' });
     });
     log('本地硬校验：', localIssues.length, '题有问题');
+    pushLog('🔍 本地硬校验：' + (questions.length - localIssues.length) + ' 题过关，' + localIssues.length + ' 题待修');
 
     // ⑤ 总工审查
     await setStatus('running', 'reviewing', '总工程师审查中…', 58);
@@ -345,6 +358,8 @@ function braceBalanced(s) {
     ((review.needsRewrite) || []).forEach(r => { if (r && r.index && !seenRw[r.index]) { seenRw[r.index] = 1; rewriteList.push(r); } });
     localIssues.forEach(li => { if (!seenRw[li.index]) { seenRw[li.index] = 1; rewriteList.push(li); } });
     log('审查 verdict=', review.verdict || 'n/a', '待重写', rewriteList.length, '题');
+    pushLog('🧐 总审查 verdict=' + (review.verdict || 'n/a') + (review.summary ? '（' + String(review.summary).slice(0, 60) + '）' : '') + '，待重写 ' + rewriteList.length + ' 题');
+    rewriteList.forEach(rw => pushLog('　第' + rw.index + '题需重写：' + String(rw.reason || '').slice(0, 50)));
 
     // ⑥ 定向重写池
     if (rewriteList.length) {
@@ -359,8 +374,9 @@ function braceBalanced(s) {
           { maxTokens: 3200 });
         fixed.topicName = old.topicName; fixed.score = old.score; fixed.type = old.type || fixed.type;
         const bad = validateQuestion(fixed);
-        if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); return null; }
+        if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); pushLog('⚠️ 第' + rw.index + '题重写后仍不合格，保留原题'); return null; }
         questions[i] = fixed;
+        pushLog('✏️ 第' + rw.index + '题重写完成');
         return null;
       }, (d, n) => setStatus('running', 'rewriting', '定向重写中… ' + d + '/' + n, 68 + Math.round(d / n * 20)));
     }
@@ -386,9 +402,10 @@ function braceBalanced(s) {
     };
 
     // ⑧ 收卷回写
+    pushLog('📦 终检通过：' + questions.length + ' 题 · 总分 ' + totalScore + ' · 即将回写');
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
       'result.json': { content: JSON.stringify(exam) },
-      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) }
+      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) }
     } });
     log('✅ 完成');
   } catch (e) {
