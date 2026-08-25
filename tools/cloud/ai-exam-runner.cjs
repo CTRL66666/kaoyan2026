@@ -331,6 +331,10 @@ function braceBalanced(s) {
 
 // ---------- 主流程 ----------
 (async function main() {
+  // 供 catch（取消/失败路径）使用：try 块内 let/const 的作用域到不了 catch，
+  // 若在 catch 里直接引用 gist/subj 会 ReferenceError 崩进程 → partial 卷写不出去。
+  let JOB_GIST = null;
+  let JOB_SUBJ = 'math';
   try {
     // ① 读任务
     let gist;
@@ -340,6 +344,7 @@ function braceBalanced(s) {
       throw e;
     }
     if (!gist || !gist.files || !gist.files['job.json']) throw new Error('Gist 缺 job.json');
+    JOB_GIST = gist;
     const job = JSON.parse(gist.files['job.json'].content);
     const stNow = gist.files['status.json'] ? JSON.parse(gist.files['status.json'].content) : {};
     if (stNow.status === 'canceled') { log('任务已被用户取消，直接退出'); return; }
@@ -362,6 +367,7 @@ function braceBalanced(s) {
       return;
     }
     const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境
+    JOB_SUBJ = subj;
     log('接单', job.jobId, JSON.stringify(prefs));
     pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?'));
     // key/endpoint 匹配预检：最常见的 401 根因，开跑前先提醒（写进日志，浮窗可见）
@@ -500,28 +506,39 @@ function braceBalanced(s) {
     if (e && e.name === 'CancelError') {
       const wantSave = !(e.message === 'user-cancel-no-save');
       const cands = (SAVED || []).filter(q => q && q.stem);
-      if (wantSave && cands.length) {
-        const partial = {
-          title: '☁️ 云端押题卷（部分 · ' + cands.length + ' 题）',
-          subject: ((gist && gist.files && gist.files['job.json']) ? JSON.parse(gist.files['job.json'].content).prefs : {}).subject || 'math',
-          timeLimit: 120, totalScore: cands.reduce((a, q) => a + (Number(q.score) || 5), 0),
-          questions: cands, partial: true, cancelReason: '用户停止时保存已出题目',
-          builtBy: 'cloud-actions', generatedAt: new Date().toISOString()
-        };
-        await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
-          'result.json': { content: JSON.stringify(partial) },
-          'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v4' }) }
-        } });
-        log('⏹ 已停止并保存', cands.length, '题');
-      } else {
-        await setStatus('canceled', '', '⏹ 已停止（未保存题目）', 100);
-        log('⏹ 已停止，未保存');
+      try {
+        if (wantSave && cands.length) {
+          const partial = {
+            title: '☁️ 云端押题卷（部分 · ' + cands.length + ' 题）',
+            subject: (function () {
+              try { if (JOB_GIST && JOB_GIST.files && JOB_GIST.files['job.json']) return (JSON.parse(JOB_GIST.files['job.json'].content).prefs || {}).subject; } catch (e) {}
+              return JOB_SUBJ;
+            })() || 'math',
+            timeLimit: 120, totalScore: cands.reduce((a, q) => a + (Number(q.score) || 5), 0),
+            questions: cands, partial: true, cancelReason: '用户停止时保存已出题目',
+            builtBy: 'cloud-actions', generatedAt: new Date().toISOString()
+          };
+          await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
+            'result.json': { content: JSON.stringify(partial) },
+            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v4' }) }
+          } });
+          log('⏹ 已停止并保存', cands.length, '题');
+        } else {
+          await setStatus('canceled', '', '⏹ 已停止（未保存题目）', 100);
+          log('⏹ 已停止，未保存');
+        }
+      } catch (err2) {
+        // 取消路径内部兜底：绝不能因写回异常让状态卡在 running 假运行
+        log('!! 取消落盘异常，降级写 canceled：', err2.message);
+        try { await setStatus('canceled', '', '⏹ 已停止（保存失败：' + String(err2.message || '').slice(0, 40) + '）', 100); } catch (e3) {}
+        process.exitCode = 1;
+        return;
       }
       process.exitCode = 0;
       return;
     }
     log('❌ 失败：', e.message);
-    await setStatus('error', '', '云端执行失败：' + ((e && e.message) || e));
+    try { await setStatus('error', '', '云端执行失败：' + ((e && e.message) || e)); } catch (e2) {}
     process.exitCode = 1;
   }
 })();
