@@ -28,6 +28,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // AI 配置：优先 job.json 里的 prefs.ai（本地工具自动写入，免配 secrets），回退 repo secrets。
 // 在主流程读到 job 后调用 initAiConf() 完成校验。
 let JOB_AI = null;
+let JOB_THINK = false;   // 思考模式（来自 job.prefs.think）——结构化 JSON 默认关闭，避免思考烧光 token 致空正文
 function aiConf(k) {
   if (JOB_AI && JOB_AI[k]) return String(JOB_AI[k]);
   return process.env['AI_' + k.toUpperCase()] || '';
@@ -114,7 +115,15 @@ function aiCall(messages, opts = {}) {
   // 避免出现 /chat/completions/chat/completions 双拼导致 AI 404。
   let endpoint = aiConf('endpoint').trim().replace(/\/+$/, '');
   if (!/\/chat\/completions$/.test(endpoint)) endpoint += '/chat/completions';
-  const body = JSON.stringify({ model: aiConf('model'), messages, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_tokens: maxTok });
+  const payload = { model: aiConf('model'), messages, temperature: opts.temperature == null ? 0.7 : opts.temperature, max_tokens: maxTok };
+  // 思考模式控制：结构化 JSON 场景默认「不思考」——思考模型（LongCat-2.0 等）若开着思考，
+  // 会把 max_tokens 全烧在 reasoning_content 上、content 返回空（finish_reason=length），
+  // 这正是「云端卡在总审查三小时」的根因。 opts.think=true 才显式发 enable_thinking:true；
+  // opts._plain=true（400 降级重试）则彻底去掉 chat_template_kwargs，兼容不认该字段的接口。
+  if (!opts._plain) {
+    payload.chat_template_kwargs = { enable_thinking: !!opts.think };
+  }
+  const body = JSON.stringify(payload);
   return new Promise((resolve, reject) => {
     const u = new URL(endpoint);
     const req = https.request({
@@ -159,6 +168,13 @@ async function aiRetry(messages, opts, tries = 3) {
       const m = (e && e.message) || '';
       const sm = m.match(/^AI HTTP (\d{3})/);
       const code = sm ? Number(sm[1]) : 0;
+      // 400 且当前还带着 chat_template_kwargs：不少接口不认 enable_thinking 这个扩展字段，
+      // 去掉该字段用纯 body 重试一次（对齐本地 ai.js 的「400 极简重试」降级链）。
+      if (code === 400 && opts && !opts._plain) {
+        log('AI 400：接口可能不认 chat_template_kwargs，去掉思考开关字段重试…');
+        opts = Object.assign({}, opts, { _plain: true });
+        continue;
+      }
       // 401/403：令牌无效/无权限——重试毫无意义，立即失败并点破最常见根因
       if (code === 401 || code === 403) {
         throw new Error(m + '　👉 诊断：令牌无效或无权限。最常见根因是 endpoint 与 key 不匹配'
@@ -203,18 +219,22 @@ function extractJson(txt) {
 }
 
 // AI 调用 + 宽容 JSON 抽取一体化：网络/HTTP 错误由 aiRetry 重试；
-// 解析类失败（没 JSON / 被截断 / 空正文）自动换一轮重问，且若是「思考耗尽 token」类
-// 失败（空正文/截断），下一轮把 max_tokens 翻倍（上限 12000）再试——单次坏响应不再炸全卷。
+// 解析类失败（没 JSON / 被截断 / 空正文）自动换一轮重问。
+// 「空正文/finish_reason=length」= 思考模型把 token 全烧在 reasoning 上：优先「关思考」重试，
+// 仍空再翻倍 max_tokens（上限 12000）——这是云端对齐本地后能跑通的关键，避免三小时卡死。
 async function aiJson(messages, opts, tries = 3) {
-  let o = opts || {};
+  let o = Object.assign({ think: JOB_THINK }, opts || {});
   for (let i = 0; ; i++) {
     let out;
     try { out = await aiRetry(messages, o, 2); }
     catch (e) {
       const m = (e && e.message) || '';
-      if (/空正文|finish_reason=length|JSON 不完整/.test(m) && (o.maxTokens || 3000) < 12000) {
+      if (/空正文|finish_reason=length/.test(m)) {
+        if (!(o._thinkOff)) { o = Object.assign({}, o, { _thinkOff: true, think: false }); log('思考模型烧光 token 致空正文 → 关思考重试'); }
+        else if ((o.maxTokens || 3000) < 12000) { o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 3000) * 2, 12000) }); log('关思考仍空正文，max_tokens 翻倍至', o.maxTokens, '重试'); }
+      } else if (/JSON 不完整/.test(m) && (o.maxTokens || 3000) < 12000) {
         o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 3000) * 2, 12000) });
-        log('疑似思考耗尽 token，max_tokens 翻倍至', o.maxTokens, '重试');
+        log('疑似输出截断，max_tokens 翻倍至', o.maxTokens, '重试');
       }
       if (i >= tries - 1) throw e;
       await sleep(2000 * (i + 1));
@@ -351,7 +371,10 @@ function braceBalanced(s) {
     const prefs = job.prefs || {};
     // AI 配置：优先任务自带的 prefs.ai（本地工具写入 secret Gist），回退 repo secrets
     JOB_AI = prefs.ai || null;
-    log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)');
+    // 思考模式：结构化 JSON 出卷默认关闭思考（思考模型会把 token 烧光致空正文、卡死）；
+    // 仅当用户显式勾选「启用思考模式」（prefs.think=true）才开启。
+    JOB_THINK = !!prefs.think;
+    log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)', '· think =', JOB_THINK);
     if (!aiConf('endpoint') || !aiConf('key') || !aiConf('model')) {
       throw new Error('缺 AI 配置：任务未携带（prefs.ai）且 repo secrets 也未配置');
     }
@@ -369,7 +392,8 @@ function braceBalanced(s) {
     const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境
     JOB_SUBJ = subj;
     log('接单', job.jobId, JSON.stringify(prefs));
-    pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?'));
+    pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?') + (JOB_THINK ? ' · 💭 思考模式' : ' · ⚡ 不思考(结构化)'));
+    pushLog('🧠 思考开关已对齐本地：' + (JOB_THINK ? '开启（若思考模型烧光 token 会自动关思考降级）' : '关闭（结构化 JSON 默认不思考，避免空正文卡死）'));
     // key/endpoint 匹配预检：最常见的 401 根因，开跑前先提醒（写进日志，浮窗可见）
     {
       const ep = aiConf('endpoint') || '', key = aiConf('key') || '';
