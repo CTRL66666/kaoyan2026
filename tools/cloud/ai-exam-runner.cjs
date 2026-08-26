@@ -299,20 +299,60 @@ async function pool(items, conc, worker, onEachDone) {
 
 // ---------- 提示词（与 sprint.js 本地管线同风格，独立内联） ----------
 const SUBJ_NAME = { math: '数学', ctrl: '专业课', eng: '英语', pol: '政治' };
+
+// 从蓝本派生题量（低耦合：本地/云端共用同一入口）
+function bpQuestionCount(bp) { return (bp && Array.isArray(bp.types)) ? bp.types.reduce(function (a, t) { return a + (t.count || 0); }, 0) : 0; }
+function bpStructureDesc(bp) {
+  if (!bp || !Array.isArray(bp.types)) return '';
+  return bp.types.map(function (t) { return (t.count || 0) + ' 道' + (t.label || t.type) + (t.score > 0 ? '(每 ' + t.score + ' 分)' : '(均摊)'); }).join(' + ');
+}
+function bpTotalScore(bp) { return Number(bp && bp.totalScore) || 150; }
+function bpTimeLimit(bp) { return Number(bp && bp.timeLimit) || 180; }
+
+// 蓝本预设（与 js/core/exam-pipeline.js 保持同步）
+const DEFAULT_BP = {
+  shuyi: { name: '数学一（真题卷型）', subject: 'math', totalScore: 150, timeLimit: 180, types: [{ type: 'choice', count: 10, score: 5 }, { type: 'fill', count: 6, score: 5 }, { type: 'solve', count: 6, score: 0 }], starMix: { 1: 0, 2: 15, 3: 45, 4: 30, 5: 10 } },
+  ctrl: { name: '专业课（6 道综合大题）', subject: 'ctrl', totalScore: 150, timeLimit: 180, types: [{ type: 'solve', count: 6, score: 25 }], starMix: { 1: 0, 2: 0, 3: 35, 4: 45, 5: 20 } },
+  yingyi: { name: '英语一（真题卷型）', subject: 'eng', totalScore: 100, timeLimit: 180, types: [{ type: 'choice', count: 20, score: 0.5 }, { type: 'choice', count: 20, score: 2 }, { type: 'solve', count: 1, score: 10 }, { type: 'essay', count: 2, score: 15 }], starMix: { 1: 0, 2: 20, 3: 50, 4: 25, 5: 5 } },
+  pol: { name: '政治（真题卷型）', subject: 'pol', totalScore: 100, timeLimit: 180, types: [{ type: 'choice', count: 16, score: 1 }, { type: 'choice', count: 17, score: 2 }, { type: 'solve', count: 5, score: 10 }], starMix: { 1: 10, 2: 30, 3: 40, 4: 15, 5: 5 } },
+  ying2: { name: '英语二', subject: 'eng', totalScore: 100, timeLimit: 180, types: [{ type: 'fill', count: 10, score: 1 }, { type: 'choice', count: 15, score: 2 }, { type: 'essay', count: 2, score: 15 }, { type: 'solve', count: 1, score: 0 }], starMix: { 1: 8, 2: 22, 3: 40, 4: 25, 5: 5 } }
+};
+const SUBJ_TO_PRESET = { math: 'shuyi', ctrl: 'ctrl', eng: 'yingyi', pol: 'pol' };
+
+// 从 prefs 解析蓝本：优先 prefs.blueprint；未传则回退科目预设（兼容旧任务）
+function resolveBpFromPrefs(subj, prefs) {
+  if (prefs && prefs.blueprint && prefs.blueprint.types && Array.isArray(prefs.blueprint.types)) {
+    return prefs.blueprint;
+  }
+  // 旧任务无蓝本：按 count 回退预设
+  var key = SUBJ_TO_PRESET[subj] || 'shuyi';
+  var def = DEFAULT_BP[key] || DEFAULT_BP.shuyi;
+  var n = prefs && prefs.count === 'lite' ? 8 : prefs && prefs.count === 'full' ? 15 : 12;
+  // 若默认预设题量已接近 n，直接用；否则生成临时简版
+  if (bpQuestionCount(def) >= Math.max(6, n - 3)) return def;
+  return { name: def.name, subject: def.subject, totalScore: def.totalScore, timeLimit: def.timeLimit, types: [{ type: 'solve', count: n, score: Math.round(def.totalScore / n) }], starMix: def.starMix };
+}
+
 function plannerSystem(subj, prefs) {
+  const bp = resolveBpFromPrefs(subj, prefs);
   const diffNote = prefs.diff === 'superhard'
     ? '难度硬约束：全部为压轴难题（★4~★5），禁止基础题。'
     : prefs.diff === 'hard'
       ? '难度约束：约 70% 压轴难题（★4~★5），30% 中档（★3）。'
       : '难度约束：约 60% 中档综合题（★3），40% 压轴题（★4~★5）。';
-  const n = prefs.count === 'full' ? 15 : prefs.count === 'lite' ? 8 : 12;
-  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题总工程师。请规划一份押题卷蓝图：共 ' + n + ' 题。'
-    + diffNote + '\n要求：①覆盖不同考点，突出今年高频与考生薄弱方向 ②题型分布合理（选择题/填空题/解答题）③每题给出方向描述供出题 AI 执行。\n'
-    + '只输出 JSON：{"title":"卷名","timeLimit":分钟,"questions":[{"topicName":"考点","type":"choice|fill|solve","diff":"easy|medium|hard","star":1-5,"score":分值,"direction":"命题方向一句话"}]}';
+  const n = bpQuestionCount(bp);
+  const structure = bpStructureDesc(bp);
+  const totalScore = bpTotalScore(bp);
+  const timeLimit = bpTimeLimit(bp);
+  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题总工程师。请按给定蓝本规划一份押题卷。'
+    + '\n【蓝本】' + (bp.name || '押题卷') + '：' + structure + '，共 ' + n + ' 题，总分 ' + totalScore + '，限时 ' + timeLimit + ' 分钟。'
+    + '\n【难度】' + diffNote
+    + '\n要求：①覆盖不同考点，突出今年高频与考生薄弱方向 ②题型分布严格符合蓝本结构 ③每题给出方向描述供出题 AI 执行。\n'
+    + '只输出 JSON：{"title":"卷名","timeLimit":' + timeLimit + ',"questions":[{"topicName":"考点","type":"choice|fill|solve|essay","direction":"命题方向一句话"}]}';
 }
 function questionSystem(subj) {
   return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确且解析完整（含关键步骤与易错点）。\n'
-    + '只输出 JSON：{"stem":"题干(LaTeX用$...$)","type":"choice|fill|solve","options":["A. ..","B. ..","C. ..","D. .."]或省略,"answer":"正确答案","solution":"详细解析","trap":"常见陷阱一句话","diff":"easy|medium|hard","star":1-5}';
+    + '只输出 JSON：{"stem":"题干(LaTeX用$...$)","type":"choice|fill|solve|essay","options":["A. ..","B. ..","C. ..","D. .."]或省略,"answer":"正确答案","solution":"详细解析","trap":"常见陷阱一句话","diff":"easy|medium|hard","star":1-5}';
 }
 function chiefSystem(subj) {
   return '你是考研' + (SUBJ_NAME[subj] || '综合') + '押题卷总审查工程师。逐题检查：①答案是否正确（自己验算关键步骤）②题干是否严谨无歧义 ③选项是否有双对/无解 ④解析是否支撑答案 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
