@@ -29,9 +29,15 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // 在主流程读到 job 后调用 initAiConf() 完成校验。
 let JOB_AI = null;
 let JOB_THINK = false;   // 思考模式（来自 job.prefs.think）——结构化 JSON 默认关闭，避免思考烧光 token 致空正文
+let JOB_MAJOR = '';      // 专业课名（来自 job.prefs.major）——"专业课"科目出卷时必须具体到专业，否则出成泛化卷
 function aiConf(k) {
   if (JOB_AI && JOB_AI[k]) return String(JOB_AI[k]);
   return process.env['AI_' + k.toUpperCase()] || '';
+}
+// 科目显示名：专业课带具体专业名（如「专业课（自控原理）」），其余科目用静态名。
+function subjName(subj) {
+  if (subj === 'ctrl' && JOB_MAJOR) return '专业课（' + JOB_MAJOR + '）';
+  return (SUBJ_NAME[subj] || '综合');
 }
 
 // ---------- GitHub Gist ----------
@@ -356,19 +362,19 @@ function plannerSystem(subj, prefs) {
   const structure = bpStructureDesc(bp);
   const totalScore = bpTotalScore(bp);
   const timeLimit = bpTimeLimit(bp);
-  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题总工程师。请按给定蓝本规划一份押题卷。'
+  return '你是考研' + subjName(subj) + '命题总工程师。请按给定蓝本规划一份押题卷。'
     + '\n【蓝本】' + (bp.name || '押题卷') + '：' + structure + '，共 ' + n + ' 题，总分 ' + totalScore + '，限时 ' + timeLimit + ' 分钟。'
     + '\n【难度】' + diffNote
     + '\n要求：①覆盖不同考点，突出今年高频与考生薄弱方向 ②题型分布严格符合蓝本结构 ③每题给出方向描述供出题 AI 执行。\n'
     + '只输出 JSON：{"title":"卷名","timeLimit":' + timeLimit + ',"questions":[{"topicName":"考点","type":"choice|fill|solve|essay","direction":"命题方向一句话"}]}';
 }
 function questionSystem(subj) {
-  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确。\n'
+  return '你是考研' + subjName(subj) + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确。\n'
     + '【解析完整性·硬要求】solution 必须"分步推导→结论→易错点"三段式完整；solve/essay 题解析 ≥60 字、choice 题 ≥25 字、fill 题 ≥20 字；禁止只写最终答案或一句话带过。\n'
     + '只输出 JSON：{"stem":"题干(LaTeX用$...$)","type":"choice|fill|solve|essay","options":["A. ..","B. ..","C. ..","D. .."]或省略,"answer":"正确答案","solution":"详细解析","trap":"常见陷阱一句话","diff":"easy|medium|hard","star":1-5}';
 }
 function chiefSystem(subj) {
-  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '押题卷总审查工程师。逐题检查：①解析是否完整（是否分步推导+结论+易错点、是否满足 solve/essay≥60字·choice≥25字·fill≥20字的下限——看的是**完整解析**，不是片段）②答案是否正确（自己验算关键步骤）③题干是否严谨无歧义 ④选项是否有双对/无解 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
+  return '你是考研' + subjName(subj) + '押题卷总审查工程师。逐题检查：①解析是否完整（是否分步推导+结论+易错点、是否满足 solve/essay≥60字·choice≥25字·fill≥20字的下限——看的是**完整解析**，不是片段）②答案是否正确（自己验算关键步骤）③题干是否严谨无歧义 ④选项是否有双对/无解 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
     + '只输出 JSON：{"verdict":"ok|minor|major","targetHardPct":40,"hardPct":实际hard百分比,"summary":"总评一句话","needsRewrite":[{"index":题号从1开始,"reason":"问题","fixHint":"修改指引"}]}';
 }
 
@@ -433,7 +439,9 @@ function braceBalanced(s) {
     // 思考模式：结构化 JSON 出卷默认关闭思考（思考模型会把 token 烧光致空正文、卡死）；
     // 仅当用户显式勾选「启用思考模式」（prefs.think=true）才开启。
     JOB_THINK = !!prefs.think;
-    log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)', '· think =', JOB_THINK);
+    // 专业课名：专业课（ctrl）科目出卷必须具体到专业，否则提示词只会写泛化的「专业课」三个字。
+    JOB_MAJOR = String(prefs.major || '').trim();
+    log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)', '· think =', JOB_THINK, '· major =', JOB_MAJOR || '(无)');
     if (!aiConf('endpoint') || !aiConf('key') || !aiConf('model')) {
       throw new Error('缺 AI 配置：任务未携带（prefs.ai）且 repo secrets 也未配置');
     }
