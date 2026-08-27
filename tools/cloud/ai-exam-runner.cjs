@@ -319,18 +319,30 @@ const DEFAULT_BP = {
 };
 const SUBJ_TO_PRESET = { math: 'shuyi', ctrl: 'ctrl', eng: 'yingyi', pol: 'pol' };
 
-// 从 prefs 解析蓝本：优先 prefs.blueprint；未传则回退科目预设（兼容旧任务）
+// 题量档缩放（与本地 sprint.js 的 volumeBp 同规则，保证云/地两端题量口径一致）：
+// lite：选择/填空减半、解答/写作保留，限时 ×0.7；full：全题型 ×1.5，限时 ×1.25。纯函数、不原地改蓝图。
+function scaleBp(bp, cnt) {
+  var out = JSON.parse(JSON.stringify(bp || {}));
+  if (cnt === 'lite' || cnt === 'full') {
+    var isLite = cnt === 'lite';
+    out.types = (out.types || []).map(function (t) {
+      var fac = isLite ? ((t.type === 'solve' || t.type === 'essay') ? 1 : 0.5) : 1.5;
+      return Object.assign({}, t, { count: Math.max(1, Math.round((t.count || 1) * fac)) });
+    });
+    out.timeLimit = Math.round((out.timeLimit || 180) * (isLite ? 0.7 : 1.25));
+  }
+  return out;
+}
+
+// 从 prefs 解析「已生效的蓝本」：优先 prefs.blueprint（本地存的永远是 std 基准）+ count 缩放；
+// 未传则回退科目预设并按 count 缩放（兼容旧任务）。题量据此真正生效，不再用 8/12/15 猜测。
 function resolveBpFromPrefs(subj, prefs) {
   if (prefs && prefs.blueprint && prefs.blueprint.types && Array.isArray(prefs.blueprint.types)) {
-    return prefs.blueprint;
+    return scaleBp(prefs.blueprint, prefs && prefs.count);
   }
-  // 旧任务无蓝本：按 count 回退预设
   var key = SUBJ_TO_PRESET[subj] || 'shuyi';
   var def = DEFAULT_BP[key] || DEFAULT_BP.shuyi;
-  var n = prefs && prefs.count === 'lite' ? 8 : prefs && prefs.count === 'full' ? 15 : 12;
-  // 若默认预设题量已接近 n，直接用；否则生成临时简版
-  if (bpQuestionCount(def) >= Math.max(6, n - 3)) return def;
-  return { name: def.name, subject: def.subject, totalScore: def.totalScore, timeLimit: def.timeLimit, types: [{ type: 'solve', count: n, score: Math.round(def.totalScore / n) }], starMix: def.starMix };
+  return scaleBp(def, prefs && prefs.count);
 }
 
 function plannerSystem(subj, prefs) {
