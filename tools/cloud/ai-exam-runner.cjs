@@ -363,11 +363,12 @@ function plannerSystem(subj, prefs) {
     + '只输出 JSON：{"title":"卷名","timeLimit":' + timeLimit + ',"questions":[{"topicName":"考点","type":"choice|fill|solve|essay","direction":"命题方向一句话"}]}';
 }
 function questionSystem(subj) {
-  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确且解析完整（含关键步骤与易错点）。\n'
+  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确。\n'
+    + '【解析完整性·硬要求】solution 必须"分步推导→结论→易错点"三段式完整；solve/essay 题解析 ≥60 字、choice 题 ≥25 字、fill 题 ≥20 字；禁止只写最终答案或一句话带过。\n'
     + '只输出 JSON：{"stem":"题干(LaTeX用$...$)","type":"choice|fill|solve|essay","options":["A. ..","B. ..","C. ..","D. .."]或省略,"answer":"正确答案","solution":"详细解析","trap":"常见陷阱一句话","diff":"easy|medium|hard","star":1-5}';
 }
 function chiefSystem(subj) {
-  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '押题卷总审查工程师。逐题检查：①答案是否正确（自己验算关键步骤）②题干是否严谨无歧义 ③选项是否有双对/无解 ④解析是否支撑答案 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
+  return '你是考研' + (SUBJ_NAME[subj] || '综合') + '押题卷总审查工程师。逐题检查：①解析是否完整（是否分步推导+结论+易错点、是否满足 solve/essay≥60字·choice≥25字·fill≥20字的下限——看的是**完整解析**，不是片段）②答案是否正确（自己验算关键步骤）③题干是否严谨无歧义 ④选项是否有双对/无解 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
     + '只输出 JSON：{"verdict":"ok|minor|major","targetHardPct":40,"hardPct":实际hard百分比,"summary":"总评一句话","needsRewrite":[{"index":题号从1开始,"reason":"问题","fixHint":"修改指引"}]}';
 }
 
@@ -386,7 +387,12 @@ function validateQuestion(q) {
     const ansBody = String(q.answer).trim().slice(1).trim();
     if (ansBody.length > 6 && q.options.filter(o => String(o).indexOf(ansBody) >= 0).length > 1) return '疑似多个选项含相同答案内容';
   }
-  if (!q.solution || String(q.solution).length < 10) return '解析缺失或过短';
+  if (!q.solution || String(q.solution).length < 1) return '解析缺失';
+  // 【2026-08-27 解析完整性分级】解析"一句话带过"是"每题返工"的元凶之一：AI 主观看一眼判不完整。
+  // 纯代码按题型设最低词数下限，缺步骤/缺结论的残次解析在校验层就被拦住，不再全压给总工程师主观拍板。
+  var solLen = String(q.solution).replace(/\s+/g, '').length;
+  var minLen = q.type === 'solve' || q.type === 'essay' ? 60 : q.type === 'choice' ? 25 : 20;
+  if (solLen < minLen) return '解析不完整（' + solLen + ' 字 < ' + minLen + ' 字下限，需分步推导+结论+易错点）';
   return '';
 }
 // LaTeX 花括号平衡粗检（防 AI 漏花括号导致渲染崩坏）
@@ -516,7 +522,7 @@ function braceBalanced(s) {
     try {
       review = await aiJson(
         [{ role: 'system', content: chiefSystem(subj) },
-         { role: 'user', content: '审查这份押题卷（题号从1开始）：\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || '').slice(0, 400), star: q.star })) ) }],
+         { role: 'user', content: '审查这份押题卷（题号从1开始）：\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || ''), star: q.star })) ) }],
         { maxTokens: 8000 }) || {};
     } catch (e) { log('审查调用失败，仅按本地校验处理：', e.message); }
     const rewriteList = [];
@@ -536,13 +542,25 @@ function braceBalanced(s) {
         const i = rw.index - 1;
         const old = questions[i];
         if (!old) return null;
-        const fixed = await aiJson(
-          [{ role: 'system', content: questionSystem(subj) },
-           { role: 'user', content: '重写这道题（原题如下）。必须修复：' + rw.reason + '。指引：' + (rw.fixHint || '') + '\n原题：' + JSON.stringify(old) }],
-          { maxTokens: 8000 });
-        fixed.topicName = old.topicName; fixed.score = old.score; fixed.type = old.type || fixed.type;
-        const bad = validateQuestion(fixed);
-        if (bad) { log('重写后仍不合格，保留原题 @', rw.index, bad); pushLog('⚠️ 第' + rw.index + '题重写后仍不合格，保留原题'); const q = QS[i]; if (q) { q.st = 'done'; q.err = '重写未过，保留原题'; } return null; }
+        // 【2026-08-27 收敛闭环】重写后不达标不再是"保留原题"摆烂（那等于返工白跑）：
+        // 不达标就把「校验失败原因」作为新反馈再重写一轮（上限 2 轮），让 审查→重写→再校验 真正收敛。
+        let fixed = null;
+        let lastBad = '';
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const feedback = attempt === 0
+            ? '必须修复：' + rw.reason + '。指引：' + (rw.fixHint || '')
+            : '上一轮重写仍未通过校验，问题：' + (lastBad || '') + '。请针对性修复并确保解析完整（分步+结论+易错点）。';
+          const cand = await aiJson(
+            [{ role: 'system', content: questionSystem(subj) },
+             { role: 'user', content: '重写这道题（原题如下）。' + feedback + '\n原题：' + JSON.stringify(old) }],
+            { maxTokens: 8000 });
+          cand.topicName = old.topicName; cand.score = old.score; cand.type = old.type || cand.type;
+          const bad = validateQuestion(cand);
+          if (!bad) { fixed = cand; break; }
+          lastBad = bad;
+          log('重写第', attempt + 1, '轮未过校验 @', rw.index, ':', bad);
+        }
+        if (!fixed) { log('重写 2 轮后仍不合格，保留原题 @', rw.index, lastBad); pushLog('⚠️ 第' + rw.index + '题重写 2 轮仍未过关，保留原题（' + String(lastBad || '').slice(0, 40) + '）'); const q = QS[i]; if (q) { q.st = 'done'; q.err = '重写未过，保留原题'; } return null; }
         questions[i] = fixed;
         const q = QS[i]; if (q) { q.st = 'done'; q.stem = String(fixed.stem || '').slice(0, 140); q.ans = String(fixed.answer || '').slice(0, 60); }
         pushLog('✏️ 第' + rw.index + '题重写完成');
