@@ -23507,18 +23507,63 @@ function bind(el, next) {
   // 打印配置弹窗：答案成页/星级考点标注/留白 三选项（2026-08-21；默认与旧行为一致：无答案页→有答案页为新增默认开）
   function printExam(exam, opts) {
     if (!opts) { openPrintConfig(exam, 'print'); return; }
+    // 微信内置浏览器不支持打印（硬限制），直接指路而不是静默失败
+    if (printEnv().wechat) { Toast.warn('微信内置浏览器无法打印：请点右上角「···」→「在浏览器打开」后再打印'); return; }
     try { openExamPrintWindow(exam, opts, true); }
     catch (e) { Toast.warn('打印失败：' + ((e && e.message) || String(e))); }
   }
-  // 打开渲染后的试卷窗口（打印 / PDF 另存 共用），autoPrint=true 立即唤起系统打印对话框
+  // 打印/PDF 导出环境探测（跨平台降级引导用）
+  function printEnv() {
+    var ua = '';
+    try { ua = (navigator.userAgent || '').toLowerCase(); } catch (e) {}
+    return {
+      mobile: /mobile|android|iphone|ipad|phablet/i.test(ua),
+      ios: /iphone|ipad|ipod/i.test(ua),
+      wechat: /micromessenger/i.test(ua)
+    };
+  }  // 打开渲染后的试卷窗口（打印 / PDF 另存 共用），autoPrint=true 立即唤起系统打印对话框。
+  // 【2026-08-28 手机端修复】移动端 window.open 有两坑：① 弹窗拦截器拦掉新窗；② 新窗里 print() 常不弹。
+  // 改用「隐藏 iframe 承载 + iframe.contentWindow.print()」：iOS/Android 均支持，系统打印预览里
+  // 即可「存储为 PDF」（iOS 分享→存储到文件）或「另存为 PDF」（Android 打印机列表）；桌面仍走新窗口（预览体验最好）。
   function openExamPrintWindow(exam, opts, autoPrint) {
+    var doc = examPrintHtml(exam, opts);
+    var env = printEnv();
+    if (env.mobile) {
+      var fr = document.createElement('iframe');
+      fr.setAttribute('aria-hidden', 'true');
+      // 屏幕外但保留真实尺寸（display:none / 0 尺寸的 iframe 在 iOS 打印会空白）
+      fr.style.cssText = 'position:fixed;left:-10000px;top:0;width:820px;height:1160px;border:0;background:#fff;';
+      document.body.appendChild(fr);
+      try {
+        var d = fr.contentWindow.document;
+        d.open(); d.write(doc.html); d.close();
+      } catch (e) {
+        if (fr.parentNode) fr.parentNode.removeChild(fr);
+        Toast.warn('本浏览器限制了打印：请点右上角菜单用系统浏览器打开后再导出');
+        return null;
+      }
+      if (autoPrint) {
+        setTimeout(function () {
+          try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch (e) {}
+          setTimeout(function () { if (fr.parentNode) fr.parentNode.removeChild(fr); }, 5000);
+        }, 450);
+      }
+      return fr;
+    }
     var w = window.open('', '_blank');
     if (!w) { Toast.warn('浏览器拦截了新窗口，请允许弹窗后重试'); return null; }
-    var doc = examPrintHtml(exam, opts);
     w.document.write(doc.html);
     w.document.close();
     if (autoPrint) setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 350);
     return w;
+  }
+  // PDF 导出引导文案：按平台指路（手机端「另存为 PDF」位置与桌面不同）
+  function pdfExportHint() {
+    var env = printEnv();
+    if (env.wechat) return '⚠ 微信内置浏览器不支持导出：请点右上角「···」→「在浏览器打开」后再导出';
+    if (env.ios) return '已唤起打印预览：点顶部分享图标 →「存储到文件」，或双指放大预览后分享，即可存为 PDF';
+    if (env.mobile) return '已唤起打印预览：打印机选「另存为 PDF / Save as PDF」即可导出';
+    return '请把「目标打印机」选为「另存为 PDF」，即可导出 PDF';
   }
   // 本地保存下载：自包含 HTML（公式已渲染，可随时打开再打印）或 PDF（打印对话框「另存为 PDF」）
   function downloadExam(exam, opts) {
@@ -23528,7 +23573,8 @@ function bind(el, next) {
     if (opts.format === 'pdf') {
       try {
         if (openExamPrintWindow(exam, opts, true)) {
-          Toast.show('📄 请在打印对话框把「目标打印机」选为「另存为 PDF」，即可导出 PDF', 'info', 5000);
+          // 引导文案按平台差异化（手机端「另存为 PDF」位置与桌面不同，桌面那句会指错路）
+          Toast.show('📄 ' + pdfExportHint(), 'info', 6000);
         }
       } catch (e) { Toast.warn('导出 PDF 失败：' + ((e && e.message) || String(e))); }
       return;
@@ -23547,13 +23593,24 @@ function bind(el, next) {
   // 打印/下载共用配置弹窗（选项记忆在闭包 printPref，本会话内复用）
   var printPref = { answersPage: true, withMeta: true, blank: 'auto' };
   function openPrintConfig(exam, mode) {
+    // 【2026-08-28 手机端修复】下载弹窗里「下载格式」选项按平台自适应：
+    // 微信内置浏览器完全不支持打印/导出（硬限制，iframe 也绕不过）→ 直接禁用 PDF 项并给跳出去的路径；
+    // 其他移动端可选 PDF，但标签写明「打印预览另存」，避免用户以为会直接弹出 .pdf 文件。
+    var env = printEnv();
+    var fmtField = mode === 'download'
+      ? (env.wechat
+        ? '<div class="alert alert-warn" style="margin-bottom:10px;font-size:12.5px">⚠ 当前在微信内置浏览器中，无法打印/导出 PDF。<br>可先下载 HTML，再点右上角「···」→「在浏览器打开」，即可打印或另存为 PDF。</div>'
+          + '<label class="fld fld-full"><span>下载格式</span><select id="pp-format" class="input" disabled>'
+          + '<option value="html" selected>📄 HTML</option></select></label>'
+        : '<label class="fld fld-full"><span>下载格式</span><select id="pp-format" class="input">'
+          + '<option value="html"' + (printPref.format !== 'pdf' ? ' selected' : '') + '>📄 HTML（双击即开，二次打印最方便）</option>'
+          + '<option value="pdf"' + (printPref.format === 'pdf' ? ' selected' : '') + '>📕 PDF' + (env.mobile ? '（打印预览另存）' : '（另存为 PDF）') + '</option>'
+          + '</select></label>')
+      : '';
     Modal.open({
       title: mode === 'download' ? '⬇️ 下载押题卷' : '🖨 打印押题卷', dismissable: true,
       html: '<div class="form-col">'
-        + (mode === 'download' ? '<label class="fld fld-full"><span>下载格式</span><select id="pp-format" class="input">'
-        + '<option value="html"' + (printPref.format !== 'pdf' ? ' selected' : '') + '>📄 HTML（双击即开，二次打印最方便）</option>'
-        + '<option value="pdf"' + (printPref.format === 'pdf' ? ' selected' : '') + '>📕 PDF（在打印对话框选「另存为 PDF」导出）</option>'
-        + '</select></label>' : '')
+        + fmtField
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="pp-ans"' + (printPref.answersPage ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">📄 答案单独成页（卷末附答案+解析，做题时互不干扰）</span></label>'
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="pp-meta"' + (printPref.withMeta ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⭐ 标注星级/考点（题号旁显示难度星级与考点）</span></label>'
         + '<label class="fld fld-full"><span>留白作答区</span><select id="pp-blank" class="input">'
@@ -23578,12 +23635,17 @@ function bind(el, next) {
         } }
       ]
     });
-    // 下载模式：切换格式实时更新操作提示
+    // 下载模式：切换格式实时刷新操作引导（文案按平台自适应，桌面/安卓/iOS 出口不同）
     var fmtSel = document.getElementById('pp-format');
-    if (fmtSel) fmtSel.onchange = function () {
-      var hint = document.getElementById('pp-format-hint');
-      if (hint) hint.textContent = fmtSel.value === 'pdf' ? '。📕 PDF：点击「下载」后会在新窗口唤起打印对话框，把目标打印机选「另存为 PDF」即得 PDF 文件' : '';
-    };
+    if (fmtSel) {
+      fmtSel.onchange = function () {
+        var hint = document.getElementById('pp-format-hint');
+        if (hint) hint.textContent = fmtSel.value === 'pdf' ? '。' + pdfExportHint() : '';
+      };
+      // 弹窗打开时若已记住「PDF」，首屏就显示引导，不让用户点完才知道怎么操作
+      var h0 = document.getElementById('pp-format-hint');
+      if (h0 && fmtSel.value === 'pdf') h0.textContent = '。' + pdfExportHint();
+    }
   }
   function qn_zh(exam) {
     var qn = (exam.questions || []).length;
