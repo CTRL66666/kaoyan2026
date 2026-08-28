@@ -10941,6 +10941,67 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
   };
 
   // ============================================================
+  // 三.5、答案复核内核（纯函数，本地/云端/判分共用；规则集中一处便于拓展）
+  // ============================================================
+
+  // 答案文本归一化：去 $ 包裹 / \left\right / 空白 / 括号注释 / 前后缀（"答案："等），
+  // \frac{a}{b} → (a)/(b) 便于分数-小数等价比较，统一小写。
+  PIPE._normAns = function (s) {
+    return String(s == null ? '' : s)
+      .replace(/\$/g, '')
+      .replace(/\\left|\\right|\\!|\\,/g, '')
+      .replace(/\\d?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1)/($2)')
+      .replace(/\s+/g, '')
+      .replace(/[（(][^（()）]*[）)]/g, '')
+      .replace(/^[：:，,。.、答案答解]+/, '')
+      .replace(/[。．.、，,：:]+$/, '')
+      .toLowerCase();
+  };
+  // 数值解析：支持 小数 / 分数(a/b 或 (a)/(b))；非数值返回 NaN
+  PIPE._ansNum = function (s) {
+    var t = String(s == null ? '' : s).replace(/[()（）]/g, '');
+    var m = t.match(/^(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)$/);
+    if (m) { var d = parseFloat(m[2]); return d ? parseFloat(m[1]) / d : NaN; }
+    var f = parseFloat(t);
+    return isNaN(f) ? NaN : f;
+  };
+  // 答案等价判定：处理常见等价形态——"$x=2$" vs "2"、"A. 3" vs "3"、"1/2" vs "0.5"、
+  // "\frac{1}{2}" vs "0.5"、空白/全半角/大小写差异。复核/判分共用，避免格式差异误报争议。
+  PIPE.answerEquivalent = function (a, b) {
+    var x = PIPE._normAns(a), y = PIPE._normAns(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    // 选项字母前缀差异（"a.单调递增" vs "单调递增"）
+    var stripOpt = function (s) { return s.replace(/^[a-d][.、．]/, ''); };
+    var xs = stripOpt(x), ys = stripOpt(y);
+    if (xs && ys && xs === ys) return true;
+    // "变量=值" vs "值"：取等号右侧再比
+    var rhs = function (s) { var i = s.lastIndexOf('='); return i >= 0 ? s.slice(i + 1) : s; };
+    var xr = rhs(xs), yr = rhs(ys);
+    if (xr && yr && xr === yr) return true;
+    // 数值/分数等价
+    var xn = PIPE._ansNum(xr), yn = PIPE._ansNum(yr);
+    if (!isNaN(xn) && !isNaN(yn) && Math.abs(xn - yn) < 1e-9) return true;
+    return false;
+  };
+  // 复核三方裁决（纯函数）：两路独立求解 + 原答案 → 统一结论。
+  //   agree   = 三方一致（防"两路一致但都错"漏检的关键：必须与原答案也对上）
+  //   lean    = 两路互斥，但其中一路与原答案等价（2:1 支持原答案，轻微存疑）
+  //   dispute = 两路一致但都与原答案不同（🔴 原答案疑似错误，最高危）或各说各话
+  //   failed  = 两路都没拿到结果
+  // 返回 { status, suspect }；suspect='orig-wrong' 仅在"两路一致且原答案在场却都不等价"时给出。
+  PIPE.triageVerify = function (a1, a2, orig) {
+    if (!a1 && !a2) return { status: 'failed', suspect: null };
+    var eq12 = a1 && a2 && PIPE.answerEquivalent(a1, a2);
+    var eq1o = a1 && orig != null && String(orig).trim() !== '' && PIPE.answerEquivalent(a1, orig);
+    var eq2o = a2 && orig != null && String(orig).trim() !== '' && PIPE.answerEquivalent(a2, orig);
+    if (eq12 && eq1o) return { status: 'agree', suspect: null };
+    if (eq12 && !eq1o) return { status: 'dispute', suspect: orig ? 'orig-wrong' : null };
+    if (!eq12 && (eq1o || eq2o)) return { status: 'lean', suspect: null };
+    return { status: 'dispute', suspect: null };
+  };
+
+  // ============================================================
   // 四、提示词模板（本地/云端共用）
   // ============================================================
 
@@ -20407,8 +20468,7 @@ function bind(el, next) {
       // AI 工具栏（根据 BgTask 运行状态显示按钮文本/disabled）
       + '<div class="btn-row" style="margin:10px 0;flex-wrap:wrap">'
       + '<button class="btn btn-primary btn-sm" id="sp-ai-trend"' + (BgTask.isRunning('trend') ? ' disabled' : '') + '>' + (BgTask.isRunning('trend') ? '🔄 趋势分析中…' : '📈 AI 趋势分析') + '</button>'
-      + '<button class="btn btn-ghost btn-sm" id="sp-ai-exam"' + (BgTask.isRunning('exam') ? ' disabled' : '') + '>' + (BgTask.isRunning('exam') ? '🔄 组卷中…' : '📝 生成押题卷') + '</button>'
-      + '<button class="btn btn-ghost btn-sm" id="sp-cloud-exam" title="长耗时组卷托管到 GitHub Actions 云端执行，本地可关页随时回来收卷">☁️ 云端出卷</button>'
+      + '<button class="btn btn-ghost btn-sm" id="sp-ai-exam"' + (BgTask.isRunning('exam') ? ' disabled' : '') + '>' + (BgTask.isRunning('exam') ? '🔄 组卷中…' : '📝 出卷') + '</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-ai-reason"' + (BgTask.isRunning('reason') ? ' disabled' : '') + '>' + (BgTask.isRunning('reason') ? '🔄 生成理由中…' : '🧠 生成押题理由') + '</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-rush-plan">🗺️ 冲刺路径</button>'
       + '<button class="btn btn-ghost btn-sm" id="sp-hit-track">🎯 命中追踪</button>'
@@ -20703,11 +20763,17 @@ function bind(el, next) {
     return 'math';
   }
   // ==================== AI 押题卷生成 ====================
-  // 【轮1】生成偏好（持久化）：subject 科目 / diff 难度 / count 题量 / think 思考模式
+  // 【轮1】生成偏好（持久化）：subject 科目 / diff 难度 / count 题量 / think 思考模式 / exec 执行位置
+  // exec 三选：serial(本地串行) / parallel(本地并行) / cloud(☁️云端)。旧数据曾用 parallel 布尔，做向后兼容映射。
   function examPref() {
     var p = (Store.get().sprintData && Store.get().sprintData.examPref) || {};
+    var exec = p.exec;
+    if (exec !== 'serial' && exec !== 'parallel' && exec !== 'cloud') {
+      exec = (p.parallel === true) ? 'parallel' : 'serial';
+    }
     return {
-      subject: p.subject || 'auto', diff: p.diff || 'mix', count: p.count || 'std', think: !!p.think
+      subject: p.subject || 'auto', diff: p.diff || 'mix', count: p.count || 'std', think: !!p.think,
+      exec: exec
     };
   }
   function saveExamPref(patch) {
@@ -21081,61 +21147,26 @@ function bind(el, next) {
       + (rows || '<div class="muted-sm" style="font-size:12px;padding:4px 0">还没有云端任务。先完成下方「🛠 配置向导」，再点「☁️ 云端出卷」新增一张卷；提交后可随时关闭工具，回来点「📥 收卷导入」。</div>')
       + execBox + '</div>';
   }
-  function openCloudExamModal(el) {
+  // 云端提交（统一入口）：合并弹窗「执行位置=云端」时由主线按钮调用；校验登录 → 补 major → 提交。
+  // 专业课名 major 随任务携带：云端提示词需要知道"专业课"具体是啥（自控原理/电路…），
+  // 否则出的是泛化「专业课」卷而非用户真实专业。取 DB 激活专业，取不到才 null。
+  function doCloudSubmit(prefs, close) {
     if (!window.CloudJob) { Toast.warn('云端出卷模块未加载'); return; }
     var lv = window.Cloud ? Cloud.isLoggedIn : false;
     var logged = typeof lv === 'function' ? !!lv() : !!lv;
     if (!logged) { Toast.warn('云端出卷需要先登录 GitHub 云同步（去设置页登录）'); return; }
-    var p = examPref();
-    var subjOpts = [['auto', '🤖 自动推断'], ['math', '数学'], ['ctrl', '专业课'], ['pol', '政治'], ['eng', '英语']]
-      .map(function (x) { return '<option value="' + x[0] + '"' + (p.subject === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
-    var diffOpts = [['mix', '标准（medium 60% + hard 40%）'], ['hard', '强化（hard 为主 70%）'], ['superhard', '🔴 超难特训（100% hard）']]
-      .map(function (x) { return '<option value="' + x[0] + '"' + (p.diff === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
-    var cntOpts = [['std', '标准卷（约12题）'], ['lite', '精简卷（约8题）'], ['full', '强化卷（约15题）']]
-      .map(function (x) { return '<option value="' + x[0] + '"' + (p.count === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
-    var ready = !!(cjSetup && cjSetup.token && cjSetup.runner && cjSetup.secret && cjSetup.ai);
-    var readyHtml = ready
-      ? '<div class="alert alert-ok" style="margin-top:8px;font-size:12.5px">✅ 配置就绪：令牌/执行器/secret/AI 接口四项全部验证通过，提交后自动触发云端执行。</div>'
-      : '<div class="alert alert-warn" style="margin-top:8px;font-size:12.5px">⚠ 配置未完成：<b>任务仍可提交（会先排队，不丢失）</b>，但不会真正开跑——建议先回主页面「🛠 配置向导」把四步走完（令牌→安装→secret→自检），再回来提交。</div>';
-    Modal.open({
-      title: '☁️ 云端出卷（GitHub Actions 托管）', dismissable: true,
-      html: '<div class="form-col">'
-        + (cjSetup ? '<div style="font-size:11.5px;padding:6px 0;border-bottom:1px dashed var(--line);margin-bottom:6px"><b>配置状态：</b>' + ['令牌', '执行器', 'secret', 'AI'].map(function (n, i) {
-            var k = ['token', 'runner', 'secret', 'ai'][i];
-            var okk = !!cjSetup[k];
-            return '<span style="margin-right:10px;color:' + (okk ? 'var(--ok)' : 'var(--warn)') + '">' + (okk ? '✓' : '○') + ' ' + n + '</span>';
-          }).join('') + '</div>' : '')
-        + '<label class="fld fld-full"><span>科目</span><select id="cj-subj" class="input">' + subjOpts + '</select></label>'
-        + '<label class="fld fld-full"><span>难度风格</span><select id="cj-diff" class="input">' + diffOpts + '</select></label>'
-        + '<label class="fld fld-full"><span>题量</span><select id="cj-count" class="input">' + cntOpts + '</select></label>'
-        + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="cj-think"' + (p.think ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⏳ 启用思考模式（质量更高，云端耗时更长）</span></label>'
-        + readyHtml
-        + '<div class="muted-sm" style="margin-top:4px">流水线：总工程师规划 → 多 AI 并发出题 → 蓝本硬校验 → 总审查 → 定向重写 → 终检。全程状态实时写回任务卡，本地随时可关闭。AI 接口配置自动随任务携带（存在你自己的 secret Gist 里），无需在云端重复配置。</div>'
-        + '</div>',
-      actions: [
-        { label: '取消', kind: 'btn-ghost' },
-        { label: '☁️ 提交任务', kind: 'btn-primary', onClick: function (close) {
-          var prefs = {
-            subject: (document.getElementById('cj-subj') || {}).value || 'auto',
-            diff: (document.getElementById('cj-diff') || {}).value || 'mix',
-            count: (document.getElementById('cj-count') || {}).value || 'std',
-            think: !!(document.getElementById('cj-think') || {}).checked,
-            // 【2026-08-28】专业课名随任务携带：云端提示词需要知道"专业课"具体是啥（自控原理/电路…），
-            // 否则出的是泛化「专业课」卷而非用户真实专业。取 DB 激活专业，取不到才 null。
-            major: (function () { try { var m = DB.getActiveMajor(); return (m && m.name) ? m.name : null; } catch (e) { return null; } })()
-          };
-          close();
-          Toast.show('☁️ 正在创建云端任务…', 'info');
-          CloudJob.submit(prefs).then(function (job) {
-            Toast.success(job.wfDispatched ? '☁️ 已派发！执行器接单中，右下角浮窗可看实时过程' : '☁️ 已排队（未接过执行器，配置好后点「♻️ 重发」即跑）');
-            renderIfHere();
-            cjStartAutoPoll(job && job.id);   // 立即拉取 + 自动弹出实时过程浮窗
-          }).catch(function (e) {
-            Toast.warn('提交失败：' + ((e && e.message) || e));
-            renderIfHere();
-          });
-        } }
-      ]
+    prefs = Object.assign({}, prefs);
+    try { var m = DB.getActiveMajor(); prefs.major = (m && m.name) ? m.name : null; }
+    catch (e) { prefs.major = null; }
+    close();
+    Toast.show('☁️ 正在创建云端任务…', 'info');
+    CloudJob.submit(prefs).then(function (job) {
+      Toast.success(job.wfDispatched ? '☁️ 已派发！执行器接单中，右下角浮窗可看实时过程' : '☁️ 已排队（未接过执行器，配置好后点「♻️ 重发」即跑）');
+      renderIfHere();
+      cjStartAutoPoll(job && job.id);   // 立即拉取 + 自动弹出实时过程浮窗
+    }).catch(function (e) {
+      Toast.warn('提交失败：' + ((e && e.message) || e));
+      renderIfHere();
     });
   }
   function bindCloudJobs(el) {
@@ -21533,8 +21564,8 @@ function bind(el, next) {
     if (cjTimer) { clearTimeout(cjTimer); cjTimer = null; }
   }
 
-  function openExamConfig(el) {
-    var p = examPref();
+  // 三者共用的科目/难度/题量选项
+  function examCommonOpts(p) {
     var subjOpts = [
       ['auto', '🤖 自动推断（薄弱点最多科目）'], ['math', '数学'], ['ctrl', '专业课'],
       ['pol', '政治'], ['eng', '英语']
@@ -21543,12 +21574,23 @@ function bind(el, next) {
       .map(function (x) { return '<option value="' + x[0] + '"' + (p.diff === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
     var cntOpts = [['std', '标准卷'], ['lite', '精简卷（选择填空减半，限时缩短）'], ['full', '强化卷（题量 ×1.5，限时延长）']]
       .map(function (x) { return '<option value="' + x[0] + '"' + (p.count === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('');
+    return { subjOpts: subjOpts, diffOpts: diffOpts, cntOpts: cntOpts };
+  }
+
+  function openExamConfig(el) {
+    var p = examPref();
+    var O = examCommonOpts(p);
+    var subjOpts = O.subjOpts, diffOpts = O.diffOpts, cntOpts = O.cntOpts;
     // 【2026-08-21 蓝本】弹窗打开时载入「上次蓝本」（科目跟随弹窗选择，auto 先按推断科目）
     var hasAI = typeof AI !== 'undefined' && AI.configured();
+    var cloudAvailable = !!(window.CloudJob && window.Cloud);   // 云端模块已加载才亮入口
     var initSubj = p.subject !== 'auto' && SUBJ_ORDER.indexOf(p.subject) >= 0 ? p.subject
       : pickExamSubject(collectSubjTopics(Store.get().heat || {}, leverageMap(), (Store.get().sprintData || {}).trends || null));
     cfgBp = getBlueprint(initSubj);
     cfgCount = p.count || 'std';
+    var cfgExec = (p.exec === 'cloud' && cloudAvailable) ? 'cloud' : (p.exec === 'parallel' ? 'parallel' : 'serial');
+    // 云端四步配置就绪判定
+    var cloudReady = !!(cjSetup && cjSetup.token && cjSetup.runner && cjSetup.secret && cjSetup.ai);
     // 题量档↔蓝本实时联动预览：标题右侧高亮显示「按当前蓝本缩放后的实际题量/限时」，
     // 让用户一眼看到题量档确实作用于蓝本（消除"题量被架空"的认知空档）。
     function volumePreview(subj) {
@@ -21560,6 +21602,25 @@ function bind(el, next) {
       // 【2026-08-28】题量档变化时同步刷新蓝本摘要（缩放后的实际题量/限时），两处数字不再打架
       updateBlueprintWarn();
     }
+    // 执行位置三选（方案A合并弹窗核心）：本地串行 / 本地并行 / ☁️云端
+    var execOpts = [
+      ['serial', '💻 本地串行出卷（单 AI 一次成卷）'],
+      ['parallel', '⚡ 本地并发出卷（总工程师规划 → 多 AI 并行，最高 20 路，实时状态面板）'],
+      ['cloud', '☁️ 云端出卷（GitHub Actions 托管，本地可关页，随时回来收卷）']
+    ].map(function (x) {
+      var dis = (x[0] === 'cloud' && !cloudAvailable) ? ' disabled title="云端出卷模块未加载（需最新构建）"' : '';
+      return '<option value="' + x[0] + '"' + (cfgExec === x[0] ? ' selected' : '') + dis + '>' + x[1] + '</option>';
+    }).join('');
+    // 执行位置实时提示（切 exec 时刷新）
+    function execHint(exec) {
+      if (exec === 'cloud') {
+        return cloudReady
+          ? '<span style="color:var(--ok)">✅ 云端四步配置就绪（令牌/执行器/secret/AI），提交后自动触发云端执行；蓝本会随任务提交。</span>'
+          : '<span style="color:var(--warn)">⚠ 云端配置未完成：任务仍可提交（会先排队不丢失），但不会真正开跑——建议先在押题页「🛠 配置向导」走完四步。蓝本会随任务提交。</span>';
+      }
+      if (exec === 'parallel') return '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。';
+      return hasAI ? 'AI 将按蓝本卷面结构组卷，优先覆盖你的薄弱考点。' : '📦 未配置 AI：将从本地题库按蓝本抽题组卷（离线组卷）。';
+    }
     Modal.open({
       title: '📝 生成押题卷', dismissable: true, wide: true,
       html: '<div class="form-col">'
@@ -21567,24 +21628,25 @@ function bind(el, next) {
         + '<label class="fld fld-full"><span>难度风格</span><select id="sp-cfg-diff" class="input">' + diffOpts + '</select></label>'
         + '<label class="fld fld-full"><span>题量 <span id="sp-cfg-count-preview" class="muted-sm" style="font-weight:500;margin-left:6px"></span></span><select id="sp-cfg-count" class="input">' + cntOpts + '</select></label>'
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px;padding-top:6px"><input type="checkbox" id="sp-cfg-think"' + (p.think ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⏳ 启用思考模式（出题质量更高，耗时/消耗约 3-5 倍）</span></label>'
-        + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="sp-cfg-parallel"' + (p.parallel ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⚡ 并发出卷（总工程师规划 → 多 AI 并行出题，智能并发最高 20 路，带实时状态面板）</span></label>'
+        + '<label class="fld fld-full"><span>执行位置</span><select id="sp-cfg-exec" class="input">' + execOpts + '</select></label>'
         + blueprintEditorHtml(cfgBp, initSubj)
-        + '<div class="muted-sm" id="sp-cfg-hint" style="margin-top:6px">' + (hasAI ? (p.parallel ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。' : 'AI 将按蓝本卷面结构组卷，优先覆盖你的薄弱考点。') : '📦 未配置 AI：将从本地题库（既有押题卷/收藏题/变式题/错题）按蓝本抽题组卷。') + '</div>'
+        + '<div class="muted-sm" id="sp-cfg-hint" style="margin-top:6px">' + execHint(cfgExec) + '</div>'
         + '</div>',
       actions: [
         { label: '取消', kind: 'btn-ghost' },
-        // 离线兜底组卷：无 AI Key 也能出卷（本地题库按蓝本抽题，同一考试/判分/分析链路）
+        // 离线兜底组卷：无 AI Key 也能出卷（本地题库按蓝本抽题，同一考试/判分/分析链路）。仅本地亮。
         { label: '📦 离线组卷', kind: hasAI ? 'btn-ghost' : 'btn-primary', onClick: function (close) {
           var prefs = collectCfgPrefs();
           close();
           offlineExamBuild(el, prefs);
         } },
-        { label: '🎯 开始组卷', kind: 'btn-primary', onClick: function (close) {
+        { label: '🎯 开始出卷', kind: 'btn-primary', onClick: function (close) {
           if (!hasAI) { Toast.warn('未配置 AI：请用「📦 离线组卷」，或先去设置页配置 AI'); return; }
           var prefs = collectCfgPrefs();
-          close();
-          if (prefs.parallel) parallelExamBuild(el, prefs);
-          else aiExam(el, prefs);
+          var exec = prefs.exec;
+          if (exec === 'parallel') { close(); parallelExamBuild(el, prefs); }
+          else if (exec === 'cloud') { doCloudSubmit(prefs, close); }
+          else { close(); aiExam(el, prefs); }
         } }
       ]
     });
@@ -21594,12 +21656,15 @@ function bind(el, next) {
     function collectCfgPrefs() {
       readBlueprintForm();
       var bp = saveBlueprint(Object.assign({}, volumeBp(cfgBp, 'std'), { subject: cfgBp.subject }));
+      // 【方案A合并】执行位置三选：exec 为 canon；parallel 布尔仅作向后兼容（并行/落库路径旧代码读它）
+      var exec = (document.getElementById('sp-cfg-exec') || {}).value || 'serial';
       var prefs = {
         subject: (document.getElementById('sp-cfg-subj') || {}).value || 'auto',
         diff: (document.getElementById('sp-cfg-diff') || {}).value || 'mix',
         count: (document.getElementById('sp-cfg-count') || {}).value || 'std',
         think: !!(document.getElementById('sp-cfg-think') || {}).checked,
-        parallel: !!(document.getElementById('sp-cfg-parallel') || {}).checked,
+        exec: exec,
+        parallel: (exec === 'parallel' || exec === 'cloud'),
         blueprint: bp
       };
       saveExamPref(prefs);
@@ -21608,16 +21673,12 @@ function bind(el, next) {
     // 题量档切换 → 实时刷新联动预览（题量/限时即时可见）
     var cntSel = document.getElementById('sp-cfg-count');
     if (cntSel) cntSel.onchange = function () { cfgCount = cntSel.value; volumePreview(initSubj); };
-    // 并行开关切换时更新提示文字
-    var parCb = document.getElementById('sp-cfg-parallel');
-    if (parCb) parCb.onchange = function () {
-      // 【2026-08-28 修复】原用 querySelector('.modal .muted-sm') 取提示文字，但蓝本编辑区里
-      // 的 #bp-mix-sum / #bp-warn 也是 .muted-sm 且 DOM 顺序更靠前 → 实际改到「星级配比合计」上，
-      // 底部真正提示纹丝不动。改为 id 精确选取。
+    // 执行位置切换 → 实时刷新提示文字
+    var execSel = document.getElementById('sp-cfg-exec');
+    if (execSel) execSel.onchange = function () {
+      cfgExec = execSel.value;
       var hint = document.getElementById('sp-cfg-hint');
-      if (hint) hint.textContent = parCb.checked
-        ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。'
-        : 'AI 将按蓝本卷面结构组卷，优先覆盖你的薄弱考点。';
+      if (hint) hint.innerHTML = execHint(cfgExec);
     };
     // 科目切换 → 蓝本换成该科目预设/上次蓝本 + 考点勾选列表换科目
     var subjSel = document.getElementById('sp-cfg-subj');
@@ -22671,14 +22732,45 @@ function bind(el, next) {
   }
   // 答案并行复核 · 核心 2 路独立求解对比逻辑（被 verifyAnswersParallel / doReviewExam 共用）
   // onCell(i, text, cls) 逐题状态回调；i=-1 表示全部完成；cls = 'verify'|'agree'|'dispute'
-  function crossCheckAnswers(qs, onCell, ctxTag) {
+  // 【2026-08-28 重构】答案复核内核：每题 2 路独立求解 → 与原答案**三方**裁决（PIPE.triageVerify）。
+  // 旧版只让两路互相比，"两路一致但都错"（同模型同误解）会显示 ✅ 一致漏检；等价判定只用
+  // 字符串相等/parseFloat，"x=2" vs "2" 全判争议（误报）。现在：
+  //   ① 三方对比（路1/路2/原答案），suspect='orig-wrong' 直接点名"原答案疑似错误"；
+  //   ② 等价判定走 PIPE.answerEquivalent（$ 包裹/选项前缀/分数小数/变量=值 都能对上）；
+  //   ③ opts.quick=true：选择题跳过 2 路求解（答案在选项内已由本地硬校验兜底），省一半调用；
+  //   ④ opts.ac：AbortController 贯穿全部 AI 调用，支持「⏹ 停止复核」（中止后返回已完成部分）。
+  // 结果字段兼容旧消费方：agree/dispute 布尔由 status 派生，另带 status/suspect/note 供新 UI。
+  function crossCheckAnswers(qs, onCell, ctxTag, opts) {
+    opts = opts || {};
+    var quick = !!opts.quick;
+    var ac = opts.ac || null;
     var totalN = qs.length;
     var results = new Array(totalN);
     var pending = totalN;
     var idx = 0, active = 0, cur = 2;
     function pump() { while (active < cur && idx < totalN) { active++; runOne(idx++); } }
+    function aborted() { return !!(ac && ac.signal && ac.signal.aborted); }
+    function finishRow(i, rec, text, cls) {
+      rec.agree = rec.status === 'agree';
+      rec.dispute = rec.status === 'dispute' || rec.status === 'failed';
+      results[i] = rec;
+      onCell(i, text, cls);
+      settle();
+    }
+    function settle() { active--; pending--; if (pending === 0) onCell(-1, '', ''); pump(); }
     function runOne(i) {
       var q = qs[i];
+      if (aborted()) { finishRow(i, { qid: i + 1, status: 'canceled', suspect: null, note: '已停止' }, '⏹ 已停止', 'dispute'); return; }
+      // 快速模式：选择题本地校验（答案在选项内）即可，2 路求解留给大题
+      if (quick && q.type === 'choice') {
+        var ansL = String(q.answer || '').trim().charAt(0).toUpperCase();
+        var inOpts = !!(q.options && q.options.length && q.options.some(function (o) {
+          return PIPE.answerEquivalent(o, q.answer) || String(o || '').trim().charAt(0).toUpperCase() === ansL;
+        }));
+        finishRow(i, { qid: i + 1, status: inOpts ? 'agree' : 'dispute', suspect: inOpts ? null : null, quick: true, a1: q.answer, a2: '(本地)', note: inOpts ? '选择题·本地校验' : '选择题·答案不在选项内' },
+          inOpts ? '✓ 本地校验' : '⚠️ 选项异常', inOpts ? 'agree' : 'dispute');
+        return;
+      }
       onCell(i, '⏳ 复核中', 'verify');
       var sys = '你是独立阅卷 AI（第 ' + (i % 2 + 1) + ' 路）。请**独立**求解下面这题（不要参考任何提示），只输出最终答案 + 关键步骤。\n'
         + '规则：① 按考纲方法独立计算 ② 只输出 {"answer":"最终答案","steps":"关键步骤(≤120字)"} ③ 若题干有歧义/条件不足，输出 {"error":"原因"}';
@@ -22686,22 +22778,22 @@ function bind(el, next) {
         + (q.options && q.options.length ? '\n选项：' + q.options.join(' | ') : '');
       var ctxA = (ctxTag || 'sprint.cross') + '.' + (i % 2);
       var ctxB = ctxA + 'b';
-      function settle() { active--; pending--; if (pending === 0) onCell(-1, '', ''); pump(); }
+      var sigOpts = function (extra) { return Object.assign({ noThink: false, timeout: 120000, cache: false, ctx: ctxA }, extra || {}, ac ? { signal: ac.signal } : {}); };
       Promise.all([
-        AI.chatJSON(sys, usr, null, { noThink: false, timeout: 120000, cache: false, ctx: ctxA }),
-        AI.chatJSON(sys, usr, null, { noThink: true,  timeout: 120000, cache: false, ctx: ctxB })
+        AI.chatJSON(sys, usr, null, sigOpts({ noThink: false, ctx: ctxA })),
+        AI.chatJSON(sys, usr, null, sigOpts({ noThink: true, ctx: ctxB }))
       ]).then(function (rs) {
+        if (aborted()) { finishRow(i, { qid: i + 1, status: 'canceled', suspect: null, note: '已停止' }, '⏹ 已停止', 'dispute'); return; }
         var a1 = rs[0] && rs[0].answer ? String(rs[0].answer).trim() : null;
         var a2 = rs[1] && rs[1].answer ? String(rs[1].answer).trim() : null;
-        var agree = !!(a1 && a2 && (a1 === a2 || Math.abs(parseFloat(a1) - parseFloat(a2)) < 1e-9));
-        var dispute = (a1 && a2 && !agree) || (a1 && !a2) || (!a1 && a2);
-        results[i] = { qid: i + 1, topic: (q.topicName || ''), answer1: a1, answer2: a2, steps1: (rs[0] && rs[0].steps) || '', steps2: (rs[1] && rs[1].steps) || '', agree: agree, dispute: dispute, error: '' };
-        onCell(i, agree ? '✅ 一致' : dispute ? '⚠️ 争议' : '❌ 失败', agree ? 'agree' : 'dispute');
-        settle();
-      }).catch(function () {
-        results[i] = { qid: i + 1, topic: (q.topicName || ''), answer1: null, answer2: null, agree: false, dispute: false, error: '复核失败' };
-        onCell(i, '❌ 失败', 'dispute');
-        settle();
+        var t = PIPE.triageVerify(a1, a2, q.answer);
+        var rec = { qid: i + 1, topic: (q.topicName || ''), answer1: a1, answer2: a2, steps1: (rs[0] && rs[0].steps) || '', steps2: (rs[1] && rs[1].steps) || '', orig: q.answer || '', status: t.status, suspect: t.suspect, error: '' };
+        var text = t.status === 'agree' ? '✅ 一致' : t.status === 'lean' ? '👍 2:1 支持原答案'
+          : t.suspect === 'orig-wrong' ? '🔴 原答案疑似错误' : '⚠️ 争议';
+        finishRow(i, rec, text, t.status === 'agree' ? 'agree' : 'dispute');
+      }).catch(function (e) {
+        if (aborted()) { finishRow(i, { qid: i + 1, status: 'canceled', suspect: null, note: '已停止' }, '⏹ 已停止', 'dispute'); return; }
+        finishRow(i, { qid: i + 1, topic: (q.topicName || ''), status: 'failed', suspect: null, error: '复核失败' }, '❌ 失败', 'dispute');
       });
     }
     pump();
@@ -22724,9 +22816,15 @@ function bind(el, next) {
         parCellStatus(i + 1, text, cls === 'dispute' ? '#cf1322' : cls === 'agree' ? 'var(--ok)' : '#08979c');
       }
     }, 'sprint.verify').then(function (verified) {
-      var stats = { total: qs.length, agree: 0, dispute: 0, failed: 0 };
-      verified.forEach(function (r) { if (r && r.agree) stats.agree++; else if (r && r.dispute) stats.dispute++; else if (r) stats.failed++; });
-      parLog('答案复核完成：' + stats.agree + ' 一致 / ' + stats.dispute + ' 争议 / ' + stats.failed + ' 失败');
+      var stats = { total: qs.length, agree: 0, lean: 0, dispute: 0, failed: 0 };
+      verified.forEach(function (r) {
+        if (!r) return;
+        if (r.status === 'agree') stats.agree++;
+        else if (r.status === 'lean') stats.lean++;
+        else if (r.status === 'dispute') stats.dispute++;
+        else if (r.status === 'failed') stats.failed++;
+      });
+      parLog('答案复核完成：' + stats.agree + ' 一致 / ' + (stats.lean ? stats.lean + ' 2:1支持原答案 / ' : '') + stats.dispute + ' 争议' + (stats.failed ? ' / ' + stats.failed + ' 失败' : ''));
       return { verified: verified, stats: stats };
     });
   }
@@ -23908,6 +24006,50 @@ function bind(el, next) {
     return false;
   }
 
+  // ==================== 复核共享内核（总卷阶段B / 单题复核共用，防幻觉规则集中一处） ====================
+  // 【2026-08-28】① 复核"原答案对不对"时**不带考生答案**——考生答案是干扰项，会诱导 AI 把
+  // "考生错"判成"原答案错"；② 要求 AI 给 confidence（0-100），允许承认不确定，低置信标"存疑"
+  // 而非武断下结论——让 AI 如实说"不确定"比强迫它给结论更防幻觉；③ 输出加 correctAnswer 字段，
+  // 支撑"采纳修正"闭环（答案短串与正确解答分开，替换 answer/solution 各归其位）。
+  var REVIEW_RULES = '【批判性复核原则·务必遵守】\n'
+    + '① 不要默认原答案正确——AI 生成题易有计算错、概念混淆、解析漏步骤、答案写反等幻觉；\n'
+    + '② 亲自动手复算关键步骤，发现错误时明确指出；\n'
+    + '③ 即使原答案看似正确，也要验证特殊情形/边界/单位/定义域/选项有无双对或无解；\n'
+    + '④ 不确定时如实给低 confidence（如 30-50），不要硬下结论。\n';
+  var REVIEW_FMT = '【输出格式·严格 JSON】{"verdict":"correct|wrong|partial","confidence":0到100的整数,"reason":"≤30字说明","correctAnswer":"仅 verdict≠correct 时给正确答案短串，否则空串","corrected":"仅 verdict≠correct 时给完整正确解答+解析，否则空串"}';
+  // 单题复核载荷（q=题目对象；idx 传题号-1 或不传）
+  function reviewQuestionPayload(q, idx) {
+    return (idx != null ? (idx + 1) + '. ' : '') + '【题目】' + Tex.renderInline(q.stem || '')
+      + (q.options && q.options.length ? '\n【选项】' + q.options.join(' | ') : '')
+      + '\n【原标准答案】' + (q.answer || '')
+      + '\n【原解析】' + Tex.renderInline(q.solution || '');
+  }
+  // 复核结论综合裁决（阶段A三方 + 阶段B批判 → 最终展示等级），纯逻辑便于拓展
+  function reviewFinalVerdict(bVerdict, bConfidence, vRec) {
+    var aStatus = (vRec && vRec.status) || 'agree';
+    var lowConf = typeof bConfidence === 'number' && bConfidence < 60;
+    if (bVerdict === 'wrong' || (vRec && vRec.suspect === 'orig-wrong')) return { level: 'high', txt: '🔴 原答案疑似错误' };
+    if (bVerdict === 'partial' || aStatus === 'dispute') return { level: 'mid', txt: '⚠️ 存疑（' + (aStatus === 'dispute' ? '2路求解分歧' : '部分错') + (lowConf ? '·低置信' : '') + '）' };
+    if (aStatus === 'lean') return { level: 'mid', txt: '⚠️ 2:1 支持原答案（另一路解不同' + (lowConf ? '·低置信' : '') + '）' };
+    if (lowConf) return { level: 'low', txt: '△ 复核认为正确但置信度低（' + bConfidence + '%），建议人工过目' };
+    return { level: 'ok', txt: '✓ 双重确认（2路独立求解一致 + 批判复核通过）' };
+  }
+  // 单题复核结果落库 + 采纳/还原（reviewFix 字段独立于"优化此题"的 original* 字段，互不干扰）
+  function adoptReviewFix(q) {
+    if (!q || !q.reviewResult || q.reviewResult.verdict === 'correct') return false;
+    var rr = q.reviewResult;
+    q.reviewFix = { prevAnswer: q.answer || '', prevSolution: q.solution || '', at: new Date().toISOString(), reason: rr.reason || '' };
+    if (rr.correctAnswer) q.answer = rr.correctAnswer;
+    if (rr.corrected) q.solution = rr.corrected;
+    return true;
+  }
+  function revertReviewFix(q) {
+    if (!q || !q.reviewFix) return false;
+    q.answer = q.reviewFix.prevAnswer; q.solution = q.reviewFix.prevSolution;
+    delete q.reviewFix;
+    return true;
+  }
+
   // 单题复核（思考模式）：AI 深度复核这一题的答案/解析，防幻觉
   function doReviewQuestion(exam, qi, btn, slot) {
     var q = (exam.questions || [])[qi];
@@ -23916,21 +24058,76 @@ function bind(el, next) {
     if (slot.dataset.busy) return;
     slot.dataset.busy = '1';
     btn.disabled = true;
-    slot.innerHTML = '<div class="cp-thinking" style="font-size:12px">🤔 深度复核中（思考模式）…</div>';
-    var r = (exam.results || [])[qi] || {};
-    var usr = '请批判性复核这道题的原标准答案与原解析是否正确（不要默认正确，防 AI 幻觉）。\n'
-      + '【题目】' + Tex.renderInline(q.stem || '') + '\n【考生答案】' + (r.answer || '(未答)') + '\n【原标准答案】' + (q.answer || '') + '\n【原解析】' + Tex.renderInline(q.solution || '')
-      + '\n\n只输出 JSON：{"verdict":"correct|wrong|partial","reason":"≤30字","corrected":"仅 verdict≠correct 时给正确解答，否则空串"}';
+    var renderSlot = function () {
+      // 已采纳修正 → 显示还原入口
+      if (q.reviewFix) {
+        slot.innerHTML = '<div style="padding:6px 8px;border:1px solid var(--line);border-left:3px solid #722ed1;border-radius:4px;background:var(--bg);font-size:12.5px">'
+          + '✏️ <b>已采纳复核修正</b>' + (q.reviewFix.reason ? '（' + U.esc(q.reviewFix.reason) + '）' : '')
+          + ' <button class="btn btn-sm btn-ghost sp-rv-revert" style="font-size:11px;margin-left:6px">↩ 还原原答案</button></div>';
+        var rv = slot.querySelector('.sp-rv-revert');
+        if (rv) rv.onclick = function () {
+          Store.update(function (s) {
+            var ex = ((s.sprintData && s.sprintData.mockExams) || []).find(function (x) { return x.id === exam.id; });
+            var qq = ex && ex.questions[qi];
+            if (qq) revertReviewFix(qq);
+          });
+          revertReviewFix(q);
+          renderSlot(); renderIfHere(); Toast.success('已还原原答案');
+        };
+        return;
+      }
+      var rr = q.reviewResult || null;
+      if (!rr) { slot.innerHTML = ''; return; }
+      var cls = rr.verdict === 'correct' ? 'var(--ok)' : rr.verdict === 'wrong' ? 'var(--danger)' : 'var(--warn)';
+      var txt = rr.verdict === 'correct' ? '✓ 原答案正确' : rr.verdict === 'wrong' ? '✗ 原答案错误' : '△ 部分错';
+      var lowConf = typeof rr.confidence === 'number' && rr.confidence < 60;
+      slot.innerHTML = '<div style="padding:8px;border:1px solid var(--line);border-left:3px solid ' + cls + ';border-radius:4px;background:var(--bg)">'
+        + '<b style="color:' + cls + '">' + txt + '</b>'
+        + (typeof rr.confidence === 'number' ? '<span class="muted-sm" style="margin-left:6px;font-size:11.5px">置信度 ' + rr.confidence + '%' + (lowConf ? '（低置信·建议人工过目）' : '') + '</span>' : '')
+        + '<span class="muted-sm" style="margin-left:6px;font-size:12px">' + U.esc(rr.reason || '') + '</span>'
+        + (rr.verdict !== 'correct' && (rr.correctAnswer || rr.corrected)
+          ? '<div style="margin-top:6px;padding:6px;background:var(--bg-muted);border-radius:3px;font-size:12.5px">'
+            + (rr.correctAnswer ? '<b style="color:var(--ok)">✓ 正确答案：</b>' + Tex.renderInline(rr.correctAnswer) + '<br>' : '')
+            + (rr.corrected ? '<b style="color:var(--ok)">✓ 正确解答：</b>' + Tex.renderInline(rr.corrected) : '')
+            + '</div>'
+            + '<button class="btn btn-sm sp-rv-adopt" style="background:#237804;color:#fff;border-color:#237804;font-size:11px;margin-top:6px">✓ 采纳修正（替换答案/解析，可还原）</button>'
+          : '')
+        + '</div>';
+      var adopt = slot.querySelector('.sp-rv-adopt');
+      if (adopt) adopt.onclick = function () {
+        Store.update(function (s) {
+          var ex = ((s.sprintData && s.sprintData.mockExams) || []).find(function (x) { return x.id === exam.id; });
+          var qq = ex && ex.questions[qi];
+          if (qq) adoptReviewFix(qq);
+        });
+        adoptReviewFix(q);
+        renderSlot(); renderIfHere();
+        Toast.success('已采纳修正（原答案已备份，可随时还原）');
+      };
+    };
+    // 已有结果先渲染历史（落库后关页不丢）
+    renderSlot();
+    if (q.reviewResult) { slot.dataset.busy = ''; btn.disabled = false; return; }
+    slot.insertAdjacentHTML('afterbegin', '<div class="cp-thinking" style="font-size:12px">🤔 深度复核中（思考模式）…</div>');
+    var usr = REVIEW_RULES + '\n请批判性复核这道题的原标准答案与原解析是否正确。\n'
+      + reviewQuestionPayload(q)
+      + '\n\n' + REVIEW_FMT;
     AI.chatStream('你是考研复核专家，批判性复核这一道题。', usr, null, null, { noThink: false, timeout: 300000, cache: false, ctx: 'sprint.review' }).then(function (full) {
       slot.dataset.busy = ''; btn.disabled = false;
       var j = null; try { j = AI.extractRobustJSON(full); } catch (e) { }
-      var verdict = j && j.verdict; var reason = (j && j.reason) || ''; var corrected = (j && j.corrected) || '';
-      var cls = verdict === 'correct' ? 'var(--ok)' : verdict === 'wrong' ? 'var(--danger)' : 'var(--warn)';
-      var txt = verdict === 'correct' ? '✓ 原答案正确' : verdict === 'wrong' ? '✗ 原答案错误' : '△ 部分错';
-      slot.innerHTML = '<div style="padding:8px;border:1px solid var(--line);border-left:3px solid ' + cls + ';border-radius:4px;background:var(--bg)">'
-        + '<b style="color:' + cls + '">' + txt + '</b><span class="muted-sm" style="margin-left:6px;font-size:12px">' + U.esc(reason) + '</span>'
-        + (corrected && verdict !== 'correct' ? '<div style="margin-top:6px;padding:6px;background:var(--bg-muted);border-radius:3px;font-size:12.5px"><b style="color:var(--ok)">✓ 正确解答：</b>' + Tex.renderInline(corrected) + '</div>' : '')
-        + '</div>';
+      var verdict = j && j.verdict; var reason = (j && j.reason) || '';
+      var corrected = (j && j.corrected) || ''; var correctAnswer = (j && j.correctAnswer) || '';
+      var confidence = (j && typeof j.confidence === 'number') ? Math.max(0, Math.min(100, Math.round(j.confidence))) : null;
+      if (!verdict) { renderSlot(); slot.insertAdjacentHTML('afterbegin', '<div class="muted-sm" style="font-size:12px">（复核未返回结构化结果）</div>'); return; }
+      // 落库：复核结果随卷保存（刷新不丢），采纳动作在其上叠加 reviewFix
+      var rrRec = { at: new Date().toISOString(), verdict: verdict, confidence: confidence, reason: reason, correctAnswer: correctAnswer, corrected: corrected };
+      Store.update(function (s) {
+        var ex = ((s.sprintData && s.sprintData.mockExams) || []).find(function (x) { return x.id === exam.id; });
+        var qq = ex && ex.questions[qi];
+        if (qq) qq.reviewResult = rrRec;
+      });
+      q.reviewResult = rrRec;   // 同步当前引用，供就地渲染
+      renderSlot();
     }).catch(function (e) {
       slot.dataset.busy = ''; btn.disabled = false;
       slot.innerHTML = '<div class="alert alert-danger" style="font-size:12px">复核失败：' + U.esc(e.message || e) + '</div>';
@@ -23992,19 +24189,45 @@ function bind(el, next) {
   }
 
   // AI 答案复核：思考模式深度复核整卷（防 AI 幻觉错误，避免错误答案诱导考生）
-  // 升级：先做每题 2 路独立求解对比（实时进度可视化），再做单路批判性复核
+  // 【2026-08-28 重构】① 入口先选模式：⚡快速（选择题本地校验、大题 2 路求解，省一半调用）/ 🔬深度（全题 2 路）；
+  // ② 三方裁决（路1/路2/原答案），"两路一致但都错"不再漏检，suspect='orig-wrong' 直接点名；
+  // ③ AbortController 贯穿，面板带「⏹ 停止复核」，中止后保留已完成部分；
+  // ④ 阶段B 与单题复核共享 prompt 内核（不带考生答案、带置信度），综合裁决分级展示；
+  // ⑤ 结果落库 exam.answerVerify（含 mode），复核历史不丢。
   function doReviewExam(exam, el) {
     if (!exam) return;
     if (typeof AI === 'undefined' || !AI.configured()) { Toast.warn('未配置 AI'); return; }
+    var qsAll = exam.questions || [];
+    var nChoice = qsAll.filter(function (q) { return q.type === 'choice'; }).length;
+    Modal.open({
+      title: '🔍 AI 答案复核 · 选择模式', dismissable: true,
+      html: '<div class="form-col" style="font-size:13px;line-height:1.7">'
+        + '<div class="alert" style="margin-bottom:6px">复核流程：<b>阶段A</b> 每题 2 路 AI 独立求解并与原答案三方对比 → <b>阶段B</b> 单路批判性复核原答案 → 综合裁决。全程可停止，结果随卷保存。</div>'
+        + '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--line);border-radius:8px;cursor:pointer"><input type="radio" name="rv-mode" value="quick" checked style="margin-top:3px;width:auto"><span><b>⚡ 快速复核</b>（推荐）<br><span class="muted-sm" style="font-size:12px">选择题走本地校验（答案在选项内已由硬校验兜底），大题做 2 路独立求解。本卷 ' + qsAll.length + ' 题（含 ' + nChoice + ' 道选择题）→ 约 ' + ((qsAll.length - nChoice) * 2 + 1) + ' 次 AI 调用，耗时约省一半。</span></span></label>'
+        + '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--line);border-radius:8px;cursor:pointer"><input type="radio" name="rv-mode" value="deep" style="margin-top:3px;width:auto"><span><b>🔬 深度复核</b><br><span class="muted-sm" style="font-size:12px">全部 ' + qsAll.length + ' 题都做 2 路独立求解 + 三方对比，最彻底，约 ' + (qsAll.length * 2 + 1) + ' 次调用。</span></span></label>'
+        + '</div>',
+      actions: [
+        { label: '取消', kind: 'btn-ghost' },
+        { label: '🚀 开始复核', kind: 'btn-primary', onClick: function (close) {
+          var sel = document.querySelector('input[name="rv-mode"]:checked');
+          var mode = (sel && sel.value) || 'quick';
+          close();
+          runReviewExam(exam, el, mode);
+        } }
+      ]
+    });
+  }
+  function runReviewExam(exam, el, mode) {
     var slot = el.querySelector('#sp-exam-review-slot');
     if (!slot) return;
-    if (slot.dataset.busy) return;
+    if (slot.dataset.busy) { Toast.show('复核进行中…', 'info'); return; }
     slot.dataset.busy = '1';
     var qs = exam.questions || [];
-    // === 阶段 A：每题 2 路独立求解对比（实时进度） ===
-    var phase = 'A';
-    var doneCount = 0;   // 已完成复核题数（crossCheckAnswers 回调里递增，替代从不递减的 pendingReview）
-    var doneSet = {};    // 防重复计数（同一题可能回调多次？不会，但保险）
+    var quick = mode === 'quick';
+    var ac = new AbortController();   // 贯穿阶段A全部 AI 调用 + 阶段B，支持「⏹ 停止复核」
+    // === 阶段 A：每题 2 路独立求解 → 与原答案三方裁决（实时进度） ===
+    var doneCount = 0;   // 已完成复核题数
+    var doneSet = {};    // 防重复计数
     function reviewProgress(i, text, cls) {
       // 渲染实时面板
       var total = qs.length;
@@ -24029,86 +24252,111 @@ function bind(el, next) {
         + '</div>';
     }).join('');
     slot.innerHTML = '<div style="background:#fff;border:1px solid #e8e8e8;border-radius:8px;padding:10px 12px;margin:8px 0">'
-      + '<div class="rv-progress-txt" style="font-size:13px;font-weight:500;margin-bottom:6px">🔍 答案并行复核中 0/' + qs.length + '</div>'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px">'
+      + '<span class="rv-progress-txt" style="font-size:13px;font-weight:500">🔍 答案并行复核中 0/' + qs.length + '（' + (quick ? '⚡快速' : '🔬深度') + '）</span>'
+      + '<button class="btn btn-sm" id="rv-stop" style="background:#cf1322;color:#fff;border-color:#cf1322;font-size:11px">⏹ 停止复核（保留已完成部分）</button></div>'
       + '<div style="height:6px;background:#E1F5EE;border-radius:3px;overflow:hidden;margin-bottom:8px"><div class="rv-progress-fill" style="height:100%;width:0%;background:#1D9E75;transition:width .3s"></div></div>'
       + '<div style="display:flex;flex-wrap:wrap;gap:6px">' + grid + '</div>'
       + '</div>';
-    Toast.show('正在深度复核整卷（2 路独立求解 + 批判性复核，可能需要 1-2 分钟）…', 'info', 3000);
-    crossCheckAnswers(qs, reviewProgress, 'sprint.review').then(function (verified) {
-      // 阶段 A 完成：显示汇总 + 跑阶段 B（单路批判性复核原答案）
-      var stats = { total: qs.length, agree: 0, dispute: 0, failed: 0 };
-      verified.forEach(function (r) { if (r && r.agree) stats.agree++; else if (r && r.dispute) stats.dispute++; else if (r) stats.failed++; });
+    var stopBtn = slot.querySelector('#rv-stop');
+    if (stopBtn) stopBtn.onclick = function () {
+      ac.abort();
+      stopBtn.disabled = true; stopBtn.textContent = '⏹ 正在停止…';
+      Toast.show('正在停止复核（AI 调用中止后保留已完成部分）…', 'info', 2500);
+    };
+    Toast.show('开始' + (quick ? '快速' : '深度') + '复核整卷（三方对比 + 批判性复核，可随时停止）…', 'info', 3000);
+    crossCheckAnswers(qs, reviewProgress, 'sprint.review', { quick: quick, ac: ac }).then(function (verified) {
+      // 阶段 A 完成：显示汇总 + 跑阶段 B（单路批判性复核原答案，与单题复核共享 prompt 内核）
+      var stats = { total: qs.length, agree: 0, lean: 0, dispute: 0, failed: 0, canceled: 0, origWrong: 0 };
+      verified.forEach(function (r) {
+        if (!r) return;
+        if (r.status === 'agree') stats.agree++;
+        else if (r.status === 'lean') stats.lean++;
+        else if (r.status === 'dispute') { stats.dispute++; if (r.suspect === 'orig-wrong') stats.origWrong++; }
+        else if (r.status === 'failed') stats.failed++;
+        else if (r.status === 'canceled') stats.canceled++;
+      });
       var agreeHtml = stats.agree ? '<span style="color:#1E8449">✅ 一致 ' + stats.agree + '</span>' : '';
-      var disputeHtml = stats.dispute ? '<span style="color:#CB4335">⚠️ 争议 ' + stats.dispute + '</span>' : '';
+      var leanHtml = stats.lean ? '<span style="color:#B7950B">👍 2:1 支持原答案 ' + stats.lean + '</span>' : '';
+      var origWrongHtml = stats.origWrong ? '<span style="color:#CB4335;font-weight:600">🔴 原答案疑似错误 ' + stats.origWrong + '</span>' : '';
+      var otherDispute = stats.dispute - stats.origWrong;
+      var disputeHtml = otherDispute > 0 ? '<span style="color:#CB4335">⚠️ 争议 ' + otherDispute + '</span>' : '';
       var failHtml = stats.failed ? '<span style="color:#888">❌ 失败 ' + stats.failed + '</span>' : '';
+      var canceledHtml = stats.canceled ? '<span style="color:#888">⏹ 已停止 ' + stats.canceled + '</span>' : '';
       var summaryBox = '<div class="alert" style="background:#E8F8F5;border:1px solid #A3E4D7;margin:6px 0">'
-        + '<b>🔍 阶段 A · 2 路独立求解对比：</b> ' + (agreeHtml + ' ' + disputeHtml + ' ' + failHtml) + ' / 共 ' + stats.total + '</div>';
-      // 阶段 B：单路 AI 批判性复核"原答案"（复用原 doReviewExam 的 prompt）
+        + '<b>🔍 阶段 A · 2 路独立求解 × 原答案 三方对比：</b> ' + (origWrongHtml + ' ' + agreeHtml + ' ' + leanHtml + ' ' + disputeHtml + ' ' + failHtml + ' ' + canceledHtml) + ' / 共 ' + stats.total + '</div>';
+      // 阶段 B：共享复核内核（不带考生答案防干扰；带置信度允许"如实说不确定"）
       var usr = '请对以下押题卷每道题做批判性深度复核，判断【原标准答案】和【原解析】是否真的正确。\n'
-        + '【批判性复核原则·务必遵守】\n'
-        + '① 不要默认原答案正确——AI 生成题易有计算错、概念混淆、解析漏步骤、答案写反等幻觉；\n'
-        + '② 对每题仔细复算关键步骤，发现错误时明确指出并给正确解答；\n'
-        + '③ 即使原答案看似对，也要验证特殊情形/边界/单位。\n\n'
-        + '【输出格式】只输出 JSON：{"items":[{"i":1,"verdict":"correct|wrong|partial","reason":"≤30字说明","corrected":"仅 verdict≠correct 时给正确解答+解析，原答案对的给空串"}]}\n\n'
-        + '【各题（题干 / 考生答案 / 原标准答案 / 原解析）】\n'
-        + (exam.questions || []).map(function (q, i) {
-          var r = (exam.results || [])[i] || {};
-          return (i + 1) + '. 题目：' + Tex.renderInline(q.stem || '') + '\n   考生答案：' + (r.answer || '(未答)') + '\n   原标准答案：' + (q.answer || '') + '\n   原解析：' + Tex.renderInline(q.solution || '');
-        }).join('\n\n');
+        + REVIEW_RULES
+        + '\n【输出格式·严格 JSON】{"items":[{"i":题号,"verdict":"correct|wrong|partial","confidence":0到100整数,"reason":"≤30字说明","correctAnswer":"仅 verdict≠correct 时给正确答案短串，否则空串","corrected":"仅 verdict≠correct 时给完整正确解答+解析，否则空串"}]}\n\n'
+        + '【各题（题干 / 原标准答案 / 原解析）】\n'
+        + (exam.questions || []).map(function (q, i) { return reviewQuestionPayload(q, i); }).join('\n\n');
       // 在阶段 A 摘要下追加阶段 B 容器
       var bSlot = document.createElement('div');
       bSlot.className = 'rv-bslot';
       bSlot.innerHTML = '<div class="cp-thinking">🧠 阶段 B · 单路 AI 批判性复核原答案中…</div><div class="skl-line"></div><div class="skl-line skl-w80"></div>';
       slot.appendChild(summaryBox);
       slot.appendChild(bSlot);
-      AI.chatJSON('你是考研复核专家，对每道题做批判性深度复核。', usr, null, { noThink: false, timeout: 600000, cache: false, ctx: 'sprint.analyze' }).then(function (json) {
+      AI.chatJSON('你是考研复核专家，对每道题做批判性深度复核。', usr, null, { noThink: false, timeout: 600000, cache: false, ctx: 'sprint.analyze', signal: ac.signal }).then(function (json) {
         slot.dataset.busy = '';
         if (!json || !Array.isArray(json.items)) {
           bSlot.innerHTML = '<div class="muted-sm">（阶段 B 未返回结构化结果，仅阶段 A 数据）</div>';
+          saveVerify({ items: [] });
           return;
         }
-        var wrongN = 0, partialN = 0;
+        var highN = 0, midN = 0, okN = 0;
         var rows = json.items.map(function (it) {
           var q = (exam.questions || [])[it.i - 1] || {};
-          // 阶段 A 数据对照：把 2 路独立求解结果也并排展示
+          // 阶段 A 数据对照：2 路独立求解结果 + 三方裁决状态并排展示
           var v = verified[it.i - 1] || {};
           var a1 = v.answer1 || '?';
           var a2 = v.answer2 || '?';
-          var stageABadge = v.agree ? '<span style="background:#EAF3DE;color:#27500A;font-size:10.5px;padding:1px 6px;border-radius:3px;margin-left:4px">A·一致</span>'
-            : v.dispute ? '<span style="background:#FDEDEC;color:#A93226;font-size:10.5px;padding:1px 6px;border-radius:3px;margin-left:4px">A·争议</span>' : '';
-          if (it.verdict === 'wrong') wrongN++;
-          else if (it.verdict === 'partial') partialN++;
-          var vCls = it.verdict === 'correct' ? 'var(--ok)' : it.verdict === 'wrong' ? 'var(--danger)' : 'var(--warn)';
-          var vTxt = it.verdict === 'correct' ? '✓ 原答案正确' : it.verdict === 'wrong' ? '✗ 原答案错误' : '△ 部分错';
+          var fv = reviewFinalVerdict(it.verdict, typeof it.confidence === 'number' ? it.confidence : null, v);
+          if (fv.level === 'high') highN++;
+          else if (fv.level === 'mid') midN++;
+          else if (fv.level === 'ok') okN++;
+          var vCls = fv.level === 'high' ? 'var(--danger)' : fv.level === 'mid' ? 'var(--warn)' : 'var(--ok)';
+          var lowConf = typeof it.confidence === 'number' && it.confidence < 60;
+          var stageABadge = v.status === 'agree' ? '<span style="background:#EAF3DE;color:#27500A;font-size:10.5px;padding:1px 6px;border-radius:3px;margin-left:4px">A·三方一致</span>'
+            : v.suspect === 'orig-wrong' ? '<span style="background:#FDEDEC;color:#A93226;font-size:10.5px;padding:1px 6px;border-radius:3px;margin-left:4px">A·原答案疑似错误</span>'
+            : v.status === 'lean' ? '<span style="background:#FEF9E7;color:#B7950B;font-size:10.5px;padding:1px 6px;border-radius:3px;margin-left:4px">A·2:1 支持原答案</span>'
+            : v.status === 'dispute' ? '<span style="background:#FDEDEC;color:#A93226;font-size:10.5px;padding:1px 6px;border-radius:3px;margin-left:4px">A·争议</span>' : '';
           return '<div style="padding:8px;border:1px solid var(--line);border-left:3px solid ' + vCls + ';border-radius:4px;margin:6px 0;background:var(--bg)">'
             + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;flex-wrap:wrap">'
-            + '<b>第' + it.i + '题</b> · ' + U.esc(q.topicName || '') + ' <span style="color:' + vCls + ';font-weight:600;font-size:12px">' + vTxt + '</span>' + stageABadge + '</div>'
-            + '<div class="muted-sm" style="font-size:12px;margin-top:2px"><b>2 路求解：</b>路1=' + U.esc(a1) + ' vs 路2=' + U.esc(a2) + ' &nbsp;|&nbsp; <b>批判复核：</b>' + U.esc(it.reason || '') + '</div>'
-            + (it.corrected && it.verdict !== 'correct' ? '<div style="margin-top:6px;padding:6px;background:var(--bg-muted);border-radius:3px;font-size:12.5px"><b style="color:var(--ok)">✓ 正确解答：</b>' + Tex.renderInline(it.corrected) + '</div>' : '')
+            + '<b>第' + it.i + '题</b> · ' + U.esc(q.topicName || '') + ' <span style="color:' + vCls + ';font-weight:600;font-size:12px">' + fv.txt + '</span>' + stageABadge + '</div>'
+            + '<div class="muted-sm" style="font-size:12px;margin-top:2px"><b>2 路求解：</b>路1=' + U.esc(a1) + ' vs 路2=' + U.esc(a2) + '（原答案：' + U.esc(q.answer || '?') + '）'
+            + (typeof it.confidence === 'number' ? ' &nbsp;|&nbsp; <b>置信度：</b>' + it.confidence + '%' + (lowConf ? '（低置信）' : '') : '')
+            + ' &nbsp;|&nbsp; <b>批判复核：</b>' + U.esc(it.reason || '') + '</div>'
+            + (it.verdict !== 'correct' && (it.correctAnswer || it.corrected) ? '<div style="margin-top:6px;padding:6px;background:var(--bg-muted);border-radius:3px;font-size:12.5px">'
+              + (it.correctAnswer ? '<b style="color:var(--ok)">✓ 正确答案：</b>' + Tex.renderInline(it.correctAnswer) + '<br>' : '')
+              + (it.corrected ? '<b style="color:var(--ok)">✓ 正确解答：</b>' + Tex.renderInline(it.corrected) : '')
+              + '<div class="muted-sm" style="font-size:11.5px;margin-top:2px">💡 可在对应题目卡片点「🔍 复核此题」后一键「采纳修正」（可还原）</div></div>' : '')
             + '</div>';
         }).join('');
-        var summaryCls = wrongN > 0 ? 'var(--danger)' : partialN > 0 ? 'var(--warn)' : 'var(--ok)';
+        var summaryCls = highN > 0 ? 'var(--danger)' : midN > 0 ? 'var(--warn)' : 'var(--ok)';
         var summary = '<div class="alert" style="background:var(--bg-muted);margin:6px 0 8px">'
-          + '<b>🧠 阶段 B · 批判性复核：</b> <b style="color:' + summaryCls + '">' + (qs.length - wrongN - partialN) + ' 正确</b> / ' + wrongN + ' 错误 / ' + partialN + ' 部分错'
-          + (wrongN > 0 ? '（⚠ 原答案存在错误，已给正确解答）' : '（✓ 原答案均经独立求解 + 批判复核双确认）') + '</div>';
+          + '<b>🧠 阶段 B · 综合裁决：</b> <b style="color:' + summaryCls + '">' + okN + ' 双重确认</b> / ' + midN + ' 存疑 / ' + highN + ' 高危'
+          + (highN > 0 ? '（⚠ 原答案疑似错误，请按行内指引采纳修正）' : '（✓ 原答案均经三方对比 + 批判复核确认）') + '</div>';
         bSlot.innerHTML = summary + rows;
-        // 合并存到 exam
-        Store.update(function (s) {
-          var e = ((s.sprintData && s.sprintData.mockExams) || []).find(function (x) { return x.id === exam.id; });
-          if (e) { e.answerVerify = { verified: verified, stats: stats, items: json.items, wrongN: wrongN, partialN: partialN, at: new Date().toISOString() }; }
-        });
-        exam.answerVerify = { verified: verified, stats: stats, items: json.items, wrongN: wrongN, partialN: partialN };
-        Toast[wrongN > 0 ? 'warn' : 'success'](wrongN > 0 ? '复核发现 ' + wrongN + ' 题原答案有误，请看正确解答' : '复核完成（2路独立求解 + 批判双确认），原答案均正确');
+        // 合并存到 exam（含 mode 与三方裁决数据，复核历史不丢）
+        saveVerify({ items: json.items, highN: highN, midN: midN, okN: okN });
+        Toast[highN > 0 ? 'warn' : 'success'](highN > 0 ? '复核发现 ' + highN + ' 题原答案疑似错误，请按报告指引处理' : '复核完成（三方对比 + 批判复核），原答案均通过');
       }).catch(function (e) {
         slot.dataset.busy = '';
-        bSlot.innerHTML = '<div class="alert alert-danger">阶段 B 复核失败：' + U.esc(e.message || e) + '</div>';
-        // 即使阶段 B 失败也保存阶段 A 结果
+        bSlot.innerHTML = '<div class="alert alert-danger">' + (ac.signal.aborted ? '⏹ 已停止复核（阶段 A 已完成部分保留在下方汇总）' : '阶段 B 复核失败：' + U.esc(e.message || e)) + '</div>';
+        // 即使阶段 B 失败/中止也保存阶段 A 结果
+        saveVerify({ items: [] });
+      });
+
+      function saveVerify(extra) {
+        var rec = { mode: mode, quick: quick, verified: verified, stats: stats, at: new Date().toISOString() };
+        Object.keys(extra || {}).forEach(function (k) { rec[k] = extra[k]; });
         Store.update(function (s) {
           var e = ((s.sprintData && s.sprintData.mockExams) || []).find(function (x) { return x.id === exam.id; });
-          if (e) { e.answerVerify = { verified: verified, stats: stats, at: new Date().toISOString() }; }
+          if (e) e.answerVerify = rec;
         });
-        exam.answerVerify = { verified: verified, stats: stats };
-      });
+        exam.answerVerify = rec;
+      }
     });
   }
 
@@ -24669,7 +24917,7 @@ function bind(el, next) {
 
     var tBtn = el.querySelector('#sp-ai-trend'); if (tBtn) tBtn.onclick = function () { aiTrend(el); };
     var eBtn = el.querySelector('#sp-ai-exam'); if (eBtn) eBtn.onclick = function () { openExamConfig(el); };
-    var cBtn = el.querySelector('#sp-cloud-exam'); if (cBtn) cBtn.onclick = function () { openCloudExamModal(el); };
+    // 【方案A合并】☁️ 云端出卷已并入「生成押题卷」弹窗的执行位置三选，不再有独立入口按钮
     bindCloudJobs(el);
     cjAutoPoll();   // 幂等入口：有进行中任务才启动轮询，重入安全（勿用 cjStartAutoPoll，会重置完成提示去重）
     cjSyncFloat();  // 有进行中任务时自动弹实时过程浮窗（用户关掉过的不再弹，任务行 📺 可重开）
