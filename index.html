@@ -10878,6 +10878,45 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     return n === 0;
   };
 
+// 变式题 / 举一反三的统一「原题上下文」（单一事实来源）
+  // 变式题的本质是「同考点同方法、换数换问法」——提示词里不给原题内容 = 让 AI 凭空出题，出出来的
+  // 往往换了考点或换了解法。此前四个入口各自零散拼串、且普遍漏字段（最严重的错题本入口只传了一句
+  // desc 描述，题干/选项/答案/解析全没给）。这里统一收口：按「有才带、空则跳过」拼出结构化原题，
+  // 并兼容各模块不同的字段名（stem/question/extractedQuestion，solution/keySteps/analysis，
+  // trap/errorCause，topicName/topic/painPoint，answer/referenceAnswer）。
+  PIPE.buildVariantContext = function (orig, opts) {
+    opts = opts || {};
+    if (!orig || typeof orig !== 'object') return '';
+    var lines = [];
+    function add(label, val) {
+      if (val == null) return;
+      if (Array.isArray(val)) {
+        var arr = val.map(function (x) { return String(x == null ? '' : x).trim(); }).filter(function (s) { return !!s; });
+        if (!arr.length) return;
+        lines.push(label + '：' + arr.join(' | '));
+        return;
+      }
+      var s = String(val).trim();
+      if (!s) return;
+      lines.push(label + '：' + s);
+    }
+    function pick() {
+      for (var i = 0; i < arguments.length; i++) {
+        var v = arguments[i];
+        if (v != null && String(v).trim() !== '') return v;
+      }
+      return '';
+    }
+    add('原题题干', pick(orig.stem, orig.question, orig.extractedQuestion));
+    add('原题选项', orig.options);
+    add('标准答案', pick(orig.answer, orig.referenceAnswer));
+    // 【关键】原解析必须给：变式要求「解题方法相同」，没原解析 AI 极易换个解法，练不到点上
+    add('原解析/解题关键', pick(orig.solution, orig.keySteps, orig.analysis));
+    add('易错点/错误原因', pick(orig.trap, orig.errorCause));
+    add('考点', pick(orig.topicName, orig.topic, orig.painPoint));
+    return lines.join('\n');
+  };
+
   // 剥包装拿题目对象（处理 AI 返回 {q: ...} 或 {questions: [{...}] }）
   PIPE.unwrapQuestionObj = function (raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -15752,19 +15791,25 @@ function bind(el, next) {
       if (variantOf.refId) refTopic = allTopics().find(t => t.id === variantOf.refId);
       if (refTopic) weakCtx += '关联考点：' + refTopic.group + '·' + refTopic.name + '（层级' + (DB.TIERS[refTopic.tier]||{}).name + '）；';
 
+      // 【2026-08-28】原题内容注入：变式题必须让 AI 看到原题（题干/选项/答案/解析），
+      // 否则只能出"同考点的另一道题"，而不是"这道题的变式"。统一走共享层拼串，口径与其余入口一致。
+      var origCtx = (window.ExamPipeline && window.ExamPipeline.buildVariantContext)
+        ? window.ExamPipeline.buildVariantContext(variantOf)
+        : ('原题：' + (variantOf.stem || variantOf.originDesc || ''));
       ask = '【举一反三 · 错题变式训练】\n'
         + '\n== 学生错题信息 =='
-        + '\n原题/考点描述：' + (variantOf.originDesc || '（缺失）')
+        + '\n' + (origCtx || ('原题/考点描述：' + (variantOf.originDesc || '（缺失）')))
         + '\n错误类型：' + errType
         + (vSubj ? '\n科目：' + vSubj : '')
         + '\n' + weakCtx
         + '\n\n== 出题要求 =='
         + '\n请先分析这道错题的【典型错误根因】（为什么学生会在这里出错？是概念模糊/计算失误/审题遗漏/方法选错？），'
         + '然后基于这个根因出一道【举一反三变式题】，要求：'
-        + '\n1) 同一知识点体系内，但换一个角度/数字/情境/问法来考'
-        + '2) 保留同类陷阱（特别是导致本题做错的那个陷阱的"变种"）'
-        + '3) 难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）'
+        + '\n1) 与上面原题【同考点、同解题方法】，但换一个角度/数字/情境/问法来考'
+        + '\n2) 保留同类陷阱（特别是导致本题做错的那个陷阱的"变种"）——若上面给了原解析，变式的解法路径须与其一致'
+        + '\n3) 难度等级：' + diffMeta.name + '（' + diffMeta.prompt + '）'
         + '\n4) 目的：验证学生是否真正掌握了这个知识点，而不仅仅是背下了这一道题'
+        + '\n5) 严禁与上面原题雷同（不能只改个数字），但考点与解法必须同源'
         + '\n\n请直接输出 JSON 题目（stem/type/options/answer/solution/trap/diagram）。';
     } else {
       ask = '考点：' + topic.group + '·' + topic.name + '；层级：' + DB.TIERS[topic.tier].name +
@@ -16480,13 +16525,27 @@ function bind(el, next) {
 
   // 错题变式复现入口：从错题本跳入，AI举一反三精准出题
   function startVariant(mistake) {
+    // 【2026-08-28】变式题的前提是"知道原题长什么样"：此前只取 desc 一句描述，
+    // 题干/选项/答案/解析全丢，AI 只能凭空出"同考点题"而非"这道题的变式"。
+    // 这里把完整原题带进来（拍题类错题的原题在 aiAnalysis.question 里，一并兼容）。
+    var mStem = mistake.stem || (mistake.aiAnalysis && mistake.aiAnalysis.question) || '';
+    var mAns = (mistake.answer != null && String(mistake.answer).trim() !== '')
+      ? mistake.answer
+      : ((mistake.aiAnalysis && mistake.aiAnalysis.answer) || '');
+    var mSol = mistake.solution || (mistake.aiAnalysis && mistake.aiAnalysis.solution) || '';
     variantOf = {
       topicName: mistake.desc || '综合',
       errorType: mistake.type,
       originDesc: mistake.desc || '（原题描述缺失）',
       subject: mistake.subject || 'math',
       // 若错题有关联考点(refId)，优先用于精准出题
-      refId: mistake.refId || null
+      refId: mistake.refId || null,
+      // 原题内容（供 PIPE.buildVariantContext 拼进提示词）
+      stem: mStem,
+      options: Array.isArray(mistake.options) ? mistake.options : [],
+      answer: mAns,
+      solution: mSol,
+      trap: mistake.trap || ''
     };
     // 智能考点匹配：优先用错题自带的refId，其次按错误类型映射
     var subjTopics = DB.TOPICS[mistake.subject] || DB.TOPICS.math;
@@ -18576,11 +18635,16 @@ function bind(el, next) {
   // 变式题提示词：同考点同题型，换数据/换问法/换情境，难度不低于原题
   function trainVariantPrompt(n, s, item, qi) {
     var stepName = TRAIN_STEPS[s].name;
-    return '基于下面的' + stepName + '题，生成 1 道【变式题】：同考点、同题型、难度不低于原题，必须换数据/换数字/换问法/换情境（禁止原样或仅微调）。'
+    // 【2026-08-28】原题上下文统一走共享层：此前只给 stem/选项/答案，漏了原解析与易错点——
+    // 变式要求"同考点同解法"，没原解析 AI 容易换解法；没易错点就没法延续同类陷阱。
+    var PIPE = window.ExamPipeline || {};
+    var origCtx = PIPE.buildVariantContext
+      ? PIPE.buildVariantContext(item)
+      : ('原题：' + item.stem + (item.options && item.options.length ? '\n原选项：' + item.options.join('；') : '') + '\n标准答案：' + item.answer);
+    return '基于下面的' + stepName + '题，生成 1 道【变式题】：同考点、同题型、同解题方法、难度不低于原题，必须换数据/换数字/换问法/换情境（禁止原样或仅微调）。'
       + '\n考点：「' + n.name + '」'
-      + '\n原题：' + item.stem
-      + (item.options && item.options.length ? '\n原选项：' + item.options.join('；') : '')
-      + '\n标准答案：' + item.answer
+      + '\n' + origCtx
+      + '\n要求：变式的【解题路径】须与上面原解析一致（若给了原解析），并延续同类易错点。'
       + '\n只输出JSON：{"item":{"type":"choice|solve","stem":"变式题干（数学式用$...$包裹）","options":["A. ...","B. ...","C. ...","D. ..."],"answerIdx":0-3,"answer":"答案","solution":"分步详解(≤180字)","trap":"易错点(≤30字)","diff":1-5,"imageNeeded":true|false,"imageHint":"图描述"}}，不要任何多余文字。';
   }
   // 变式重练：判分<60 → 生成 1 道同类变式追加到本步末尾，做对为止（同链上限 5 道）
@@ -23390,10 +23454,12 @@ function bind(el, next) {
       + LATEX_RULE;
     // 【2026-08-21 修复】usr 变量曾在批量编辑中被误删（残留孤立的 "+ ..." 表达式语句），
     // 导致 AI.chatStream(sys, usr, …) 必抛 ReferenceError，变式题功能整体不可用。
-    var usr = '原题：' + (q.stem || '')
-      + (q.options && q.options.length ? '\n选项：' + q.options.join(' | ') : '')
-      + '\n答案：' + (q.answer || '')
-      + '\n请生成变式题。';
+    // 【2026-08-28】原题上下文统一走共享层：此前只给 stem/选项/答案，漏了原解析——
+    // 变式要求"解题方法相同"，没原解析 AI 容易换个解法，考不到同一个点。
+    var qCtx = (PIPE.buildVariantContext
+      ? PIPE.buildVariantContext(q)
+      : ('原题：' + (q.stem || '') + '\n答案：' + (q.answer || '')));
+    var usr = qCtx + '\n请生成变式题。';
     AI.chatStream(sys, usr, function (txt) { if (float) float.content(txt); }, null, { cache: false, noThink: true, timeout: 180000, maxTokens: 6000 }).then(function (full) {
       var r = AI.extractRobustJSON(full);
       if (!r || !r.stem) throw new Error('AI 未返回有效变式题');
@@ -31165,10 +31231,17 @@ function bind(el, next) {
     try { majorName = (DB.getActiveMajor().name) || '专业课'; } catch (e) {}
 
     // 构建上下文：把原题 + 已有解析传给 AI
-    var context = '原题：' + (photo.extractedQuestion || photo.note || '(见图片)');
-    if (photo.aiAnalysis) {
-      context += '\n原题解析关键：' + (photo.aiAnalysis.keySteps || '');
-      context += '\n易错原因：' + (photo.aiAnalysis.errorCause || '');
+    // 【2026-08-28】统一走共享层，顺带把考点标签(painPoint)也带上，字段不再遗漏。
+    var PIPE = window.ExamPipeline || {};
+    var context = PIPE.buildVariantContext
+      ? PIPE.buildVariantContext(photo)
+      : ('原题：' + (photo.extractedQuestion || photo.note || '(见图片)'));
+    if (!context || context === '原题：(见图片)') {
+      context = '原题：' + (photo.extractedQuestion || photo.note || '(见图片，已随请求附上图片)');
+      if (photo.aiAnalysis) {
+        context += '\n原题解析关键：' + (photo.aiAnalysis.keySteps || '');
+        context += '\n易错原因：' + (photo.aiAnalysis.errorCause || '');
+      }
     }
 
     var systemPrompt = '你是考研出题官，极其熟悉「' + majorName + '」的考点与命题规律。'
