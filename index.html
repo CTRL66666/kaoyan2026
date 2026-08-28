@@ -20394,7 +20394,10 @@ function bind(el, next) {
         : '')
       + '<div class="sp-chips">'
       + '<span class="tag">扫描 ' + rows.length + ' 考点</span>'
-      + '<span class="tag">命中 ' + list.length + ' 个</span>'
+      // 【2026-08-28】原来显示 list.length（已按 15 条截断后的长度），用户会误以为只押到 15 个。
+      // 改为显示筛选后的真实命中数；若因默认截断少显示，额外注明"显示前 N"。
+      + '<span class="tag">命中 ' + filtered.length + ' 个</span>'
+      + (list.length < filtered.length ? '<span class="tag" style="background:#faad14;color:#fff">显示前 ' + list.length + ' 个（勾选「显示已掌握」或按科目筛选看全部）</span>' : '')
       + (urgent ? '<span class="tag" style="background:#cf1322;color:#fff">🔴 必押 ' + urgent + '</span>' : '')
       + (masteredTotal ? '<span class="tag" style="background:#237804;color:#fff">✓ 已掌握 ' + masteredTotal + '</span>' : '')
       + (hitRate != null ? '<span class="tag" style="background:#7c3aed;color:#fff">🎯 命中率 ' + hitRate + '%</span>' : '')
@@ -20428,10 +20431,18 @@ function bind(el, next) {
         }
         var dayOfYear = Math.floor(Date.now() / 86400000);
         var picks = [];
-        for (var k = 0; k < 3 && cands.length; k++) picks.push(cands[(dayOfYear * 7 + k * 5) % cands.length]);
         var seen = {};
-        picks = picks.filter(function (p) { if (seen[p.id]) return false; seen[p.id] = true; return true; });
-        while (picks.length < 3 && cands.length) { var extra = cands[Math.floor(Math.random() * cands.length)]; if (!seen[extra.id]) { seen[extra.id] = true; picks.push(extra); } }
+        // 【2026-08-28 死循环修复】原写法 while (picks.length < 3 && cands.length) 随机重试补齐：
+        // 当未掌握考点只剩 1~2 个时，picks 去重后永远到不了 3，而 cands.length 恒为真 → 无限循环、
+        // 押题页直接卡死（实测 cands.length≤2 时 20/20 天必现）。改为两重「有界」循环：
+        // ① 按日轮换取不重复的 ② 仍不足 3 个就按序补齐（候选不足是正常情况，不强凑）。
+        for (var k = 0; k < 3 && cands.length; k++) {
+          var cand = cands[(dayOfYear * 7 + k * 5) % cands.length];
+          if (cand && !seen[cand.id]) { seen[cand.id] = true; picks.push(cand); }
+        }
+        for (var j = 0; j < cands.length && picks.length < 3; j++) {
+          if (!seen[cands[j].id]) { seen[cands[j].id] = true; picks.push(cands[j]); }
+        }
         var cards = picks.map(function (r) {
           var p = priority(r.score);
           return '<div class="sp-daily-item" style="flex:1;min-width:130px;border:1px solid var(--line);border-top:3px solid ' + subjColor(r.subj) + ';border-radius:8px;padding:8px 10px;cursor:pointer" data-daily="' + r.id + '">'
@@ -21546,7 +21557,7 @@ function bind(el, next) {
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px;padding-top:6px"><input type="checkbox" id="sp-cfg-think"' + (p.think ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⏳ 启用思考模式（出题质量更高，耗时/消耗约 3-5 倍）</span></label>'
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="sp-cfg-parallel"' + (p.parallel ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⚡ 并发出卷（总工程师规划 → 多 AI 并行出题，智能并发最高 20 路，带实时状态面板）</span></label>'
         + blueprintEditorHtml(cfgBp, initSubj)
-        + '<div class="muted-sm" style="margin-top:6px">' + (hasAI ? (p.parallel ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。' : 'AI 将按蓝本卷面结构组卷，优先覆盖你的薄弱考点。') : '📦 未配置 AI：将从本地题库（既有押题卷/收藏题/变式题/错题）按蓝本抽题组卷。') + '</div>'
+        + '<div class="muted-sm" id="sp-cfg-hint" style="margin-top:6px">' + (hasAI ? (p.parallel ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。' : 'AI 将按蓝本卷面结构组卷，优先覆盖你的薄弱考点。') : '📦 未配置 AI：将从本地题库（既有押题卷/收藏题/变式题/错题）按蓝本抽题组卷。') + '</div>'
         + '</div>',
       actions: [
         { label: '取消', kind: 'btn-ghost' },
@@ -21588,7 +21599,10 @@ function bind(el, next) {
     // 并行开关切换时更新提示文字
     var parCb = document.getElementById('sp-cfg-parallel');
     if (parCb) parCb.onchange = function () {
-      var hint = document.querySelector('.modal .muted-sm');
+      // 【2026-08-28 修复】原用 querySelector('.modal .muted-sm') 取提示文字，但蓝本编辑区里
+      // 的 #bp-mix-sum / #bp-warn 也是 .muted-sm 且 DOM 顺序更靠前 → 实际改到「星级配比合计」上，
+      // 底部真正提示纹丝不动。改为 id 精确选取。
+      var hint = document.getElementById('sp-cfg-hint');
       if (hint) hint.textContent = parCb.checked
         ? '并发出卷中：每道题由独立 AI 仔细思考，题号状态实时可见，出完总审查微调。'
         : 'AI 将按蓝本卷面结构组卷，优先覆盖你的薄弱考点。';
@@ -23290,14 +23304,15 @@ function bind(el, next) {
           ? '<button class="btn btn-sm btn-ghost" disabled style="font-size:11px;opacity:.6">✓ 已在题库</button>'
           : '<button class="btn btn-sm btn-ghost sp-to-bank" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px">📥 加入题库</button>';
         var mkBtn = '<button class="btn btn-sm btn-ghost sp-to-mistake" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px;color:#cf1322">❌ 加入错题</button>';
-        // 【调试】展示未渲染原始文本，便于 LaTeX 渲染问题定位
-        var rawBtn = '<button class="btn btn-sm btn-ghost sp-q-raw" data-exam="' + examId + '" data-qi="' + qi + '" style="font-size:11px">🐞 源码</button>';
+        // 【2026-08-28】原来是平铺的「🐞 源码」按钮，属调试功能泄漏到生产 UI，普通用户看着莫名其妙。
+        // 保留能力但收进折叠区，改中性文案；公式渲染异常时用户/排查仍能拿到原始文本。
         var rawText = 'stem: ' + U.esc(q.stem || '') + '\n'
           + (q.options && q.options.length ? 'options: ' + q.options.map(function (o) { return U.esc(o); }).join('\n         ') + '\n' : '')
           + 'answer: ' + U.esc(q.answer || '') + '\n'
           + 'solution: ' + U.esc(q.solution || '');
-        return '<div class="btn-row" style="margin-top:8px">' + bankBtn + mkBtn + rawBtn + '</div>'
-          + '<div class="sp-q-raw-slot" data-qi="' + qi + '" style="display:none;margin-top:6px"><pre style="background:#f5f5f5;padding:8px;border-radius:6px;font-size:11.5px;overflow-x:auto;color:#333;white-space:pre-wrap;word-break:break-all;border:1px solid #e8e8e8">' + rawText + '</pre></div>';
+        var rawBlock = '<details style="margin-top:6px"><summary style="font-size:11px;cursor:pointer;opacity:.6">🔍 公式显示异常？查看原始文本</summary>'
+          + '<pre style="background:#f5f5f5;padding:8px;border-radius:6px;font-size:11.5px;overflow-x:auto;color:#333;white-space:pre-wrap;word-break:break-all;border:1px solid #e8e8e8;margin-top:4px">' + rawText + '</pre></details>';
+        return '<div class="btn-row" style="margin-top:8px">' + bankBtn + mkBtn + '</div>' + rawBlock;
       })()
       + '</div>';
   }
@@ -23510,6 +23525,18 @@ function bind(el, next) {
     Toast.success('已加入我的题库');
     renderIfHere();
   }
+  // 【2026-08-28】押题卷错题的「错误类型」不再一律写死 concept（概念模糊）：
+  // 那会让错题本饼图统计、Store.weekTopMistakes() 本周高频错误、以及 AI 变式题收到的
+  // errorType 全部失真（全是"概念模糊"= 没有分类信息）。按「题型 + 得分」粗粒度推断，
+  // 用户仍可在错题本里改成准确类型。
+  function inferMistakeType(q, r) {
+    var full = Number(q && q.score) || 0;
+    var got = Number(r && r.score) || 0;
+    if (q && q.type === 'choice') return 'concept';   // 选择题判断错 → 多为概念/辨析问题
+    if (full > 0 && got > 0) return 'careless';       // 大题拿到部分分 → 会做但失手（粗心/计算）
+    return 'concept';
+  }
+
   // 手动加入错题（判对也能加；dedup 与交卷自动入画像共用 key 防重）
   function addQuestionToMistakes(examId, qi) {
     var st = Store.get();
@@ -23521,7 +23548,7 @@ function bind(el, next) {
     Store.update(function (s) {
       s.mistakes = s.mistakes || [];
       s.mistakes.unshift({
-        id: U.uid(), subject: exam.subject, type: 'concept',
+        id: U.uid(), subject: exam.subject, type: inferMistakeType(q, (exam.results || [])[qi]),
         desc: '【押题卷】' + (q.topicName || ('第' + (qi + 1) + '题')) + '：手动收录',
         stem: q.stem || '', answer: q.answer || '', solution: q.solution || '',
         refId: q.topicName || '', source: 'mock-exam', dedupKey: dedup,
@@ -23562,7 +23589,7 @@ function bind(el, next) {
         return '<div style="font-size:13px;padding:4px 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
           + '<span style="color:#cf1322">✗</span> ' + U.esc(q.topicName || (q.stem || '').slice(0, 30))
           + (pb ? '<button class="btn btn-sm btn-ghost sp-method-post" data-pb="' + pb.id + '" style="font-size:11px">🧭 看方法</button>' : '')
-          + '<button class="btn btn-sm btn-ghost sp-prac-post" data-subj="' + exam.subject + '" data-name="' + U.esc(q.topicName || '') + '" style="font-size:11px">去练</button>'
+          + '<button class="btn btn-sm btn-ghost sp-prac-post" data-subj="' + exam.subject + '" data-name="' + U.esc(q.topicName || '') + '" data-exam="' + exam.id + '" data-qi="' + qi + '" style="font-size:11px">去练</button>'
           // 【第二轮②】错题变式重做：AI 同考点换数换问法 → 入题库
           + '<button class="btn btn-sm btn-ghost sp-variant" data-exam="' + exam.id + '" data-qi="' + qi + '" style="font-size:11px">🔄 出变式</button>'
           + (window.TutorModule ? '<button class="btn btn-sm btn-ghost sp-tutor-post" data-exam="' + exam.id + '" data-qi="' + qi + '" style="font-size:11px">🧑‍🏫 问私教</button>' : '')
@@ -23746,14 +23773,19 @@ function bind(el, next) {
         var correct = t.getAttribute('data-correct');
         var isCorrect = v === correct;
         var qi = t.getAttribute('data-q');
+        var card = t.closest('.sp-exam-card');
+        // 【2026-08-28】允许改答案。原实现把其余选项 o.disabled = true，手滑点错就永久锁死，
+        // 而交卷时答错的题会自动进错题本并回写 heat 掌握度 —— 一次手滑会污染整条数据链。
+        // 改为：每次点击先重置本题所有选项的样式/可用性，再按新选择判定（结果覆盖式记录）。
+        document.querySelectorAll('.sp-exam-opt[data-q="' + qi + '"]').forEach(function (o) {
+          o.style.background = ''; o.style.color = ''; o.style.opacity = '';
+          o.disabled = false;
+          o.classList.remove('sp-opt-pick-ok', 'sp-opt-pick-bad', 'sp-opt-ans', 'sp-opt-dim');
+        });
         t.style.background = isCorrect ? '#237804' : '#cf1322';
         t.style.color = '#fff';
-        var card = t.closest('.sp-exam-card');
-        document.querySelectorAll('.sp-exam-opt[data-q="' + qi + '"]').forEach(function (o) {
-          if (o !== t) { o.style.opacity = '.4'; o.disabled = true; }
-        });
         recordExamAnswer(examId, parseInt(qi, 10), isCorrect, isCorrect ? parseInt(t.getAttribute('data-score'), 10) : 0, '', { picked: parseInt(t.getAttribute('data-oi'), 10) });
-        if (card) { card.classList.add(isCorrect ? 'sp-exam-ok' : 'sp-exam-bad'); }
+        if (card) { card.classList.remove('sp-exam-ok', 'sp-exam-bad'); card.classList.add(isCorrect ? 'sp-exam-ok' : 'sp-exam-bad'); }
         refreshExamProgress(examId);
         return;
       }
@@ -23767,22 +23799,13 @@ function bind(el, next) {
         if (examOpt) optimizeSingleQuestion(examOpt, qIdxOpt);
         return;
       }
-      if (t.classList.contains('sp-q-raw')) {
-        var qiRaw = t.getAttribute('data-qi');
-        var cardRaw = t.closest('.sp-exam-card');
-        var slotRaw = cardRaw && cardRaw.querySelector('.sp-q-raw-slot[data-qi="' + qiRaw + '"]');
-        if (slotRaw) { slotRaw.style.display = slotRaw.style.display === 'none' ? 'block' : 'none'; }
-        return;
-      }
       if (t.classList.contains('sp-variant')) { variantOfQuestion(t.getAttribute('data-exam'), parseInt(t.getAttribute('data-qi'), 10)); return; }
       if (t.classList.contains('sp-method-post')) { if (window.InspectorModule && InspectorModule.openPlaybook) InspectorModule.openPlaybook(t.getAttribute('data-pb')); return; }
       if (t.classList.contains('sp-prac-post')) {
         var subj = t.getAttribute('data-subj'), name = t.getAttribute('data-name');
         examSession = null; clearExamTimer();
-        if (window.QuizModule && QuizModule.startVariant) {
-          App.go('quiz');
-          setTimeout(function () { QuizModule.startVariant({ subject: subj, type: 'concept', desc: name, refId: '' }); }, 0);
-        } else App.go('quiz');
+        // 【2026-08-28】带上原题定位，让 AI 变式题拿到完整原题（此前只传考点名）
+        goPractice(subj, '', name, { examId: t.getAttribute('data-exam'), qi: parseInt(t.getAttribute('data-qi'), 10) });
         return;
       }
       if (t.classList.contains('sp-tutor-post')) {
@@ -23809,9 +23832,10 @@ function bind(el, next) {
       if (!v) return;
       var correct = (inp.getAttribute('data-correct') || '').trim();
       var score = parseInt(inp.getAttribute('data-score'), 10) || 0;
-      var isCorrect = v && correct && v.length > 5 && (v.indexOf(correct) >= 0 || correct.indexOf(v.slice(0, 20)) >= 0);
+      // 【2026-08-28】改用归一化判分；并标 gradedBy='kw' 表示这是兜底粗判，交卷时若有 AI 会被重判覆盖
+      var isCorrect = judgeShortAnswer(v, correct);
       inp.style.borderColor = isCorrect ? '#237804' : '#cf1322';
-      recordExamAnswer(examId, qi, !!isCorrect, isCorrect ? score : Math.round(score * 0.3), '', { user: v });
+      recordExamAnswer(examId, qi, !!isCorrect, isCorrect ? score : Math.round(score * 0.3), '', { user: v, gradedBy: 'kw' });
       refreshExamProgress(examId);
     };
   }
@@ -23846,6 +23870,30 @@ function bind(el, next) {
         at: new Date().toISOString()
       };
     });
+  }
+
+  // 【2026-08-28 判分修复】解答/填空的「兜底判分」归一化比较。
+  // 原表达式 `v.length > 5 && (v.indexOf(correct)>=0 || correct.indexOf(v.slice(0,20))>=0)` 有两个致命伤：
+  //   ① v.length>5 —— 数学填空答案就是「2」「x=2」「e^2」这类短串，完全答对也永远判错；
+  //   ② 纯裸串包含 —— 标准答案带 $...$ LaTeX 包裹、或用户写了「答案：2」就匹配不上。
+  // 实测 10 个真实作答场景误判 7 个。改为：先归一化（去 $/空白/括号注释/大小写），
+  // 再按「完全相等 → 短答案包含 → 长推导结尾含结论」三级判定。
+  function normAnsText(s) {
+    return String(s == null ? '' : s)
+      .replace(/\$/g, '')                 // 去 LaTeX 行内包裹符
+      .replace(/\\left|\\right|\\!|\\,/g, '')
+      .replace(/\s+/g, '')                // 去所有空白
+      .replace(/[（(][^（()）]*[）)]/g, '') // 去括号内的补充说明
+      .replace(/^[：:，,。.、]+|[：:，,。.、]+$/g, '')
+      .toLowerCase();
+  }
+  function judgeShortAnswer(v, correct) {
+    var a = normAnsText(v), b = normAnsText(correct);
+    if (!a || !b) return false;
+    if (a === b) return true;                                        // 归一化后完全相等
+    if (a.indexOf(b) >= 0) return true;                              // 用户答案里含标准答案
+    if (b.length <= 12 && a.slice(-24).indexOf(b) >= 0) return true; // 长推导，结尾给出该结论
+    return false;
   }
 
   // 单题复核（思考模式）：AI 深度复核这一题的答案/解析，防幻觉
@@ -24057,17 +24105,22 @@ function bind(el, next) {
     var exam = ((st.sprintData && st.sprintData.mockExams) || []).find(function (e) { return e.id === examId; });
     if (!exam) return;
 
-    // 收集「已写但未判」的解答题（交卷瞬间从 DOM 取最新输入）
+    // 收集「需要 AI 判分」的解答题（交卷瞬间从 DOM 取最新输入）。
+    // 【2026-08-28 修复】原条件 `!(exam.results||[])[qi]` 只看"有没有判过"——但用户一失焦
+    // onblur 就已用兜底判分写入 results，导致 pending 恒为空、AI「按要点判分」从不执行，
+    // 成绩永远来自字符串匹配。改为：凡是填写了内容、且尚未被 AI 判过的题，都交给 AI 重判
+    // （gradedBy==='ai' 的跳过，避免重复交卷反复烧 token）。
     var pending = [];
     document.querySelectorAll('.sp-exam-input[data-exam="' + examId + '"]').forEach(function (inp) {
       var qi = parseInt(inp.getAttribute('data-q'), 10);
       var v = (inp.value || '').trim();
-      if (v && !(exam.results || [])[qi]) {
-        pending.push({ qi: qi, v: v, q: exam.questions[qi] || {}, score: parseInt(inp.getAttribute('data-score'), 10) || 0, correct: (inp.getAttribute('data-correct') || '').trim() });
-      }
+      if (!v) return;
+      var prev = (exam.results || [])[qi];
+      if (prev && prev.gradedBy === 'ai') return;   // 已由 AI 判过，不再重判
+      pending.push({ qi: qi, v: v, q: exam.questions[qi] || {}, score: parseInt(inp.getAttribute('data-score'), 10) || 0, correct: (inp.getAttribute('data-correct') || '').trim() });
     });
     function kwJudge(p) {
-      var isCorrect = p.v && p.correct && p.v.length > 5 && (p.v.indexOf(p.correct) >= 0 || p.correct.indexOf(p.v.slice(0, 20)) >= 0);
+      var isCorrect = judgeShortAnswer(p.v, p.correct);
       return { qi: p.qi, correct: !!isCorrect, score: isCorrect ? p.score : Math.round(p.score * 0.3), comment: '' };
     }
     function finalize() {
@@ -24090,7 +24143,7 @@ function bind(el, next) {
           var dedup = 'mockExam:' + examId + ':' + qi;
           if (s.mistakes.some(function (m) { return m.dedupKey === dedup; })) return;
           s.mistakes.unshift({
-            id: U.uid(), subject: e.subject || 'ctrl', type: 'concept',
+            id: U.uid(), subject: e.subject || 'ctrl', type: inferMistakeType(q, r),
             desc: '【押题卷】' + (q.topicName || ('第' + (qi + 1) + '题')) + '：作答有误',
             stem: q.stem || '', answer: q.answer || '', solution: q.solution || '',
             refId: q.topicName || '', source: 'mock-exam', dedupKey: dedup,
@@ -24132,8 +24185,8 @@ function bind(el, next) {
       } catch (e) { console.warn('[sprint] 押题卷成绩回写 heat 失败', e); }
       viewExam(examId, el);
     }
-    function applyAndFinalize(graded) {
-      graded.forEach(function (g) { recordExamAnswer(examId, g.qi, g.correct, g.score, g.comment || ''); });
+    function applyAndFinalize(graded, gradedBy) {
+      graded.forEach(function (g) { recordExamAnswer(examId, g.qi, g.correct, g.score, g.comment || '', { gradedBy: gradedBy || 'kw' }); });
       finalize();
     }
     if (pending.length && typeof AI !== 'undefined' && AI.configured()) {
@@ -24141,23 +24194,31 @@ function bind(el, next) {
       var float = window.Components && Components.aiFloat ? Components.aiFloat('📤 AI 判分') : null;
       if (float) float.status('⏳ 正在按要点判分 ' + pending.length + ' 道解答题…');
       AI.chatStream('你是考研阅卷老师，按【标准解答】的要点给【考生解答】逐题判分（按要点给部分分）。\n'
-        + '只输出 JSON：{"list":[{"i":题号整数,"score":给分整数,"correct":true或false(得分过半为true),"comment":"一句点评(≤30字,指出关键得失)"}]}。不要多余文字。',
+        + '只输出 JSON：{"list":[{"i":题号整数,"score":给分整数,"correct":true或false(得分过半为true),"comment":"一句点评(≤30字,指出关键得失)"}]}。\n'
+        + '【极重要】i 必须原样照抄我给你的题号数字（我从 0 开始编号，请照抄，不要自己改成 1、2、3）。不要多余文字。',
         pending.map(function (p) {
-          return '题' + p.qi + '［考点 ' + (p.q.topicName || '') + '，满分' + p.score + '］\n考生解答：' + p.v + '\n标准解答：' + (p.q.solution || p.q.answer || '');
+          return '题号' + p.qi + '［考点 ' + (p.q.topicName || '') + '，满分' + p.score + '］\n考生解答：' + p.v + '\n标准解答：' + (p.q.solution || p.q.answer || '');
         }).join('\n\n'), function (txt) { if (float) float.content(txt); }, null, { noThink: true, timeout: 180000 }).then(function (full) {
         var r = AI.extractRobustJSON(full);
         if (float) { float.done(); setTimeout(function () { float.close(); }, 600); }
-        var map = {}; ((r && r.list) || []).forEach(function (x) { map[x.i] = x; });
+        var list = (r && r.list) || [];
+        // 【2026-08-28 容错】AI 常把题号理解成 1-based（把「题号0」当第 1 题）。危险之处在于
+        // 它可能只是**部分**错位命中（AI 返 i=1 恰好等于待判题的 qi=1）→ 第1题静默套用第0题的分数，
+        // 比整批落空更隐蔽。因此不能只看"有没有命中"，而要比较两种映射的命中题数并择优。
+        var strictMap = {}, altMap = {};
+        list.forEach(function (x) { if (x && x.i != null) { strictMap[x.i] = x; altMap[x.i - 1] = x; } });
+        var hitCount = function (m) { var n = 0; pending.forEach(function (p) { if (m[p.qi]) n++; }); return n; };
+        var map = (hitCount(altMap) > hitCount(strictMap)) ? altMap : strictMap;
         applyAndFinalize(pending.map(function (p) {
           var x = map[p.qi];
           return x ? { qi: p.qi, correct: !!x.correct, score: Math.max(0, Math.min(p.score, x.score | 0)), comment: x.comment || '' } : kwJudge(p);
-        }));
+        }), 'ai');
       }).catch(function () {
         if (float) { float.fail('降级为关键词判分'); setTimeout(function () { float.close(); }, 1200); }
-        applyAndFinalize(pending.map(kwJudge));
+        applyAndFinalize(pending.map(kwJudge), 'kw');
       });
     } else {
-      applyAndFinalize(pending.map(kwJudge));
+      applyAndFinalize(pending.map(kwJudge), 'kw');
     }
   }
 
@@ -24439,7 +24500,7 @@ function bind(el, next) {
       + optsHtml
       + '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer;opacity:.7">查看答案与解析</summary><div class="report" style="margin-top:4px;font-size:13px"><b>答案：</b>' + Tex.renderInline(b.answer || '') + '<br><b>解析：</b>' + Tex.renderInline(b.solution || '') + '</div></details>'
       + '<div class="btn-row" style="margin-top:8px">'
-      + '<button class="btn btn-sm btn-primary sp-bank-prac" data-subj="' + b.subject + '" data-name="' + U.esc(b.topicName || (b.stem || '').slice(0, 20)) + '" style="font-size:11px">去练</button>'
+      + '<button class="btn btn-sm btn-primary sp-bank-prac" data-id="' + b.id + '" data-subj="' + b.subject + '" data-name="' + U.esc(b.topicName || (b.stem || '').slice(0, 20)) + '" style="font-size:11px">去练</button>'
       + '<button class="btn btn-sm btn-ghost sp-bank-del" data-id="' + b.id + '" style="font-size:11px">🗑 移出</button>'
       + '</div></div>';
   }
@@ -24470,7 +24531,9 @@ function bind(el, next) {
       document.querySelectorAll('.sp-bank-prac').forEach(function (b2) {
         b2.onclick = function () {
           Modal.close();
-          goPractice(b2.getAttribute('data-subj'), '', b2.getAttribute('data-name'));
+          // 【2026-08-28】带上 bankId，让 AI 变式题拿到完整原题（此前只传考点名）
+          goPractice(b2.getAttribute('data-subj'), '', b2.getAttribute('data-name'),
+            { bankId: b2.getAttribute('data-id') });
         };
       });
       document.querySelectorAll('.sp-bank-del').forEach(function (b2) {
@@ -24514,10 +24577,31 @@ function bind(el, next) {
 
   // ==================== 事件绑定 ====================
   // 去练（跳 AI 测验变式，公共逻辑）
-  function goPractice(subj, id, name) {
+  // ref 为定位信息：{ examId, qi } 押题卷某题 / { bankId } 题库某题。
+  // 【2026-08-28】此前 goPractice 只把「考点名」传过去，AI 变式题拿不到原题内容，
+  // 出的是"同考点的另一道题"而不是"这道题的变式"（昨天只修了错题本入口，这里漏了）。
+  // 改为按 ref 从 Store 取出完整原题，交给 QuizModule.startVariant 拼进提示词。
+  function goPractice(subj, id, name, ref) {
     if (window.QuizModule && QuizModule.startVariant) {
+      var q = null;
+      try {
+        if (ref && ref.bankId) {
+          q = bankList().filter(function (x) { return x.id === ref.bankId; })[0] || null;
+        } else if (ref && ref.examId && ref.qi != null) {
+          var stq = Store.get();
+          var exq = ((stq.sprintData && stq.sprintData.mockExams) || []).filter(function (e) { return e.id === ref.examId; })[0];
+          q = (exq && exq.questions[ref.qi]) || null;
+        }
+      } catch (e) { q = null; }
       App.go('quiz');
-      setTimeout(function () { QuizModule.startVariant({ subject: subj, type: 'concept', desc: name, refId: id || '' }); }, 0);
+      setTimeout(function () {
+        QuizModule.startVariant({
+          subject: subj, type: 'concept', desc: name, refId: id || '',
+          stem: (q && q.stem) || '', options: (q && q.options) || [],
+          answer: (q && q.answer) != null ? q.answer : '', solution: (q && q.solution) || '',
+          trap: (q && q.trap) || ''
+        });
+      }, 0);
     } else { App.go('quiz'); }
   }
   // 当前全量评分行（每日推荐兜底用）
