@@ -23507,18 +23507,32 @@ function bind(el, next) {
   // 打印配置弹窗：答案成页/星级考点标注/留白 三选项（2026-08-21；默认与旧行为一致：无答案页→有答案页为新增默认开）
   function printExam(exam, opts) {
     if (!opts) { openPrintConfig(exam, 'print'); return; }
-    try {
-      var w = window.open('', '_blank');
-      if (!w) { Toast.warn('浏览器拦截了新窗口，请允许弹窗后重试'); return; }
-      var doc = examPrintHtml(exam, opts);
-      w.document.write(doc.html);
-      w.document.close();
-      setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 350);
-    } catch (e) { Toast.warn('打印失败：' + ((e && e.message) || String(e))); }
+    try { openExamPrintWindow(exam, opts, true); }
+    catch (e) { Toast.warn('打印失败：' + ((e && e.message) || String(e))); }
   }
-  // 本地保存下载：生成自包含 HTML 文件（公式已渲染），可随时打开再打印
+  // 打开渲染后的试卷窗口（打印 / PDF 另存 共用），autoPrint=true 立即唤起系统打印对话框
+  function openExamPrintWindow(exam, opts, autoPrint) {
+    var w = window.open('', '_blank');
+    if (!w) { Toast.warn('浏览器拦截了新窗口，请允许弹窗后重试'); return null; }
+    var doc = examPrintHtml(exam, opts);
+    w.document.write(doc.html);
+    w.document.close();
+    if (autoPrint) setTimeout(function () { try { w.focus(); w.print(); } catch (e) {} }, 350);
+    return w;
+  }
+  // 本地保存下载：自包含 HTML（公式已渲染，可随时打开再打印）或 PDF（打印对话框「另存为 PDF」）
   function downloadExam(exam, opts) {
     if (!opts) { openPrintConfig(exam, 'download'); return; }
+    // 【2026-08-28】PDF 选项：复用同一份已渲染 HTML + 系统「另存为 PDF」，排版/中文/公式与打印完全一致；
+    // 不引入 jsPDF/html2canvas（对中文与自研 LaTeX 公式渲染有坑、体积大、离线不稳）。
+    if (opts.format === 'pdf') {
+      try {
+        if (openExamPrintWindow(exam, opts, true)) {
+          Toast.show('📄 请在打印对话框把「目标打印机」选为「另存为 PDF」，即可导出 PDF', 'info', 5000);
+        }
+      } catch (e) { Toast.warn('导出 PDF 失败：' + ((e && e.message) || String(e))); }
+      return;
+    }
     try {
       var doc = examPrintHtml(exam, opts);
       var blob = new Blob([doc.html], { type: 'text/html;charset=utf-8' });
@@ -23536,6 +23550,10 @@ function bind(el, next) {
     Modal.open({
       title: mode === 'download' ? '⬇️ 下载押题卷' : '🖨 打印押题卷', dismissable: true,
       html: '<div class="form-col">'
+        + (mode === 'download' ? '<label class="fld fld-full"><span>下载格式</span><select id="pp-format" class="input">'
+        + '<option value="html"' + (printPref.format !== 'pdf' ? ' selected' : '') + '>📄 HTML（双击即开，二次打印最方便）</option>'
+        + '<option value="pdf"' + (printPref.format === 'pdf' ? ' selected' : '') + '>📕 PDF（在打印对话框选「另存为 PDF」导出）</option>'
+        + '</select></label>' : '')
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="pp-ans"' + (printPref.answersPage ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">📄 答案单独成页（卷末附答案+解析，做题时互不干扰）</span></label>'
         + '<label class="fld fld-full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="pp-meta"' + (printPref.withMeta ? ' checked' : '') + ' style="margin:0;width:auto"><span style="font-size:13px">⭐ 标注星级/考点（题号旁显示难度星级与考点）</span></label>'
         + '<label class="fld fld-full"><span>留白作答区</span><select id="pp-blank" class="input">'
@@ -23543,12 +23561,13 @@ function bind(el, next) {
         + '<option value="large"' + (printPref.blank === 'large' ? ' selected' : '') + '>加大留白（每大题 320px）</option>'
         + '<option value="none"' + (printPref.blank === 'none' ? ' selected' : '') + '>不留白（紧凑版）</option>'
         + '</select></label>'
-        + '<div class="muted-sm">A4 排版 · 公式已渲染为离线样式 · 打印时选「A4 / 默认边距」即可</div>'
+        + '<div class="muted-sm">A4 排版 · 公式已渲染为离线样式 · 打印时选「A4 / 默认边距」即可<span id="pp-format-hint"></span></div>'
         + '</div>',
       actions: [
         { label: '取消', kind: 'btn-ghost' },
         { label: mode === 'download' ? '⬇️ 下载' : '🖨 打印', kind: 'btn-primary', onClick: function (close) {
           printPref = {
+            format: (document.getElementById('pp-format') || {}).value || 'html',
             answersPage: !!(document.getElementById('pp-ans') || {}).checked,
             withMeta: !!(document.getElementById('pp-meta') || {}).checked,
             blank: (document.getElementById('pp-blank') || {}).value || 'auto'
@@ -23559,6 +23578,12 @@ function bind(el, next) {
         } }
       ]
     });
+    // 下载模式：切换格式实时更新操作提示
+    var fmtSel = document.getElementById('pp-format');
+    if (fmtSel) fmtSel.onchange = function () {
+      var hint = document.getElementById('pp-format-hint');
+      if (hint) hint.textContent = fmtSel.value === 'pdf' ? '。📕 PDF：点击「下载」后会在新窗口唤起打印对话框，把目标打印机选「另存为 PDF」即得 PDF 文件' : '';
+    };
   }
   function qn_zh(exam) {
     var qn = (exam.questions || []).length;
