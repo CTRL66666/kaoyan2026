@@ -20869,7 +20869,17 @@ function bind(el, next) {
     if (!cfgBp.types.length) msgs.push('至少保留一行题型');
     warn.textContent = msgs.join('；');
     var sum = document.getElementById('bp-summary');
-    if (sum) sum.textContent = bpSummaryText(normalizeBlueprint(cfgBp, cfgBp.subject));
+    // 【2026-08-28 修复】摘要此前恒显示 std 基准题量——题量选「精简/强化卷」时蓝本区数字纹丝不动，
+    // 与题量 select 旁的联动预览互相打架，用户以为题量没生效。改为显示按当前题量档缩放后的实际值。
+    if (sum) sum.textContent = bpSummaryEffectiveText(normalizeBlueprint(cfgBp, cfgBp.subject), cfgCount);
+  }
+  // 蓝本摘要（题量档生效视图）：按当前题量档缩放出「这张卷实际会出多少题/限时多少」，
+  // 非 std 档注明基准，让「蓝本摘要 ↔ 题量预览 ↔ 实际出卷」三处数字一致。
+  function bpSummaryEffectiveText(bp, cnt) {
+    var eff = volumeBp(bp, cnt);
+    var note = cnt === 'lite' ? '（精简卷：基准 ' + bpQuestionCount(bp) + ' 题缩放）'
+      : cnt === 'full' ? '（强化卷：基准 ' + bpQuestionCount(bp) + ' 题缩放）' : '';
+    return bpSummaryText(eff) + note;
   }
   // 蓝本编辑器事件绑定（结构变化走 refreshBlueprintZone，输入变化走 updateBlueprintWarn）
   function bindBlueprintEditor(subj) {
@@ -21547,6 +21557,8 @@ function bind(el, next) {
       var v = volumeDesc(baseBp, cfgCount);
       var el2 = document.getElementById('sp-cfg-count-preview');
       if (el2) el2.innerHTML = '<span style="color:var(--accent,#1677ff)">' + v.q + ' 题</span> · 限时 ' + v.time + ' 分';
+      // 【2026-08-28】题量档变化时同步刷新蓝本摘要（缩放后的实际题量/限时），两处数字不再打架
+      updateBlueprintWarn();
     }
     Modal.open({
       title: '📝 生成押题卷', dismissable: true, wide: true,
@@ -24872,6 +24884,7 @@ function bind(el, next) {
     examPrintHtml: examPrintHtml,
     downloadExam: downloadExam,
     variantOfQuestion: variantOfQuestion,
+    bpSummaryEffectiveText: bpSummaryEffectiveText,
     openExamConfig: openExamConfig,
     rushPlan: rushPlan,
     // 本轮新增：出卷蓝本 / 离线组卷 / 成绩趋势 / 打印配置
