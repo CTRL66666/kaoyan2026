@@ -94,6 +94,46 @@ const QS = [];
 // 已出合格题目（用于「停止并保存」——取消时把已完成的题攒成 partial 卷）
 let SAVED = [];
 
+// ---------- 已出题目的持续落盘（partial.json） ----------
+// 【2026-08-29 重构】旧实现的死结：已出题目只活在进程内存 SAVED 里，Gist 上没有任何题目内容
+// （status.json.qs 只是状态摘要，stem 被截断到 140 字符，无法还原成题）。于是「停止并保存」
+// 完全依赖本进程存活——可用户恰恰是在「出卷失败」（进程已走 error 分支退出）后才去点保存，
+// 此时没人读 cancel.json、没人写 result.json，本地轮询 40s 永远等不到，题目随进程永久丢失。
+//
+// 改为：每出好一题，立即把「已完成题目全集」增量写进 Gist 的 partial.json。
+// 题目不再只活在内存：进程崩了/失败了/被取消了，之前落盘的题仍在 Gist 上，
+// 客户端可自行读取组装成部分卷（CloudJob.collectPartial），完全不需要本进程配合。
+//
+// 两个落盘时机：
+//   ① 出题阶段每题完成后（初稿，reviewed=false）
+//   ② 终检通过后、写 result.json 之前（终稿，reviewed=true）
+//   ② 很关键：写 result.json 是整条链路最后一步、文件最大、最容易失败，
+//      落盘终稿后即使这一步挂了，客户端仍能抢救到「经过审查的完整卷」而非初稿。
+let _flushChain = Promise.resolve();
+let _partialCount = 0;   // 已成功落盘的题数（写进 status.json.savedCount，即「可抢救数量」）
+async function flushPartial(questions, opts) {
+  opts = opts || {};
+  const list = (questions || []).filter(q => q && q.stem);
+  _flushChain = _flushChain.then(async () => {
+    const payload = {
+      count: list.length,
+      reviewed: !!opts.reviewed,
+      subject: opts.subject || 'math',
+      updatedAt: new Date().toISOString(),
+      questions: list
+    };
+    try {
+      await ghRetry('PATCH', '/gists/' + GIST_ID, { files: { 'partial.json': { content: JSON.stringify(payload) } } }, 3);
+      _partialCount = list.length;
+      log('💾 落盘 partial.json：' + list.length + ' 题' + (opts.reviewed ? '（终稿·已过审）' : '（初稿）'));
+    } catch (e) {
+      // 落盘失败绝不中断出题主流程：最坏退回「这一题没落盘」，其余题目继续出
+      log('!! partial.json 落盘失败（不中断出卷）：', e.message);
+    }
+  }).catch(() => {});
+  return _flushChain;
+}
+
 // setStatus 串行化：多 worker 并发完成时 PATCH 同一 gist 文件，链式排队避免互踩/乱序
 let _stChain = Promise.resolve();
 function setStatus(status, stage, msg, progress) {
@@ -102,7 +142,9 @@ function setStatus(status, stage, msg, progress) {
 }
 async function _setStatus(status, stage, msg, progress) {
   pushLog((stage ? '[' + stage + '] ' : '') + (msg || ''));
-  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) } } };
+  // savedCount = 已成功落盘到 partial.json 的题数（= 客户端随时能抢救走的数量），
+  // 让本地无需额外拉 Gist 就知道「现在有几题可抢救」，任务行可直接显示入口。
+  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v5' }) } } };
   try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
   catch (e) {
     const hint = (e && e.status === 404)
@@ -505,6 +547,9 @@ function braceBalanced(s) {
         QS[i].ans = String(out.answer || '').slice(0, 60);
         genDone++;
         SAVED.push(out);   // 合格题攒进 SAVED，「停止并保存」时打包成 partial 卷
+        // 每题完成即落盘：一题要 30s~2min，写一次 Gist 不到 1s，代价可忽略，
+        // 换来的是「进程随时可死、已出的题永不丢」。
+        await flushPartial(SAVED);
         pushLog('✅ 第' + (i + 1) + '题出好了 · ' + (out.topicName || '?') + ' · ★' + (out.star || '?') + '（' + genDone + '/' + genTotal + '）');
         await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
       }
@@ -599,9 +644,13 @@ function braceBalanced(s) {
 
     // ⑧ 收卷回写
     pushLog('📦 终检通过：' + questions.length + ' 题 · 总分 ' + totalScore + ' · 即将回写');
+    // 先落盘终稿再写 result.json：这一步是整条链路的最后一跳、文件最大、最容易失败
+    // （Gist 限额/网络/权限都可能在这一刻报错），落盘后即使它挂了，
+    // 客户端也能从 partial.json 抢救出「已过总工审查的完整卷」，而不是退回初稿。
+    await flushPartial(questions, { reviewed: true, subject: subj });
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
       'result.json': { content: JSON.stringify(exam) },
-      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v3' }) }
+      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v5' }) }
     } });
     log('✅ 完成');
   } catch (e) {
@@ -611,6 +660,9 @@ function braceBalanced(s) {
       const cands = (SAVED || []).filter(q => q && q.stem);
       try {
         if (wantSave && cands.length) {
+          // 取消路径也补一次落盘：把「最后一次 flush 之后才完成」的题补进 partial.json，
+          // 保证 result.json 与 partial.json 内容一致（客户端优先用前者，后者作兜底）。
+          await flushPartial(cands);
           const partial = {
             title: '☁️ 云端押题卷（部分 · ' + cands.length + ' 题）',
             subject: (function () {
@@ -623,7 +675,7 @@ function braceBalanced(s) {
           };
           await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
             'result.json': { content: JSON.stringify(partial) },
-            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v4' }) }
+            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v5' }) }
           } });
           log('⏹ 已停止并保存', cands.length, '题');
         } else {
@@ -641,6 +693,11 @@ function braceBalanced(s) {
       return;
     }
     log('❌ 失败：', e.message);
+    // 崩溃前的最后一次抢救：把内存里还没落盘的题尽力写出去。
+    // 这是本次重构的核心场景——执行器失败退出后，本地仍能从 partial.json 捞回已出的题，
+    // 而不是像旧实现那样「进程一死，题目全没，本地点多少次保存都没用」。
+    // SAVED 定义在 try 块之外，catch 里可安全引用（gist/subj 是 try 内 const，不可引用）。
+    try { await flushPartial(SAVED); } catch (e0) { log('!! 失败前抢救落盘异常：', e0.message); }
     try { await setStatus('error', '', '云端执行失败：' + ((e && e.message) || e)); } catch (e2) {}
     process.exitCode = 1;
   }
