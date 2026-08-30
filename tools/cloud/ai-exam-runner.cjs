@@ -82,10 +82,25 @@ async function ghRetry(method, path, body, tries = 4) {
   }
 }
 // ---------- 过程事件日志（写进 status.json.log，前端 aiFloat 浮窗实时可视化） ----------
+/* 【H5，2026-08-30】运行日志：带级别(level)与耗时(dur)，并在失败时单独落盘 log.json。
+ * 为什么日志要带级别：出卷跑 10~20 分钟、日志上百条，失败后用户只想看「哪一刻开始出问题」，
+ * 平铺文本没法筛选。带级别后客户端可以直接定位到最后一条 error/warn。
+ * 为什么还要单独落盘 log.json：日志一直挂在 status.json 里，而 status.json 是每次状态变更
+ * 全量覆写——如果最后一次写 status 恰好失败（网络/权限/体积），日志就跟着一起丢了，
+ * 那正是最需要看日志的时刻。所以失败分支额外把完整日志写一份独立的 log.json。 */
 const RUN_LOG = [];
-function pushLog(msg) {
-  RUN_LOG.push({ t: new Date().toISOString(), msg: String(msg) });
-  if (RUN_LOG.length > 50) RUN_LOG.splice(0, RUN_LOG.length - 50);   // 只留最近 50 条
+function pushLog(msg, level, dur) {
+  const lv = (level === 'warn' || level === 'error') ? level : 'info';
+  RUN_LOG.push({ t: new Date().toISOString(), lv: lv, msg: String(msg), dur: (typeof dur === 'number' ? dur : null) });
+  if (RUN_LOG.length > 120) RUN_LOG.splice(0, RUN_LOG.length - 120);   // 只留最近 120 条
+}
+// 失败时把完整日志单独写一份（不受 status.json 覆写失败影响）
+async function writeLogFile(extra, jobId) {
+  try {
+    const payload = { runnerVer: 'v6', jobId: jobId || '', at: new Date().toISOString(), error: extra || null, entries: RUN_LOG };
+    await ghRetry('PATCH', '/gists/' + GIST_ID, { files: { 'log.json': { content: JSON.stringify(payload) } } }, 2);
+    log('📜 已落盘 log.json（' + RUN_LOG.length + ' 条）');
+  } catch (e) { log('!! log.json 落盘失败（不影响主流程）：', e.message); }
 }
 
 // ---------- 逐题状态跟踪（写进 status.json.qs，前端浮窗渲染逐题卡片墙） ----------
@@ -134,6 +149,18 @@ async function flushPartial(questions, opts) {
   return _flushChain;
 }
 
+/* 【H1 断点续跑，2026-08-30】读回已落盘的 partial.json。
+ * 续跑的前提是「之前出的题还在」——这正是 2026-08-29 那次落盘重构换来的能力：
+ * 题目不再只活在进程内存里，进程死了题还在 Gist 上，新进程可以直接接着出。 */
+function readPartialJson(gist) {
+  try {
+    const f = gist && gist.files && gist.files['partial.json'];
+    if (!f) return null;
+    if (f.truncated) return { __truncated: true };
+    return JSON.parse(f.content || '{}');
+  } catch (e) { log('!! partial.json 解析失败：', e.message); return null; }
+}
+
 // setStatus 串行化：多 worker 并发完成时 PATCH 同一 gist 文件，链式排队避免互踩/乱序
 let _stChain = Promise.resolve();
 function setStatus(status, stage, msg, progress) {
@@ -144,7 +171,7 @@ async function _setStatus(status, stage, msg, progress) {
   pushLog((stage ? '[' + stage + '] ' : '') + (msg || ''));
   // savedCount = 已成功落盘到 partial.json 的题数（= 客户端随时能抢救走的数量），
   // 让本地无需额外拉 Gist 就知道「现在有几题可抢救」，任务行可直接显示入口。
-  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v5' }) } } };
+  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v6' }) } } };
   try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
   catch (e) {
     const hint = (e && e.status === 404)
@@ -211,7 +238,15 @@ function aiCall(messages, opts = {}) {
 }
 async function aiRetry(messages, opts, tries = 3) {
   for (let i = 0; ; i++) {
-    try { return await aiCall(messages, opts); }
+    try {
+      // 【H5】只给「慢调用」打点：每题都记耗时会把日志淹没，而出卷卡住时用户真正想知道的
+      // 就是「是哪一次调用特别慢」。阈值 30s（正常出题 10~40s，超 60s 基本可判定异常）。
+      const _t0 = Date.now();
+      const r = await aiCall(messages, opts);
+      const _dur = Date.now() - _t0;
+      if (_dur >= 30000) pushLog('🐢 AI 调用较慢：' + Math.round(_dur / 1000) + 's' + (_dur >= 60000 ? '（异常，可能是思考模型在长推理）' : ''), 'warn', _dur);
+      return r;
+    }
     catch (e) {
       const m = (e && e.message) || '';
       const sm = m.match(/^AI HTTP (\d{3})/);
@@ -234,11 +269,13 @@ async function aiRetry(messages, opts, tries = 3) {
       // 429 限流：退避加倍重试（限流是暂时的，多等一会儿比失败好）
       if (code === 429 && i < tries - 1) {
         log('AI 限流 429，退避', 15 * (i + 1), 's 后重试');
+        pushLog('⏳ AI 限流 429，退避 ' + (15 * (i + 1)) + 's 后重试（第 ' + (i + 1) + ' 次）', 'warn');
         await sleep(15000 * (i + 1));
         continue;
       }
       if (i >= tries - 1) throw e;
       log('AI 调用失败重试', i + 1, e.message);
+      pushLog('🔁 AI 调用失败，' + (3 * (i + 1)) + 's 后重试（第 ' + (i + 1) + '/' + (tries - 1) + ' 次）：' + String(e.message).slice(0, 80), 'warn');
       await sleep(3000 * (i + 1));
     }
   }
@@ -462,6 +499,7 @@ function braceBalanced(s) {
   // 若在 catch 里直接引用 gist/subj 会 ReferenceError 崩进程 → partial 卷写不出去。
   let JOB_GIST = null;
   let JOB_SUBJ = 'math';
+  let JOB_JOBID = '';   // 供 catch 里写 log.json 使用（job 是 try 内 const，catch 取不到）
   try {
     // ① 读任务
     let gist;
@@ -473,9 +511,30 @@ function braceBalanced(s) {
     if (!gist || !gist.files || !gist.files['job.json']) throw new Error('Gist 缺 job.json');
     JOB_GIST = gist;
     const job = JSON.parse(gist.files['job.json'].content);
+    JOB_JOBID = String(job.jobId || '');
     const stNow = gist.files['status.json'] ? JSON.parse(gist.files['status.json'].content) : {};
     if (stNow.status === 'canceled') { log('任务已被用户取消，直接退出'); return; }
     const prefs = job.prefs || {};
+    /* 【H1 断点续跑】job.resume 存在 → 从 partial.json 取回上次已出的题，只补缺口。
+     * 为什么值得做：一次出卷 10~20 分钟、几十次 AI 调用，若第 16 题偶发网络失败就整卷作废，
+     * 前面 15 题白烧的 token 与时间比这一题贵得多。续跑把「失败重来」变成「接着出」。 */
+    let resumeQs = [];
+    let resumeNeed = 0;
+    const resuming = !!(job.resume && job.resume.target);
+    if (resuming) {
+      const pj = readPartialJson(gist);
+      if (pj && pj.__truncated) throw new Error('partial.json 过大已被截断，无法续跑（请重新出卷）');
+      resumeQs = ((pj && pj.questions) || []).filter(q => q && q.stem);
+      if (!resumeQs.length) {
+        log('续跑：partial.json 里没有可用题目，退回全新出卷');
+        pushLog('⚠️ 续跑未找到已落盘题目，退回全新出卷', 'warn');
+      } else {
+        SAVED = resumeQs.slice();
+        _partialCount = resumeQs.length;
+        resumeNeed = Math.max(0, (job.resume.target || 0) - resumeQs.length);
+        pushLog('▶️ 续跑模式：已落盘 ' + resumeQs.length + ' 题，目标 ' + job.resume.target + ' 题，还需补 ' + resumeNeed + ' 题');
+      }
+    }
     // AI 配置：优先任务自带的 prefs.ai（本地工具写入 secret Gist），回退 repo secrets
     JOB_AI = prefs.ai || null;
     // 思考模式：结构化 JSON 出卷默认关闭思考（思考模型会把 token 烧光致空正文、卡死）；
@@ -511,23 +570,47 @@ function braceBalanced(s) {
     }
 
     // ② 总工规划
-    await setStatus('running', 'planning', '总工程师正在规划蓝图…', 5);
-    const plan = await aiJson(
-      [{ role: 'system', content: plannerSystem(subj, prefs) },
-       { role: 'user', content: '请规划本卷蓝图。' }],
-      { maxTokens: 8000 });
-    if (!plan || !Array.isArray(plan.questions) || !plan.questions.length) throw new Error('蓝图规划失败：无 questions');
+    const isResume = resuming && resumeQs.length > 0;
+    await setStatus('running', 'planning', isResume ? ('续跑规划中…（已有 ' + resumeQs.length + ' 题，补 ' + resumeNeed + ' 题）') : '总工程师正在规划蓝图…', 5);
+    let plan;
+    if (isResume && resumeNeed <= 0) {
+      // 题已够：跳过规划与出题，直接进入终检打包（单纯把上次落盘的题走完审查流程）
+      plan = { title: null, timeLimit: (job.resume && job.resume.timeLimit) || 120, questions: [] };
+      pushLog('✅ 题量已满足（' + resumeQs.length + '/' + job.resume.target + '），跳过出题直接终检');
+    } else if (isResume) {
+      plan = await aiJson(
+        [{ role: 'system', content: plannerSystem(subj, prefs) },
+         { role: 'user', content: '【续跑任务】本卷此前已出好 ' + resumeQs.length + ' 题，还缺 ' + resumeNeed + ' 题。\n'
+           + '已有题目涉及的考点与设问角度如下——请只规划**剩余的 ' + resumeNeed + ' 题**，'
+           + '严禁重复已有考点与设问角度（否则用户会拿到两道雷同的题）：\n'
+           + resumeQs.map((q, i) => (i + 1) + '. ' + String(q.topicName || '?') + '：' + String(q.stem || '').slice(0, 60)).join('\n')
+           + '\n只输出 JSON，questions 数组长度必须恰好为 ' + resumeNeed + '。' }],
+        { maxTokens: 8000 });
+    } else {
+      plan = await aiJson(
+        [{ role: 'system', content: plannerSystem(subj, prefs) },
+         { role: 'user', content: '请规划本卷蓝图。' }],
+        { maxTokens: 8000 });
+    }
+    // 续跑且题已够时 questions 允许为空；其余情况空蓝图就是失败
+    if (!plan || !Array.isArray(plan.questions)) throw new Error('蓝图规划失败：返回格式不对');
+    if (!plan.questions.length && !(isResume && resumeNeed <= 0)) throw new Error('蓝图规划失败：无 questions');
     log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');
     pushLog('🗺 蓝图《' + (plan.title || '未命名卷') + '》规划完成：共 ' + plan.questions.length + ' 题 · 限时 ' + (plan.timeLimit || 120) + ' 分钟');
     plan.questions.forEach((pq, i) => pushLog('　第' + (i + 1) + '题 ' + (pq.topicName || '?') + ' · ' + (pq.type || '?') + ' · ★' + (pq.star || '?')));
     // 初始化逐题状态墙（浮窗卡片数据源）
-    plan.questions.forEach((pq, i) => QS.push({ i: i + 1, topic: String(pq.topicName || '?').slice(0, 30), star: pq.star || '?', type: pq.type || '?', score: pq.score || 5, st: 'wait' }));
+    // 续跑时先为「上次已落盘的题」占位（st=done + resumed 标记），浮窗一眼能看出哪些是接着出的
+    if (isResume) {
+      resumeQs.forEach((q, i) => QS.push({ i: i + 1, topic: String(q.topicName || '?').slice(0, 30), star: q.star || '?', type: q.type || '?', score: q.score || 5,
+        st: 'done', resumed: true, stem: String(q.stem || '').slice(0, 140), ans: String(q.answer || '').slice(0, 60) }));
+    }
+    plan.questions.forEach((pq, i) => QS.push({ i: resumeQs.length + i + 1, topic: String(pq.topicName || '?').slice(0, 30), star: pq.star || '?', type: pq.type || '?', score: pq.score || 5, st: 'wait' }));
     await setStatus('running', 'generating', '并发出题中… 0/' + plan.questions.length, 10);
 
     // ③ 并发出题池
     let genDone = 0;
     const genTotal = plan.questions.length;
-    let questions = await pool(plan.questions, 4, async (pq, i) => {
+    let questions = genTotal ? await pool(plan.questions, 4, async (pq, i) => {
       const ci = await checkCancel();
       if (ci && ci.canceled) throw new CancelError('cancel');
       QS[i].st = 'run';
@@ -554,9 +637,15 @@ function braceBalanced(s) {
         await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
       }
       return out;
-    });
+    }) : [];   // 续跑且题量已够时 plan.questions 为空 → 不出新题，直接拿已落盘的题进终检
     // 池结束后：仍处 run 状态的题 = 生成失败或取消（pool 吞掉了异常）
     QS.forEach(q => { if (q.st === 'run') { q.st = 'fail'; q.err = '生成失败'; } });
+    // 【H1】续跑：把上次已落盘的题并到新出的题前面，构成完整卷
+    if (isResume) {
+      const fresh = questions.filter(q => q && q.stem && !q.__err && !q.__canceled);
+      questions = resumeQs.concat(fresh);
+      pushLog('🔗 续跑合并：' + resumeQs.length + ' 题（已有） + ' + fresh.length + ' 题（新出） = ' + questions.length + ' 题');
+    }
     await cancelCheckpoint();   // 出题阶段完成 → 检查取消（已出 SAVED 题可保存）
 
     // ④ 蓝本硬校验（纯代码）：坏题先标记，交由审查后统一重写
@@ -650,7 +739,7 @@ function braceBalanced(s) {
     await flushPartial(questions, { reviewed: true, subject: subj });
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
       'result.json': { content: JSON.stringify(exam) },
-      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v5' }) }
+      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v6' }) }
     } });
     log('✅ 完成');
   } catch (e) {
@@ -675,7 +764,7 @@ function braceBalanced(s) {
           };
           await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
             'result.json': { content: JSON.stringify(partial) },
-            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v5' }) }
+            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v6' }) }
           } });
           log('⏹ 已停止并保存', cands.length, '题');
         } else {
@@ -698,6 +787,10 @@ function braceBalanced(s) {
     // 而不是像旧实现那样「进程一死，题目全没，本地点多少次保存都没用」。
     // SAVED 定义在 try 块之外，catch 里可安全引用（gist/subj 是 try 内 const，不可引用）。
     try { await flushPartial(SAVED); } catch (e0) { log('!! 失败前抢救落盘异常：', e0.message); }
+    // 【H5】先把完整日志单独落盘，再写 error 状态：
+    // 万一写 status 这一步也失败，日志已经在 log.json 里，客户端仍能看到「AI 在哪一步挂的」。
+    pushLog('❌ 执行失败：' + String((e && e.message) || e).slice(0, 200), 'error');
+    try { await writeLogFile(String((e && e.message) || e), JOB_JOBID); } catch (eL) {}
     try { await setStatus('error', '', '云端执行失败：' + ((e && e.message) || e)); } catch (e2) {}
     process.exitCode = 1;
   }
