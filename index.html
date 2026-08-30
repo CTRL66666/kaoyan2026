@@ -8623,6 +8623,14 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
     var out = '', inStr = false, esc = false, stack = [];
     for (var k = 0; k < s.length; k++) {
       var c = s.charAt(k);
+      // 【2026-08-30】字符串内的裸控制字符必须就地转义/丢弃——否则补齐后的结果
+      // JSON.parse 仍报 "Bad control character"（方法卡生成实测踩坑：AI 输出值内含裸换行）
+      if (inStr && !esc) {
+        if (c === '\n') { out += '\\n'; continue; }
+        if (c === '\r') { out += '\\r'; continue; }
+        if (c === '\t') { out += '\\t'; continue; }
+        if (c < ' ') continue;   // 其余控制字符直接丢弃
+      }
       out += c;
       if (esc) { esc = false; continue; }
       if (c === '\\') { esc = true; continue; }
@@ -8736,7 +8744,57 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         if (mm) fields[p[0]] = (p[0] === 'options') ? mm[1] : mm[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t');
       });
       // 如果捞到了关键字段就返回，否则抛出原始错误
-      if (fields.w || fields.word || fields.question || fields.stem) return fields;
+      // 【2026-08-30 泛化】旧实现只认单词本/出题字段，方法卡（subject/title/recognize/
+      // steps/pitfalls/verify）写得再完整也救不回 →「建立方法卡」6 层全败。新增三层捞：
+      // ② 泛化字符串字段（任意 "key":"value"，LaTeX 转义安全还原）
+      // ③ 泛化数值字段（examFreq 等）
+      // ④ 泛化数组字段：对象数组走 salvageObjects（steps 截断也能捞回前几步），
+      //    字符串数组逐项正则（recognize/pitfalls/verify/tags 截断捞已完整的项）。
+      // 接受条件放宽为「捞到任一数组字段 或 ≥3 个字段」——最终质量由调用方归一化裁决
+      // （如 normalizePlaybook 要求至少 1 个带 name 的步骤），兜底层不越权放垃圾。
+      var reStrG = /"([A-Za-z_$][\w$]*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g, msG;
+      while ((msG = reStrG.exec(str)) !== null) {
+        if (fields[msG[1]] !== undefined) continue;
+        try { fields[msG[1]] = JSON.parse('"' + msG[2] + '"'); } catch (e) { fields[msG[1]] = msG[2]; }
+      }
+      var reNumG = /"([A-Za-z_$][\w$]*)"\s*:\s*(\d+(?:\.\d+)?)/g;
+      while ((msG = reNumG.exec(str)) !== null) {
+        if (fields[msG[1]] === undefined) fields[msG[1]] = parseFloat(msG[2]);
+      }
+      var reArrG = /"([A-Za-z_$][\w$]*)"\s*:\s*\[/g;
+      while ((msG = reArrG.exec(str)) !== null) {
+        if (fields[msG[1]] !== undefined) continue;
+        var segG = str.slice(msG.index + msG[0].length - 1, msG.index + msG[0].length + 4000);
+        // 界定数组真实终点：字符串感知地找深度 0 的 ']'，防止逐项正则越过数组
+        // 把后续字段的内容也捞进来（污染recognize/steps——2026-08-30 测试踩坑）。
+        // 找不到（被截断）则保持整段，尽量多捞。
+        (function () {
+          var dG = 0, sG = false, eG = false, endG = -1;
+          for (var g = 1; g < segG.length; g++) {
+            var cg = segG.charAt(g);
+            if (sG) {
+              if (eG) { eG = false; continue; }
+              if (cg === '\\') { eG = true; continue; }
+              if (cg === '"') sG = false;
+              continue;
+            }
+            if (cg === '"') { sG = true; continue; }
+            if (cg === '[') dG++;
+            else if (cg === ']') { if (dG === 0) { endG = g; break; } dG--; }
+          }
+          if (endG >= 0) segG = segG.slice(0, endG);
+        })();
+        var objsG = salvageObjects(segG);
+        if (objsG.length) { fields[msG[1]] = objsG; continue; }
+        var itemsG = [], reItemG = /"((?:[^"\\]|\\.)*)"/g, miG;
+        while ((miG = reItemG.exec(segG)) !== null && itemsG.length < 12) {
+          try { itemsG.push(JSON.parse('"' + miG[1] + '"')); } catch (e2) { itemsG.push(miG[1]); }
+        }
+        if (itemsG.length) fields[msG[1]] = itemsG;
+      }
+      var hasArrG = false;
+      Object.keys(fields).forEach(function (k) { if (Array.isArray(fields[k])) hasArrG = true; });
+      if (hasArrG || Object.keys(fields).length >= 3) return fields;
       fail(6, '正则捞值未命中关键字段');
     }
 
@@ -11714,8 +11772,11 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
 
       var a = AI();
       var p = a.chatJSON
-        ? a.chatJSON(genSystem(ctx), '请为这类题生成方法卡。')
-        : a.chatStream(genSystem(ctx), '请为这类题生成方法卡。', null, null, { noThink: true, ctx: 'ml.ensure' })
+        // 【2026-08-30 修复】chatJSON 必须带 ctx='insp.gen'：走统一思考决策链（该功能默认不思考）。
+        // 旧写法无 ctx → 全局思考开关开着时这里也思考，reasoning 吃掉输出预算 → 方法卡被截断
+        // → 6 层 JSON 提取全败（「建立方法卡失败」的帮凶之一）。chatStream 兜底路径同步对齐。
+        ? a.chatJSON(genSystem(ctx), '请为这类题生成方法卡。', null, { ctx: 'insp.gen' })
+        : a.chatStream(genSystem(ctx), '请为这类题生成方法卡。', null, null, { ctx: 'insp.gen' })
             .then(function (full) { return a.extractRobustJSON(full || ''); });
 
       p.then(function (raw) {
