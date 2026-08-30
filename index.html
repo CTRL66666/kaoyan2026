@@ -11771,17 +11771,26 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
       }
 
       var a = AI();
-      var p = a.chatJSON
-        // 【2026-08-30 修复】chatJSON 必须带 ctx='insp.gen'：走统一思考决策链（该功能默认不思考）。
-        // 旧写法无 ctx → 全局思考开关开着时这里也思考，reasoning 吃掉输出预算 → 方法卡被截断
-        // → 6 层 JSON 提取全败（「建立方法卡失败」的帮凶之一）。chatStream 兜底路径同步对齐。
-        ? a.chatJSON(genSystem(ctx), '请为这类题生成方法卡。', null, { ctx: 'insp.gen' })
-        : a.chatStream(genSystem(ctx), '请为这类题生成方法卡。', null, null, { ctx: 'insp.gen' })
-            .then(function (full) { return a.extractRobustJSON(full || ''); });
+      // 【2026-08-30 二次修复】必须显式 noThink:true：决策链里「全局思考开关」压过 ctx 默认值
+      // （链序：单模块配置 > 显式 noThink > 局部 think > 全局开关 > ctx 默认），只传 ctx 挡不住
+      // 全局思考 → reasoning 挤占输出预算 → 方法卡被截断 → 缺 steps → normalizePlaybook 拒收
+      // →「格式不合格」全灭。显式 noThink 仍可被「设置→单模块 AI 模式」的 think 覆盖（链序①最高）。
+      function run(userText, isRetry) {
+        var p = a.chatJSON
+          ? a.chatJSON(genSystem(ctx), userText, null, { ctx: 'insp.gen', noThink: true })
+          : a.chatStream(genSystem(ctx), userText, null, null, { ctx: 'insp.gen', noThink: true })
+              .then(function (full) { return a.extractRobustJSON(full || ''); });
 
-      p.then(function (raw) {
-        var pb = Insp().normalizePlaybook(raw, ctx.subject || 'math');
-        if (!pb) { if (!opts.silent) window.Toast && Toast.warn('AI 返回的方法卡格式不合格，已放弃入库（不会污染方法库）'); resolve(null); return; }
+        p.then(function (raw) {
+          var pb = Insp().normalizePlaybook(raw, ctx.subject || 'math');
+          if (!pb) {
+            // 不规范（多为截断缺 steps）→ 自动压缩重试一次，仍失败才放弃
+            if (!isRetry) {
+              run(userText + '\n【重试注意】上次 JSON 不完整（疑似被截断）。请压缩每条字数（do≤25字/tip≤20字），确保 steps 4-7 步与全部字段一次性完整输出。', true);
+              return;
+            }
+            if (!opts.silent) window.Toast && Toast.warn('AI 返回的方法卡格式不合格，已放弃入库（不会污染方法库）'); resolve(null); return;
+          }
         // 来源留痕：这张卡是哪一个模块的哪一类题触发建立的
         pb.source = 'auto:' + (ctx.module || 'unknown');
         pb.autoFp = ctx.fp || '';
@@ -11790,10 +11799,12 @@ html[data-theme="night"] .sp-phase { background: linear-gradient(135deg, rgba(24
         Store().update(function (x) { x.playbooks = x.playbooks || []; x.playbooks.unshift(pb); });
         bind(ctx.fp, pb.id);
         resolve({ pb: pb, created: true, bound: true });
-      }).catch(function (e) {
-        if (!opts.silent) window.Toast && Toast.warn('建立方法卡失败：' + ((e && e.message) || e));
-        resolve(null);
-      });
+        }).catch(function (e) {
+          if (!opts.silent) window.Toast && Toast.warn('建立方法卡失败：' + ((e && e.message) || e));
+          resolve(null);
+        });
+      }
+      run('请为这类题生成方法卡。', false);
     });
   }
 
@@ -18619,9 +18630,18 @@ function bind(el, next) {
       attempt++;
       var user = '科目：' + (SUBJ_CN[genSubject] || '') + '\n题型/题目：\n' + txt.trim() + (extraHint || '');
       // 阶段1：生成骨架
-      return AI.chatJSON(genCoreSystem(), user).then(function (raw) {
+      // 【2026-08-30 修复】显式 noThink:true（ctx 默认挡不住全局思考开关，reasoning 挤占
+      // 输出预算 → JSON 截断 → normalizePlaybook 拒收 →「一直生成不了」）。仍可被单模块配置覆盖。
+      return AI.chatJSON(genCoreSystem(), user, null, { ctx: 'insp.gen', noThink: true }).then(function (raw) {
         var pb = normalizePlaybook(raw, genSubject);
-        if (!pb) { busy = false; render(el); Toast.warn('生成结果不规范，请重试'); return; }
+        if (!pb) {
+          // 不规范（多为截断缺 steps）→ 自动压缩重试一次，仍失败才放弃
+          if (attempt < 2) {
+            Toast.show('输出不完整，自动压缩重试…', 'info', 2000);
+            return runGen('\n\n【重试注意】上次 JSON 不完整（疑似被截断）。请压缩每条字数（do≤25字/tip≤20字），确保 steps 恰好 4 步，一次性输出完整 JSON。');
+          }
+          busy = false; render(el); Toast.warn('生成结果不规范，请重试'); return;
+        }
         // 质量校验：骨架单薄时自动补强重试一次
         if (!qualityOk(pb) && attempt < 2) {
           Toast.show('骨架略单薄，自动补强一次…', 'info', 2000);
@@ -18629,7 +18649,7 @@ function bind(el, next) {
         }
         // 阶段2：补全增强维度（易混辨析/例题/口诀），失败则降级用骨架
         Toast.show('骨架已定，正在补全例题/口诀/辨析…', 'info', 2500);
-        return AI.chatJSON(genEnrichSystem(pb), '').then(function (enr) {
+        return AI.chatJSON(genEnrichSystem(pb), '', null, { ctx: 'insp.gen', noThink: true }).then(function (enr) {
           if (enr) {
             if (Array.isArray(enr.confusions) && enr.confusions.length) {
               pb.confusions = enr.confusions.map(function (x) { return String(x); }).filter(Boolean).slice(0, 4);
