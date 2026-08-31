@@ -13,8 +13,9 @@
  *           用户在本地取消（status=canceled）→ 阶段边界检测到即退出。
  * ============================================================ */
 'use strict';
-/* TOOLS:python v7 —— 云端工具调用（2026-08-31）：出题/重写/审查 AI 可自主调用
- * 沙箱 Python（sympy/numpy）边算边出题与答案验算。子进程 env 已净化，
+/* TOOLS:python v8 —— 云端闭环出题（2026-08-31）：出题/重写/审查 AI 可自主调用
+ * 沙箱 Python（sympy/numpy），按人类命题人闭环工作：产生思路→计算验证→
+ * 闭环调整→验收合格→输出。子进程 env 已净化，
  * GH_TOKEN/AI Key 等敏感变量不传入。不可用时自动退化为纯 LLM 出卷。 */
 const { exec: cpExec } = require('child_process');
 const osT = require('os');
@@ -361,18 +362,27 @@ async function aiJson(messages, opts, tries = 3) {
 }
 
 // ---------- 工具调用循环（云端 sympy 验算/画图） ----------
+// v8（2026-08-31 用户定调「像人一样闭环出题」）：与本地 AI 测验同一工作法——
+// 产生思路→计算验证→闭环调整→验收合格→输出。每一轮都自主决定是否调工具/思考。
 const TOOL_APPENDIX = [
   '',
-  '【工程工具模式（本次任务已启用，真 Ubuntu + Python3 + sympy/numpy）】',
-  '1) 需要计算/验算/画图时，只输出一个 JSON {"tool":"python_exec","code":"<Python代码>"}，代码会真实执行，stdout 回传给你。',
-  '2) 数学题的标准答案与关键中间量必须先用工具算出再写，严禁凭感觉写答案；解析有误时以计算为准修正。',
-  '3) 直接输出最终 JSON（不再带工具标记）即视为完成。',
+  '【工程工具模式——像人类命题人一样闭环工作（本次任务已启用，真 Ubuntu + Python3 + sympy/numpy）】',
+  '⚠️ 你【确实拥有】python_exec 工具且它真实可用——不要因为"以为自己没有工具"而跳过计算或凭感觉编造数值。',
+  '【多轮循环机制】这不是一次性问答：你输出工具 JSON 后【立即停止本轮】，系统会真实执行代码并把 stdout',
+  '作为新消息回传给你，你再继续——来回多轮直到验收合格。"输出工具 JSON 等结果"是被支持的。',
+  '你的工作循环（严格遵守）：',
+  '① 产生思路：确定考点、解法、难度定位与命题意图。',
+  '② 计算验证：调用 Python 工具（只输出 {"tool":"python_exec","code":"<Python代码>"}）真实算出标准答案与关键中间量；严禁凭感觉写答案。',
+  '③ 闭环调整：检查计算结果——若答案/难度/计算量不符合命题意图，调整思路再算（可多轮）；若发现之前的解法有问题，推翻重来。',
+  '④ 验收合格：标准答案经工具确认无误、题面所需数值全部落实。',
+  '⑤ 开始输出：围绕已验证的数值与思路，按原要求只输出最终 JSON（不再带工具标记）。',
+  '若计算结果与预想不符，以计算结果为准调整题面或答案。',
 ].join('\n');
 // 工具循环：出题/重写/审查共用。system 首条自动追加工具规约；
 // 模型要工具就执行并回传，最多 maxRounds 轮；封顶后强制要求直接给最终 JSON。
 async function aiToolJson(messages, opts, maxRounds) {
   if (!PY_TOOLS_ON) return aiJson(messages, opts);
-  const MR = maxRounds || 6;
+  const MR = maxRounds || 8;
   const msgs = messages.map((m, i) => (i === 0 && m.role === 'system')
     ? { role: 'system', content: m.content + '\n' + TOOL_APPENDIX } : m);
   for (let round = 1; round <= MR; round++) {
@@ -381,7 +391,7 @@ async function aiToolJson(messages, opts, maxRounds) {
       const res = await execPython(obj.code);
       pushLog('🧮 [云端工具] 第' + round + '轮 Python ' + (res.error ? '出错' : '完成') + '：' + String(res.output || res.error || '').slice(0, 140).replace(/\n/g, ' '));
       msgs.push({ role: 'assistant', content: JSON.stringify(obj) });
-      msgs.push({ role: 'user', content: '工具执行结果：\n' + (res.error ? ('[错误] ' + res.error + '\n') : '') + (res.output || '(无输出，请用 print)') + '\n请继续：需要再算输出 {"tool":...}；完成则按原要求输出最终 JSON。' });
+      msgs.push({ role: 'user', content: '工具执行结果：\n' + (res.error ? ('[错误] ' + res.error + '\n（请修正代码再算，或换解法）') : '') + (res.output || '(无输出，请用 print)') + '\n请像命题人一样闭环推进：核对结果是否符合命题意图——不符则调整思路再算（输出 {"tool":...}）；已验收合格则按原要求输出最终 JSON。' });
       continue;
     }
     return obj;
@@ -500,12 +510,12 @@ function plannerSystem(subj, prefs) {
     + '只输出 JSON：{"title":"卷名","timeLimit":' + timeLimit + ',"questions":[{"topicName":"考点","type":"choice|fill|solve|essay","direction":"命题方向一句话"}]}';
 }
 function questionSystem(subj) {
-  return '你是考研' + subjName(subj) + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确。\n'
+  return '你是考研' + subjName(subj) + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确——输出前自己把解答完整走一遍（能算的数值都算实），确保答案与解析逐步一致。\n'
     + '【解析完整性·硬要求】solution 必须"分步推导→结论→易错点"三段式完整；solve/essay 题解析 ≥60 字、choice 题 ≥25 字、fill 题 ≥20 字；禁止只写最终答案或一句话带过。\n'
     + '只输出 JSON：{"stem":"题干(LaTeX用$...$)","type":"choice|fill|solve|essay","options":["A. ..","B. ..","C. ..","D. .."]或省略,"answer":"正确答案","solution":"详细解析","trap":"常见陷阱一句话","diff":"easy|medium|hard","star":1-5}';
 }
 function chiefSystem(subj) {
-  return '你是考研' + subjName(subj) + '押题卷总审查工程师。逐题检查：①解析是否完整（是否分步推导+结论+易错点、是否满足 solve/essay≥60字·choice≥25字·fill≥20字的下限——看的是**完整解析**，不是片段）②答案是否正确（自己验算关键步骤）③题干是否严谨无歧义 ④选项是否有双对/无解 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
+  return '你是考研' + subjName(subj) + '押题卷总审查工程师。逐题检查：①解析是否完整（是否分步推导+结论+易错点、是否满足 solve/essay≥60字·choice≥25字·fill≥20字的下限——看的是**完整解析**，不是片段）②答案是否正确（工具开启时优先用 python_exec 真实验算关键步骤，不要心算）③题干是否严谨无歧义 ④选项是否有双对/无解 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
     + '只输出 JSON：{"verdict":"ok|minor|major","targetHardPct":40,"hardPct":实际hard百分比,"summary":"总评一句话","needsRewrite":[{"index":题号从1开始,"reason":"问题","fixHint":"修改指引"}]}';
 }
 
