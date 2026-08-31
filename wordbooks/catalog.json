@@ -3,6 +3,13 @@
   "source": "qwerty-learner 开源词库（jsDelivr CDN 分发）",
   "books": [
     {
+      "id": "kaoyan-926",
+      "file": "kaoyan-926.json",
+      "name": "考研真题高频 926 词",
+      "desc": "历年真题反复出现的高频核心词，优先级最高。来源：qwerty-learner 开源词库",
+      "count": 926
+    },
+    {
       "id": "kaoyan-dagang-2024",
       "file": "kaoyan-dagang-2024.json",
       "name": "考研大纲词汇（2024·全量）",
@@ -10,11 +17,32 @@
       "count": 3731
     },
     {
+      "id": "kaoyan-hongbaoshu-2025",
+      "file": "kaoyan-hongbaoshu-2025.json",
+      "name": "考研红宝书（2025·全量）",
+      "desc": "考研词汇经典红宝书全量词库（6700+ 词），含音标。来源：qwerty-learner 开源词库",
+      "count": 6702
+    },
+    {
       "id": "kaoyan-shanguo-2025",
       "file": "kaoyan-shanguo-2025.json",
       "name": "考研核心词精选（2025）",
       "desc": "考研核心词精选，释义精简。来源：qwerty-learner 开源词库",
       "count": 2254
+    },
+    {
+      "id": "cet4-core",
+      "file": "cet4-core.json",
+      "name": "四级核心词",
+      "desc": "大学英语四级核心词汇，基础补漏。来源：qwerty-learner 开源词库",
+      "count": 2607
+    },
+    {
+      "id": "cet6-core",
+      "file": "cet6-core.json",
+      "name": "六级核心词",
+      "desc": "大学英语六级核心词汇。来源：qwerty-learner 开源词库",
+      "count": 2345
     }
   ]
 }
