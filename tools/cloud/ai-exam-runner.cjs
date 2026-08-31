@@ -13,6 +13,27 @@
  *           用户在本地取消（status=canceled）→ 阶段边界检测到即退出。
  * ============================================================ */
 'use strict';
+/* TOOLS:python v7 —— 云端工具调用（2026-08-31）：出题/重写/审查 AI 可自主调用
+ * 沙箱 Python（sympy/numpy）边算边出题与答案验算。子进程 env 已净化，
+ * GH_TOKEN/AI Key 等敏感变量不传入。不可用时自动退化为纯 LLM 出卷。 */
+const { exec: cpExec } = require('child_process');
+const osT = require('os');
+const fsT = require('fs');
+const pathT = require('path');
+let PY_TOOLS_ON = false;
+function execPython(code) {
+  return new Promise((resolve) => {
+    const f = pathT.join(osT.tmpdir(), 'at_tool_' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.py');
+    try { fsT.writeFileSync(f, String(code || ''), 'utf8'); } catch (e) { resolve({ ok: false, output: '', error: '写临时文件失败' }); return; }
+    cpExec('python3 ' + JSON.stringify(f), {
+      timeout: 30000, maxBuffer: 1024 * 1024, cwd: process.cwd(),
+      env: { PATH: process.env.PATH || '', HOME: process.env.HOME || '', PYTHONIOENCODING: 'utf-8' }
+    }, (err, stdout, stderr) => {
+      try { fsT.unlinkSync(f); } catch (e) {}
+      resolve({ ok: !err, output: String(stdout || '').slice(0, 1500), error: err ? (String(stderr || '').slice(0, 600) || err.message) : '' });
+    });
+  });
+}
 const https = require('https');
 const { URL } = require('url');
 
@@ -97,7 +118,7 @@ function pushLog(msg, level, dur) {
 // 失败时把完整日志单独写一份（不受 status.json 覆写失败影响）
 async function writeLogFile(extra, jobId) {
   try {
-    const payload = { runnerVer: 'v6', jobId: jobId || '', at: new Date().toISOString(), error: extra || null, entries: RUN_LOG };
+    const payload = { runnerVer: 'v7', jobId: jobId || '', at: new Date().toISOString(), error: extra || null, entries: RUN_LOG };
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: { 'log.json': { content: JSON.stringify(payload) } } }, 2);
     log('📜 已落盘 log.json（' + RUN_LOG.length + ' 条）');
   } catch (e) { log('!! log.json 落盘失败（不影响主流程）：', e.message); }
@@ -171,7 +192,7 @@ async function _setStatus(status, stage, msg, progress) {
   pushLog((stage ? '[' + stage + '] ' : '') + (msg || ''));
   // savedCount = 已成功落盘到 partial.json 的题数（= 客户端随时能抢救走的数量），
   // 让本地无需额外拉 Gist 就知道「现在有几题可抢救」，任务行可直接显示入口。
-  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v6' }) } } };
+  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v7' }) } } };
   try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
   catch (e) {
     const hint = (e && e.status === 404)
@@ -337,6 +358,37 @@ async function aiJson(messages, opts, tries = 3) {
       await sleep(2500 * (i + 1));
     }
   }
+}
+
+// ---------- 工具调用循环（云端 sympy 验算/画图） ----------
+const TOOL_APPENDIX = [
+  '',
+  '【工程工具模式（本次任务已启用，真 Ubuntu + Python3 + sympy/numpy）】',
+  '1) 需要计算/验算/画图时，只输出一个 JSON {"tool":"python_exec","code":"<Python代码>"}，代码会真实执行，stdout 回传给你。',
+  '2) 数学题的标准答案与关键中间量必须先用工具算出再写，严禁凭感觉写答案；解析有误时以计算为准修正。',
+  '3) 直接输出最终 JSON（不再带工具标记）即视为完成。',
+].join('\n');
+// 工具循环：出题/重写/审查共用。system 首条自动追加工具规约；
+// 模型要工具就执行并回传，最多 maxRounds 轮；封顶后强制要求直接给最终 JSON。
+async function aiToolJson(messages, opts, maxRounds) {
+  if (!PY_TOOLS_ON) return aiJson(messages, opts);
+  const MR = maxRounds || 6;
+  const msgs = messages.map((m, i) => (i === 0 && m.role === 'system')
+    ? { role: 'system', content: m.content + '\n' + TOOL_APPENDIX } : m);
+  for (let round = 1; round <= MR; round++) {
+    const obj = await aiJson(msgs, opts);
+    if (obj && obj.tool === 'python_exec' && typeof obj.code === 'string') {
+      const res = await execPython(obj.code);
+      pushLog('🧮 [云端工具] 第' + round + '轮 Python ' + (res.error ? '出错' : '完成') + '：' + String(res.output || res.error || '').slice(0, 140).replace(/\n/g, ' '));
+      msgs.push({ role: 'assistant', content: JSON.stringify(obj) });
+      msgs.push({ role: 'user', content: '工具执行结果：\n' + (res.error ? ('[错误] ' + res.error + '\n') : '') + (res.output || '(无输出，请用 print)') + '\n请继续：需要再算输出 {"tool":...}；完成则按原要求输出最终 JSON。' });
+      continue;
+    }
+    return obj;
+  }
+  const finalMsgs = msgs.map((m, i) => (i === 0)
+    ? { role: 'system', content: String(m.content).replace(TOOL_APPENDIX, '\n【工具轮次已用完】不要再调用工具，立即按原要求输出最终 JSON。') } : m);
+  return await aiJson(finalMsgs, opts);
 }
 
 // ---------- 取消信号（独立 cancel.json 承载） ----------
@@ -562,6 +614,16 @@ function braceBalanced(s) {
     log('接单', job.jobId, JSON.stringify(prefs));
     pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?') + (JOB_THINK ? ' · 💭 思考模式' : ' · ⚡ 不思考(结构化)'));
     pushLog('🧠 思考开关已对齐本地：' + (JOB_THINK ? '开启（若思考模型烧光 token 会自动关思考降级）' : '关闭（结构化 JSON 默认不思考，避免空正文卡死）'));
+    // 云端工具探测：python3 + sympy 可用则启用出题/审查的工具调用
+    try {
+      await execPython('import sympy\nprint("ok")');
+      PY_TOOLS_ON = true;
+      pushLog('🧮 云端工具调用已启用：sympy 就绪（出题/重写/审查可自主调用 Python 验算）');
+    } catch (e) {
+      PY_TOOLS_ON = false;
+      pushLog('⚠️ Python/sympy 不可用，本次退化为纯 LLM 出卷（不影响出卷，仅无工具验算）', 'warn');
+    }
+
     // key/endpoint 匹配预检：最常见的 401 根因，开跑前先提醒（写进日志，浮窗可见）
     {
       const ep = aiConf('endpoint') || '', key = aiConf('key') || '';
@@ -616,7 +678,7 @@ function braceBalanced(s) {
       QS[i].st = 'run';
       QS[i].t0 = Date.now();
       await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
-      const out = await aiJson(
+      const out = await aiToolJson(
         [{ role: 'system', content: questionSystem(subj) },
          { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],
         { maxTokens: 8000 });
@@ -662,7 +724,7 @@ function braceBalanced(s) {
     await setStatus('running', 'reviewing', '总工程师审查中…', 58);
     let review = {};
     try {
-      review = await aiJson(
+      review = await aiToolJson(
         [{ role: 'system', content: chiefSystem(subj) },
          { role: 'user', content: '审查这份押题卷（题号从1开始）：\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || ''), star: q.star })) ) }],
         { maxTokens: 8000 }) || {};
@@ -692,7 +754,7 @@ function braceBalanced(s) {
           const feedback = attempt === 0
             ? '必须修复：' + rw.reason + '。指引：' + (rw.fixHint || '')
             : '上一轮重写仍未通过校验，问题：' + (lastBad || '') + '。请针对性修复并确保解析完整（分步+结论+易错点）。';
-          const cand = await aiJson(
+          const cand = await aiToolJson(
             [{ role: 'system', content: questionSystem(subj) },
              { role: 'user', content: '重写这道题（原题如下）。' + feedback + '\n原题：' + JSON.stringify(old) }],
             { maxTokens: 8000 });
@@ -739,7 +801,7 @@ function braceBalanced(s) {
     await flushPartial(questions, { reviewed: true, subject: subj });
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
       'result.json': { content: JSON.stringify(exam) },
-      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v6' }) }
+      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v7' }) }
     } });
     log('✅ 完成');
   } catch (e) {
@@ -764,7 +826,7 @@ function braceBalanced(s) {
           };
           await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
             'result.json': { content: JSON.stringify(partial) },
-            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v6' }) }
+            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v7' }) }
           } });
           log('⏹ 已停止并保存', cands.length, '题');
         } else {
