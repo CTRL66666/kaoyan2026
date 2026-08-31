@@ -27,6 +27,14 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Python (AI 验算工具)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install sympy
+        run: pip install sympy
+
       - name: Run cloud exam job
         env:
           GIST_ID: ${{ github.event.inputs.gist_id }}
