@@ -51,6 +51,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // 在主流程读到 job 后调用 initAiConf() 完成校验。
 let JOB_AI = null;
 let JOB_THINK = false;   // 思考模式（来自 job.prefs.think）——结构化 JSON 默认关闭，避免思考烧光 token 致空正文
+let JOB_MAXTOK = 32768;  // 最大输出 token（2026-08-31 用户要求：默认 8000→32768；可被 job.prefs.maxTokens 覆盖，钳制 1024-65536）
 let JOB_MAJOR = '';      // 专业课名（来自 job.prefs.major）——"专业课"科目出卷时必须具体到专业，否则出成泛化卷
 function aiConf(k) {
   if (JOB_AI && JOB_AI[k]) return String(JOB_AI[k]);
@@ -119,7 +120,7 @@ function pushLog(msg, level, dur) {
 // 失败时把完整日志单独写一份（不受 status.json 覆写失败影响）
 async function writeLogFile(extra, jobId) {
   try {
-    const payload = { runnerVer: 'v7', jobId: jobId || '', at: new Date().toISOString(), error: extra || null, entries: RUN_LOG };
+    const payload = { runnerVer: 'v8', jobId: jobId || '', at: new Date().toISOString(), error: extra || null, entries: RUN_LOG };
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: { 'log.json': { content: JSON.stringify(payload) } } }, 2);
     log('📜 已落盘 log.json（' + RUN_LOG.length + ' 条）');
   } catch (e) { log('!! log.json 落盘失败（不影响主流程）：', e.message); }
@@ -193,7 +194,7 @@ async function _setStatus(status, stage, msg, progress) {
   pushLog((stage ? '[' + stage + '] ' : '') + (msg || ''));
   // savedCount = 已成功落盘到 partial.json 的题数（= 客户端随时能抢救走的数量），
   // 让本地无需额外拉 Gist 就知道「现在有几题可抢救」，任务行可直接显示入口。
-  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v7' }) } } };
+  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v8' }) } } };
   try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
   catch (e) {
     const hint = (e && e.status === 404)
@@ -206,7 +207,7 @@ async function _setStatus(status, stage, msg, progress) {
 
 // ---------- AI 调用（OpenAI 兼容 /chat/completions） ----------
 function aiCall(messages, opts = {}) {
-  const maxTok = opts.maxTokens || 8000;   // 默认 8000；出卷/审查/重写都需要充裕输出空间（思考模型开时一半耗在 reasoning 上）
+  const maxTok = opts.maxTokens || JOB_MAXTOK;   // 默认 32768（可经 job.prefs.maxTokens 配置）；思考模型开时一半耗在 reasoning 上
   // 本地 job.json 里 endpoint 是「完整请求 URL」（含 /chat/completions，如 openrouter 的
   // /api/v1/chat/completions）；repo secrets 回退时可能是 base URL（如 /api/v1）。幂等拼接，
   // 避免出现 /chat/completions/chat/completions 双拼导致 AI 404。
@@ -330,7 +331,6 @@ function extractJson(txt) {
 // 「空正文/finish_reason=length」= 思考模型把 token 全烧在 reasoning 上：优先「关思考」重试，
 // 仍空再翻倍 max_tokens（上限 32768 ≈ 65536 的一半）——云端对齐本地后能跑通的关键，避免三小时卡死。
 async function aiJson(messages, opts, tries = 3) {
-  const MAX_TOK = 32768;
   let o = Object.assign({ think: JOB_THINK }, opts || {});
   for (let i = 0; ; i++) {
     let out;
@@ -339,9 +339,9 @@ async function aiJson(messages, opts, tries = 3) {
       const m = (e && e.message) || '';
       if (/空正文|finish_reason=length/.test(m)) {
         if (!(o._thinkOff)) { o = Object.assign({}, o, { _thinkOff: true, think: false }); log('思考模型烧光 token 致空正文 → 关思考重试'); }
-        else if ((o.maxTokens || 8000) < MAX_TOK) { o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 8000) * 2, MAX_TOK) }); log('关思考仍空正文，max_tokens 翻倍至', o.maxTokens, '重试'); }
-      } else if (/JSON 不完整/.test(m) && (o.maxTokens || 8000) < MAX_TOK) {
-        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 8000) * 2, MAX_TOK) });
+        else if ((o.maxTokens || JOB_MAXTOK) < JOB_MAXTOK) { o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || JOB_MAXTOK) * 2, JOB_MAXTOK) }); log('关思考仍空正文，max_tokens 翻倍至', o.maxTokens, '重试'); }
+      } else if (/JSON 不完整/.test(m) && (o.maxTokens || JOB_MAXTOK) < JOB_MAXTOK) {
+        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || JOB_MAXTOK) * 2, JOB_MAXTOK) });
         log('疑似输出截断，max_tokens 翻倍至', o.maxTokens, '重试');
       }
       if (i >= tries - 1) throw e;
@@ -351,8 +351,8 @@ async function aiJson(messages, opts, tries = 3) {
     try { return extractJson(out); }
     catch (e) {
       log('JSON 解析失败，重问', i + 1, '/', tries, '：', ((e && e.message) || '').slice(0, 120));
-      if (/JSON 不完整/.test((e && e.message) || '') && (o.maxTokens || 8000) < MAX_TOK) {
-        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || 8000) * 2, MAX_TOK) });
+      if (/JSON 不完整/.test((e && e.message) || '') && (o.maxTokens || JOB_MAXTOK) < JOB_MAXTOK) {
+        o = Object.assign({}, o, { maxTokens: Math.min((o.maxTokens || JOB_MAXTOK) * 2, JOB_MAXTOK) });
         log('疑似输出截断，max_tokens 翻倍至', o.maxTokens, '重试');
       }
       if (i >= tries - 1) throw e;
@@ -602,6 +602,10 @@ function braceBalanced(s) {
     // 思考模式：结构化 JSON 出卷默认关闭思考（思考模型会把 token 烧光致空正文、卡死）；
     // 仅当用户显式勾选「启用思考模式」（prefs.think=true）才开启。
     JOB_THINK = !!prefs.think;
+    // 【2026-08-31】最大输出 token 可配置：job.prefs.maxTokens（出卷弹窗填写，随 job.json 下发）；
+    // 不填/非法 = 默认 32768。钳制 1024-65536（防手滑 0 或爆预算）。
+    var mt = parseInt(prefs.maxTokens, 10);
+    JOB_MAXTOK = (mt >= 1024 && mt <= 65536) ? mt : 32768;
     // 专业课名：专业课（ctrl）科目出卷必须具体到专业，否则提示词只会写泛化的「专业课」三个字。
     JOB_MAJOR = String(prefs.major || '').trim();
     log('AI 配置来源：', JOB_AI ? 'job.json' : 'repo secrets', '· model =', aiConf('model') || '(空)', '· think =', JOB_THINK, '· major =', JOB_MAJOR || '(无)');
@@ -622,7 +626,7 @@ function braceBalanced(s) {
     const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境
     JOB_SUBJ = subj;
     log('接单', job.jobId, JSON.stringify(prefs));
-    pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?') + (JOB_THINK ? ' · 💭 思考模式' : ' · ⚡ 不思考(结构化)'));
+    pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?') + ' · maxTok ' + JOB_MAXTOK + (JOB_THINK ? ' · 💭 思考模式' : ' · ⚡ 不思考(结构化)'));
     pushLog('🧠 思考开关已对齐本地：' + (JOB_THINK ? '开启（若思考模型烧光 token 会自动关思考降级）' : '关闭（结构化 JSON 默认不思考，避免空正文卡死）'));
     // 云端工具探测：python3 + sympy 可用则启用出题/审查的工具调用
     try {
@@ -657,12 +661,12 @@ function braceBalanced(s) {
            + '严禁重复已有考点与设问角度（否则用户会拿到两道雷同的题）：\n'
            + resumeQs.map((q, i) => (i + 1) + '. ' + String(q.topicName || '?') + '：' + String(q.stem || '').slice(0, 60)).join('\n')
            + '\n只输出 JSON，questions 数组长度必须恰好为 ' + resumeNeed + '。' }],
-        { maxTokens: 8000 });
+        {});
     } else {
       plan = await aiJson(
         [{ role: 'system', content: plannerSystem(subj, prefs) },
          { role: 'user', content: '请规划本卷蓝图。' }],
-        { maxTokens: 8000 });
+        {});
     }
     // 续跑且题已够时 questions 允许为空；其余情况空蓝图就是失败
     if (!plan || !Array.isArray(plan.questions)) throw new Error('蓝图规划失败：返回格式不对');
@@ -691,7 +695,7 @@ function braceBalanced(s) {
       const out = await aiToolJson(
         [{ role: 'system', content: questionSystem(subj) },
          { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],
-        { maxTokens: 8000 });
+        {});
       out.topicName = pq.topicName || out.topicName || '';
       out.score = out.score || pq.score || 5;
       out.type = pq.type || out.type || 'solve';
@@ -737,7 +741,7 @@ function braceBalanced(s) {
       review = await aiToolJson(
         [{ role: 'system', content: chiefSystem(subj) },
          { role: 'user', content: '审查这份押题卷（题号从1开始）：\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || ''), star: q.star })) ) }],
-        { maxTokens: 8000 }) || {};
+        {});
     } catch (e) { log('审查调用失败，仅按本地校验处理：', e.message); }
     const rewriteList = [];
     const seenRw = {};
@@ -767,7 +771,7 @@ function braceBalanced(s) {
           const cand = await aiToolJson(
             [{ role: 'system', content: questionSystem(subj) },
              { role: 'user', content: '重写这道题（原题如下）。' + feedback + '\n原题：' + JSON.stringify(old) }],
-            { maxTokens: 8000 });
+            {});
           cand.topicName = old.topicName; cand.score = old.score; cand.type = old.type || cand.type;
           const bad = validateQuestion(cand);
           if (!bad) { fixed = cand; break; }
@@ -811,7 +815,7 @@ function braceBalanced(s) {
     await flushPartial(questions, { reviewed: true, subject: subj });
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
       'result.json': { content: JSON.stringify(exam) },
-      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v7' }) }
+      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v8' }) }
     } });
     log('✅ 完成');
   } catch (e) {
@@ -836,7 +840,7 @@ function braceBalanced(s) {
           };
           await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
             'result.json': { content: JSON.stringify(partial) },
-            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v7' }) }
+            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v8' }) }
           } });
           log('⏹ 已停止并保存', cands.length, '题');
         } else {
