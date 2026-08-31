@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- 26考研全能作战系统 · 应用图标：星阑夜空底 + 琥珀金星旗（对应主题令牌 --nk-deep / --nk-acc） -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16203d"/>
+      <stop offset="1" stop-color="#0a0f1e"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- 旗杆 -->
+  <rect x="152" y="96" width="20" height="320" rx="10" fill="#e9edf6"/>
+  <!-- 旗帜 -->
+  <path d="M172 116 L 392 116 L 332 186 L 392 256 L 172 256 Z" fill="#f0b95a"/>
+  <!-- 旗面文字区（抽象书籍线条） -->
+  <rect x="204" y="150" width="120" height="14" rx="7" fill="#2a1c04" opacity="0.85"/>
+  <rect x="204" y="184" width="88" height="14" rx="7" fill="#2a1c04" opacity="0.6"/>
+  <!-- 底座 -->
+  <rect x="116" y="408" width="280" height="24" rx="12" fill="#e9edf6" opacity="0.92"/>
+  <!-- 星点 -->
+  <circle cx="96" cy="104" r="10" fill="#f0b95a"/>
+  <circle cx="428" cy="72" r="7" fill="#e9edf6" opacity="0.8"/>
+  <circle cx="416" cy="352" r="9" fill="#f0b95a" opacity="0.9"/>
+</svg>
