@@ -3,6 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <!-- 【2026-09-05 手机全屏修复】iOS 加桌：apple-mobile-web-app-capable 让"添加到主屏幕"
+       以独立 App 运行（全屏无浏览器壳）；status-bar-style=black-translucent 内容延伸到
+       状态栏下方，配合 CSS env(safe-area-inset-*) 留出刘海区。 -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="考研作战">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+  <meta name="theme-color" content="#121a2f">
   <title>26考研全能作战系统</title>
   <script>
     // 【2026-08-31 用户需求】首加载可视化：自包含启动屏（不依赖任何待下载资源，
@@ -115,11 +127,11 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-BpUSU02I.js"></script>
+  <script type="module" crossorigin src="./assets/index-BIrcDuS9.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/vendor-Co82n0Bw.js">
   <link rel="modulepreload" crossorigin href="./assets/share-0Wt4AeBc.js">
   <link rel="modulepreload" crossorigin href="./assets/index-PPVm8Dsz.js">
-  <link rel="stylesheet" crossorigin href="./assets/index-x6Ox02P2.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-Dfk81pfC.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="boot-splash">
