@@ -131,7 +131,8 @@ async function readSourceBuffer(files, tag) {
 }
 // 执行器版本（单一事实来源）：本地 cloudjob.ts 用正则从本文件源码提取（本地资产 vs 仓库远端），
 // 向导第②步显示「云端 v? vs 本地 v?」。改版本只改这一处，所有 status.json 回写自动跟随。
-const RUNNER_VER = 'v14';
+// 版本规则：runner 行为变更才 +1（v15 = 资料库 book 通道：PDF 整本 → AI 章节划分 → 分章提取讲义+题目）。
+const RUNNER_VER = 'v15';
 
 if (!GIST_ID || !GH_TOKEN) { console.error('缺 GIST_ID 或 GH_TOKEN'); process.exit(1); }
 
