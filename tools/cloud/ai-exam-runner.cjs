@@ -40,7 +40,98 @@ const { URL } = require('url');
 
 const API = 'https://api.github.com';
 const GIST_ID = process.env.GIST_ID || '';
+const SOURCE_GIST_ID = process.env.SOURCE_GIST_ID || '';   // 【v11】PDF 导入时源文件所在独立 Gist（任务 Gist 截断时绕路用）
 const GH_TOKEN = process.env.GH_TOKEN || '';
+/* 【2026-09-02 PDF 导入】通用 shell 执行（poppler 工具链：pdfinfo/pdftotext/pdftoppm）。
+ * 参数一律 JSON.stringify 引号化防注入；只允许跑本机二进制，不接收任何来自 Gist/AI 的命令文本。
+ * ⚠️ poppler 在 ubuntu-latest 上**并未预装**（2026-09-02 真机踩坑），由 ensurePoppler 负责探测+自救。 */
+function runShell(cmd, timeoutMs, maxBuffer) {
+  return new Promise((resolve) => {
+    cpExec(cmd, { timeout: timeoutMs || 60000, maxBuffer: maxBuffer || 8 * 1024 * 1024, cwd: process.cwd(),
+      env: { PATH: process.env.PATH || '', HOME: process.env.HOME || '', LANG: 'C.UTF-8' } },
+      (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || ''), err: err ? (String(stderr || '').slice(0, 400) || err.message) : '' }));
+  });
+}
+/* 【v11 poppler 可用性】踩坑实证（2026-09-02）：GitHub Actions 的 ubuntu-latest
+ * **并不预装** poppler-utils（此前假设「自带」是错的，真机实测 pdfinfo: not found）。
+ * 三道防线：① 开跑前探测；② 缺失则运行时自救（Actions runner 有免密 sudo，装一次约 10~20s）
+ * ——即使用户仓库里的 workflow 还是旧版（不含安装步骤），导入任务也能自己救回来；
+ * ③ 装不上时给出「点一键安装升级 workflow」的明确出路，绝不再把环境缺失误报成文件损坏。 */
+let POPPLER_READY = false;
+async function ensurePoppler() {
+  if (POPPLER_READY) return true;
+  const probe = await runShell('command -v pdfinfo; command -v pdftotext; command -v pdftoppm', 20000);
+  const out = String(probe.out || '');
+  if (out.indexOf('pdfinfo') >= 0 && out.indexOf('pdftotext') >= 0 && out.indexOf('pdftoppm') >= 0) {
+    POPPLER_READY = true;
+    return true;
+  }
+  pushLog('⚙️ poppler-utils 缺失，尝试自动安装…', 'warn');
+  const inst = await runShell('sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils', 240000);
+  const probe2 = await runShell('command -v pdfinfo; command -v pdftotext; command -v pdftoppm', 20000);
+  const out2 = String(probe2.out || '');
+  POPPLER_READY = !!(out2.indexOf('pdfinfo') >= 0 && out2.indexOf('pdftotext') >= 0 && out2.indexOf('pdftoppm') >= 0);
+  if (POPPLER_READY) pushLog('✅ poppler-utils 已自动安装就绪（pdfinfo/pdftotext/pdftoppm 齐备）');
+  else pushLog('⚠️ poppler-utils 自动安装失败：' + String(inst.err || '').slice(0, 120), 'warn');
+  return POPPLER_READY;
+}
+/* gist 大文件（>1MB 会被 API 响应截断）：抓 raw_url。secret gist 的 raw 匿名 404，
+ * 必须带 GH_TOKEN；返回 Buffer（PDF/base64 都可能非 UTF-8 安全）。 */
+function ghGetRawBuffer(urlStr) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + GH_TOKEN, 'User-Agent': 'kaoyan2026-cloudjob-runner' },
+      timeout: 120000
+    }, res => {
+      if (res.statusCode >= 400) { res.resume(); return reject(new Error('raw HTTP ' + res.statusCode)); }
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req.on('timeout', () => req.destroy(new Error('raw 拉取超时')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+// 取 gist 中某文件的完整文本：truncated 或 content 缺失/空/与 size 对不上时都走 raw_url 回补。
+// 教训：2026-09-02 导入任务因此崩在 JSON.parse 失败（GitHub Gist API 在大文件边界下
+// 偶发把小文件 content 置空、不标 truncated——L902 守卫只看 key 不看 content 就掉坑）。
+async function gistFileText(files, name) {
+  const f = files && files[name];
+  if (!f) return null;
+  const needRaw = !!f.truncated || !f.content || !f.content.length
+    || (f.size && f.content.length < f.size);
+  if (!needRaw) return f.content;
+  if (!f.raw_url) throw new Error(name + ' content 缺失且无 raw_url（无法回补）');
+  const buf = await ghGetRawBuffer(f.raw_url);
+  return buf.toString('utf8');
+}
+async function gistFileBuffer(files, name) {
+  const f = files && files[name];
+  if (!f) return null;
+  const needRaw = !!f.truncated || !f.content || !f.content.length
+    || (f.size && f.content.length < f.size);
+  if (!needRaw) return Buffer.from(f.content, 'utf8');
+  if (!f.raw_url) throw new Error(name + ' content 缺失且无 raw_url（无法回补）');
+  return await ghGetRawBuffer(f.raw_url);
+}
+// 【v11】从资源 Gist / 任务 Gist 读 PDF/图片源文件：先 source.pdf（>1MB 走 b64 走 b64 通道）
+async function readSourceBuffer(files, tag) {
+  if (files['source.pdf']) return await gistFileBuffer(files, 'source.pdf');
+  if (files['source.pdf.b64']) {
+    const t = await gistFileText(files, 'source.pdf.b64');
+    if (!t) return null;
+    return Buffer.from(String(t).replace(/[^A-Za-z0-9+/=]/g, ''), 'base64');
+  }
+  // 标签友好化：资源 Gist 'source.pdf.b64' / 任务 Gist 'source.pdf.b64'，但报错时区分
+  if (Object.keys(files || {}).length === 0) throw new Error(tag + ' 内无任何 files');
+  throw new Error(tag + ' 内没有 source.pdf / source.pdf.b64（候选 files：' + Object.keys(files).join(',') + '）');
+}
+// 执行器版本（单一事实来源）：本地 cloudjob.ts 用正则从本文件源码提取（本地资产 vs 仓库远端），
+// 向导第②步显示「云端 v? vs 本地 v?」。改版本只改这一处，所有 status.json 回写自动跟随。
+const RUNNER_VER = 'v14';
 
 if (!GIST_ID || !GH_TOKEN) { console.error('缺 GIST_ID 或 GH_TOKEN'); process.exit(1); }
 
@@ -84,7 +175,22 @@ function ghReq(method, path, body) {
         if (res.statusCode === 204) return resolve(null);
         let d = null;
         try { d = txt ? JSON.parse(txt) : null; } catch (e) {}
-        if (res.statusCode >= 400) { const e = new Error('GitHub HTTP ' + res.statusCode + ' ' + txt.slice(0, 200)); e.status = res.statusCode; return reject(e); }
+        if (res.statusCode >= 400) {
+          const e = new Error('GitHub HTTP ' + res.statusCode + ' ' + txt.slice(0, 200));
+          e.status = res.statusCode;
+          // 【2026-09-01 限额长退避】403/429 必须区分「限额」与「权限」：限额是暂时的
+          //（窗口最长 60 分钟），权限错误是永久的。靠响应头识别，把 reset 时刻带给
+          // ghRetry 安排真正的等待，而不是 2~8s 后放弃（那正是「进度冻结一小时」的元凶）。
+          const rem = res.headers && res.headers['x-ratelimit-remaining'];
+          const rst = res.headers && res.headers['x-ratelimit-reset'];
+          if (res.statusCode === 429 || String(rem) === '0') {
+            e.rateLimited = true;
+            if (rst) e.rateReset = Number(rst) * 1000;
+            const ra = res.headers && res.headers['retry-after'];
+            if (ra) e.retryAfterMs = Number(ra) * 1000;
+          }
+          return reject(e);
+        }
         resolve(d);
       });
     });
@@ -94,10 +200,26 @@ function ghReq(method, path, body) {
     req.end();
   });
 }
+// 【2026-09-01 限额长退避】限额等待总预算：本地轮询 + 执行器回写共用同一个 PAT，
+// 5000 次/时烧穿后，等窗口重置（最长 60 分钟）是唯一出路。预算 30 分钟封顶，
+// 防止无限等把 Actions 时长烧光；预算耗尽才真正放弃（写 error 终态）。
+let _rlWaitBudgetMs = 30 * 60 * 1000;
 async function ghRetry(method, path, body, tries = 4) {
   for (let i = 0; ; i++) {
     try { return await ghReq(method, path, body); }
     catch (e) {
+      if (e.rateLimited) {
+        // 等到 reset 时刻（+3s 余量），单次最长 5 分钟、且不得超过剩余预算
+        let waitMs = e.retryAfterMs || (e.rateReset ? Math.max(0, e.rateReset - Date.now() + 3000) : 60000);
+        waitMs = Math.min(waitMs, 300000, _rlWaitBudgetMs);
+        if (waitMs <= 0) throw new Error('GitHub API 限额持续未恢复（已累计等待 30 分钟），本次任务放弃回写：' + e.message);
+        _rlWaitBudgetMs -= waitMs;
+        log('⏸ GitHub API 限额，退避 ' + Math.round(waitMs / 1000) + 's 后重试（等待预算剩 ' + Math.round(_rlWaitBudgetMs / 60000) + ' 分钟）');
+        pushLog('⏸ GitHub API 限额耗尽：退避 ' + Math.round(waitMs / 1000) + 's 后继续（出题不中断，进度回写延后）', 'warn');
+        await sleep(waitMs);
+        i = -1;   // 限额等待不计入普通重试次数
+        continue;
+      }
       if (i >= tries - 1 || (e.status && e.status < 500 && e.status !== 403)) throw e;
       log('GitHub 请求失败重试', i + 1, e.message);
       await sleep(2000 * (i + 1));
@@ -120,7 +242,7 @@ function pushLog(msg, level, dur) {
 // 失败时把完整日志单独写一份（不受 status.json 覆写失败影响）
 async function writeLogFile(extra, jobId) {
   try {
-    const payload = { runnerVer: 'v8', jobId: jobId || '', at: new Date().toISOString(), error: extra || null, entries: RUN_LOG };
+    const payload = { runnerVer: RUNNER_VER, jobId: jobId || '', at: new Date().toISOString(), error: extra || null, entries: RUN_LOG };
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: { 'log.json': { content: JSON.stringify(payload) } } }, 2);
     log('📜 已落盘 log.json（' + RUN_LOG.length + ' 条）');
   } catch (e) { log('!! log.json 落盘失败（不影响主流程）：', e.message); }
@@ -149,9 +271,25 @@ let SAVED = [];
 //      落盘终稿后即使这一步挂了，客户端仍能抢救到「经过审查的完整卷」而非初稿。
 let _flushChain = Promise.resolve();
 let _partialCount = 0;   // 已成功落盘的题数（写进 status.json.savedCount，即「可抢救数量」）
+// 【2026-09-03 配额治理】每题完成即写 partial.json 的「全集」是第二烧配额大户：
+// 22 题卷子 = 22 次 PATCH，且 payload 随题目累积越来越大。改为「每 3 题或距上次 ≥90s」
+// 落一次（opts.force 绕过节流）：抢救粒度从「最多丢 1 题」变「最多丢 3 题/90s」，
+// 而一题要 30s~2min —— 实际丢题窗口 <1 题，几乎无损。终稿/取消/失败前抢救一律 force。
+// 【竞态修正】节流计数改为「同步预约」：旧实现在异步链内 PATCH 成功后才更新 _lastFlushCount，
+// 并发完成多题时它们同步检查看到的都是旧值 → 全部通过节流各自排队（harness 实测 6 题落 7 次）。
+// 现在决策与预约在函数顶部同步完成，异步链只负责 PATCH——后续调用立即看到已预约的题数。
+let _flushAt = 0, _flushCount = 0;   // 最近一次「已发起」落盘的时刻与题数（同步预约，非落盘成功）
+const _FLUSH_EVERY_N = 3, _FLUSH_MIN_MS = 90000;
 async function flushPartial(questions, opts) {
   opts = opts || {};
   const list = (questions || []).filter(q => q && q.stem);
+  const now = Date.now();
+  if (!opts.force) {
+    if (list.length > 0 && list.length <= _flushCount) return _flushChain;   // 已被预约覆盖（无更新的题）
+    if (_flushCount > 0 && list.length - _flushCount < _FLUSH_EVERY_N
+        && now - _flushAt < _FLUSH_MIN_MS) return _flushChain;   // 节流窗口内攒着
+  }
+  _flushAt = now; _flushCount = list.length;   // 同步预约：本次将落盘 list.length 题
   _flushChain = _flushChain.then(async () => {
     const payload = {
       count: list.length,
@@ -160,6 +298,7 @@ async function flushPartial(questions, opts) {
       updatedAt: new Date().toISOString(),
       questions: list
     };
+    if (opts.imported) payload.imported = true;   // v10：导入通道落盘标记（客户端据此区分抢救卷类型）
     try {
       await ghRetry('PATCH', '/gists/' + GIST_ID, { files: { 'partial.json': { content: JSON.stringify(payload) } } }, 3);
       _partialCount = list.length;
@@ -185,17 +324,65 @@ function readPartialJson(gist) {
 }
 
 // setStatus 串行化：多 worker 并发完成时 PATCH 同一 gist 文件，链式排队避免互踩/乱序
+//
+// 【2026-09-03 配额救星·状态回写风暴治理】旧实现每次状态变更都全量 PATCH status.json
+// （带整个 RUN_LOG + 全部 QS），一次 22 题出卷光「每题开工写一次 + 完成写一次」就烧 ~44 次
+// PATCH，叠加 flushPartial 每题全集重写、checkCancel 每题探测，单任务 PATCH+GET 逼近 150 次。
+// 多任务并发或本地云同步同时轮询时，一小时 5000 配额轻松烧穿 → 「进度冻结一小时」。
+// 三重治理（均不改变出题质量与抢救能力）：
+//   ① 去重：status+stage+msg+progress 全同 → 直接跳过（不写）。
+//   ② 节流合并：同阶段内非终态且距上次真实写 < 8s → 只保留「最新一条」待发，窗口到点写一次。
+//      并发出题时 genDone 递增被合并，进度条不倒退。
+//   ③ 立即写：终态（done/error/canceled）、阶段切换（planning→generating 等里程碑）、
+//      force（调用方显式要求）绕过节流，保证关键节点即时可见。
 let _stChain = Promise.resolve();
-function setStatus(status, stage, msg, progress) {
+const _ST_THROTTLE_MS = 8000;
+let _stLast = { key: '', at: 0, stage: '' };
+let _stPending = null;   // { status, stage, msg, progress, timer }
+function _stKey(status, stage, msg, progress) { return [status, stage, msg, progress].join('|'); }
+function setStatus(status, stage, msg, progress, force) {
+  const key = _stKey(status, stage, msg, progress);
+  const now = Date.now();
+  const terminal = status !== 'running';   // done/error/canceled 必须即时
+  const stageChanged = stage !== _stLast.stage;   // 阶段切换是里程碑，立即写
+  // ① 去重：与上次真实写入完全相同 → 跳过
+  if (!force && !terminal && !stageChanged && key === _stLast.key) return _stChain;
+  // ② 节流合并：同阶段内非终态非强制 + 距上次写 < 窗口 → 攒最新待发（旧待发被覆盖）
+  if (!force && !terminal && !stageChanged && (now - _stLast.at) < _ST_THROTTLE_MS) {
+    if (_stPending) clearTimeout(_stPending.timer);
+    const pend = { status, stage, msg, progress };
+    pend.timer = setTimeout(function () {
+      if (_stPending === pend) _stPending = null;
+      _stChain = _stChain.then(() => _setStatus(status, stage, msg, progress)).catch(() => {});
+    }, _ST_THROTTLE_MS - (now - _stLast.at));
+    _stPending = pend;
+    return _stChain;
+  }
+  // ③ 立即写（force / 终态 / 超窗口）：先丢弃待发（本次已含其最新信息）
+  if (_stPending) { clearTimeout(_stPending.timer); _stPending = null; }
   _stChain = _stChain.then(() => _setStatus(status, stage, msg, progress)).catch(() => {});
   return _stChain;
+}
+// 强制冲刷待发状态（终止/收卷等关键退出点调用，确保节流攒着的最后进度不丢）
+function flushPendingStatus() {
+  if (_stPending) {
+    const p = _stPending; _stPending = null;
+    clearTimeout(p.timer);
+    _stChain = _stChain.then(() => _setStatus(p.status, p.stage, p.msg, p.progress)).catch(() => {});
+  }
+  return _stChain;
+}
+// 丢弃待发状态（调用方紧接着要用 ghRetry 直写终态时用）：终态已含最新信息，
+// 若不清待发，8s 后迟到的 running PATCH 会把刚写好的 done/error 覆盖回去。
+function dropPendingStatus() {
+  if (_stPending) { clearTimeout(_stPending.timer); _stPending = null; }
 }
 async function _setStatus(status, stage, msg, progress) {
   pushLog((stage ? '[' + stage + '] ' : '') + (msg || ''));
   // savedCount = 已成功落盘到 partial.json 的题数（= 客户端随时能抢救走的数量），
   // 让本地无需额外拉 Gist 就知道「现在有几题可抢救」，任务行可直接显示入口。
-  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v8' }) } } };
-  try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); log('status →', status, stage || '', msg || ''); return true; }
+  const payload = { files: { 'status.json': { content: JSON.stringify({ status, stage: stage || '', msg: msg || '', progress: progress == null ? null : progress, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: RUNNER_VER }) } } };
+  try { await ghRetry('PATCH', '/gists/' + GIST_ID, payload); _stLast = { key: _stKey(status, stage, msg, progress), at: Date.now(), stage: stage }; log('status →', status, stage || '', msg || ''); return true; }
   catch (e) {
     const hint = (e && e.status === 404)
       ? '　👉 诊断：能读 job.json 却写不回 status，几乎可断定 CLOUDJOB_GH_TOKEN 对 Gist 缺「写」权限（请用 classic PAT 勾选 gist，或 fine-grained PAT 把 Gist 设为 Read & Write）'
@@ -303,6 +490,11 @@ async function aiRetry(messages, opts, tries = 3) {
     }
   }
 }
+// 【v13 子母卷】纯文本 AI 调用（带 aiRetry 重试链）：用于「命题形式研究报告」这类
+// 输出为自然语言（非 JSON）的阶段。think 默认跟随 JOB_THINK，由调用方 opts 覆盖。
+async function aiText(messages, opts) {
+  return await aiRetry(messages, Object.assign({ think: JOB_THINK }, opts || {}));
+}
 // 宽容 JSON 抽取：剥 <think> 思考块 → 剥代码围栏 → 找首个平衡的 {...} 或 [...]
 function extractJson(txt) {
   let t = String(txt || '')
@@ -405,9 +597,20 @@ async function aiToolJson(messages, opts, maxRounds) {
 // 为什么不能把 canceled 写进 status.json：setStatus 每一轮都会 PATCH 覆盖 status.json，
 // 前端写进去的 canceled 会被下一轮 running 覆盖冲掉 → 取消信号丢失。独立 cancel.json 不被覆盖。
 let _cancelCache = null;
+let _cancelCheckedAt = 0;   // 上次真实探测时刻（20s 节流）
 class CancelError extends Error { constructor(m) { super(m); this.name = 'CancelError'; } }
+/* 【2026-09-01 取消探测节流】出题池每取一题前后都查取消信号，且 cancel.json 在用户
+ * 取消前根本不存在 → _cancelCache 永远是 null → 每次探测都是真实 GET（全量 gist，
+ * 随 partial.json 增长越来越大）。35 题的卷子光取消探测就烧 ~100 次配额。
+ * 节流到 20s 一次：取消延迟 ≤20s + 题边界，用户无感；配额省下一个数量级。
+ * 已取消则永久缓存（取消不可逆）；阶段边界 cancelCheckpoint(force) 不受节流约束。
+ * 【2026-09-03 再放宽到 30s】取消探测是无条件 GET 整个 gist（含已落盘的 partial.json 全集，
+ * 越跑越大），是继 setStatus/flushPartial 之后的第三配额大户。放宽到 30s：取消响应延迟
+ * ≤30s + 题边界（一题本就 30s~2min，用户点停止后最迟下一题边界生效），配额再省 1/3。 */
 async function checkCancel(force) {
-  if (_cancelCache && !force) return _cancelCache;
+  if (_cancelCache && _cancelCache.canceled) return _cancelCache;
+  if (!force && Date.now() - _cancelCheckedAt < 30000) return _cancelCache;
+  _cancelCheckedAt = Date.now();
   try {
     const g = await ghRetry('GET', '/gists/' + GIST_ID);
     const f = g && g.files && g.files['cancel.json'];
@@ -422,6 +625,7 @@ async function cancelCheckpoint() {
 }
 
 // ---------- 并发池 ----------
+// 固定并发版本（保留：非 AI 密集的场景仍可用，如组识别有本地 PDF 渲染瓶颈）
 async function pool(items, conc, worker, onEachDone) {
   const results = new Array(items.length);
   let idx = 0, done = 0;
@@ -430,6 +634,13 @@ async function pool(items, conc, worker, onEachDone) {
       const ci = await checkCancel();
       if (ci && ci.canceled) break;                       // 已取消：不再取新题
       const i = idx++;
+      // 【2026-09-03 竞态修复】while 检查与真正取号之间隔着 await checkCancel()——并发 worker
+      // 可能同时通过检查，恢复后 idx++ 越过 items.length 拿到幽灵下标：worker 内访问
+      // items[undefined] 会抛 TypeError，pool 把它记成 results[i]={__err} 多出一个「幽灵第 N+1 题」。
+      // 旧版靠终检 validateQuestion 过滤掉它；但 v12 的节流时序让幽灵更易命中「本地硬校验→重写」
+      // 通道——重写 mock/真实 AI 返回合法题时会把它洗成合法题混进最终卷（题量 6→7）。
+      // 取号后立即边界守卫，越界直接归还（不消耗 done/不回调）。
+      if (i >= items.length) break;
       try { results[i] = await worker(items[i], i); }
       catch (e) {
         if (e && e.name === 'CancelError') { results[i] = { __canceled: true }; break; }
@@ -444,6 +655,80 @@ async function pool(items, conc, worker, onEachDone) {
   return results;
 }
 
+// 【T7 v13 智能并发池】对齐本地「快升探测版」调度器并加 429 感知——目标：尽可能压满
+// 接口吞吐、把总出题时长压到最短，同时被限流时自动收敛不烧重试配额。
+//  - 每完成 2 个「快而稳」样本（平均耗时 <30s）→ 并发 +1（慢速成功=API 已饱和排队，不升）
+//  - 任一失败 → 立即 -1；连续 2 失败 → 再 -1 到底（快速避险）
+//  - 429 限流 → 额外降 1 + 置 10s 冷却（冷却期内不升档；aiRetry 自带退避，池只负责不再添乱）
+//  - 空闲 worker 等 120ms 再看新许可（动态扩容时自动被唤醒补位）
+// start=起始并发，max=上限（默认 start*5 封顶 20）；签名与 pool 完全兼容，调用点可平移。
+let RATE_STRIKES = 0;   // 近期 429 计数（跨池共享：出题池撞限流，重写池开局也别太猛）
+let RATE_COOLDOWN_UNTIL = 0;
+function is429Err(e) {
+  const m = (e && e.message) || '';
+  return /HTTP 429|限流|too many|rate.?limit/i.test(m);
+}
+async function smartPool(items, start, worker, onEachDone, opts) {
+  opts = opts || {};
+  const MIN = 1, MAX = Math.max(start, opts.max != null ? opts.max : Math.min(20, start * 5));
+  let cur = Math.min(start, items.length || 1), idx = 0, done = 0;
+  let recent = [], sinceUp = 0, failStreak = 0;
+  const _t0 = Date.now();
+  function observe(ms, ok, err) {
+    if (ok) {
+      recent.push(ms); if (recent.length > 4) recent.shift();
+      failStreak = 0; sinceUp++;
+      if (cur < MAX && sinceUp >= 2 && recent.length >= 2
+          && Date.now() >= RATE_COOLDOWN_UNTIL
+          && recent.reduce(function (a, b) { return a + b; }, 0) / recent.length < 30000) {
+        cur++; sinceUp = 0; recent = [];
+        log('⚡ 并发升档 →', cur);
+      }
+    } else {
+      failStreak++; recent = []; sinceUp = 0;
+      const r429 = !!err && is429Err(err);
+      const before = cur;
+      if (cur > MIN) cur--;
+      if (failStreak >= 2) { cur = Math.max(MIN, cur - 1); failStreak = 0; }
+      if (r429) {
+        RATE_STRIKES++; RATE_COOLDOWN_UNTIL = Date.now() + 10000;
+        if (cur > MIN) cur--;
+        pushLog('🚦 接口限流 429：并发降 ' + before + '→' + cur + '，冷却 10s（已撞限流 ' + RATE_STRIKES + ' 次）', 'warn');
+      } else if (cur < before) {
+        pushLog('⚠️ AI 调用失败：并发降 ' + before + '→' + cur, 'warn');
+      }
+    }
+  }
+  const results_store = new Array(items.length);
+  let inFlight = 0;
+  async function runOne() {
+    while (idx < items.length) {
+      if (inFlight >= cur) { await sleep(120); continue; }   // 活跃数达当前并发：小睡等新许可（cur 升档后自动补位）
+      const ci = await checkCancel();
+      if (ci && ci.canceled) break;
+      const i = idx++;
+      if (i >= items.length) break;                     // 同 pool 的幽灵下标守卫
+      const wt = Date.now();
+      inFlight++;
+      try {
+        results_store[i] = await worker(items[i], i);
+        observe(Date.now() - wt, true, null);
+      } catch (e) {
+        if (e && e.name === 'CancelError') { results_store[i] = { __canceled: true }; break; }
+        results_store[i] = { __err: (e && e.message) || String(e) };
+        observe(Date.now() - wt, false, e);
+        log('worker 失败 @' + i, e.message);
+      } finally { inFlight--; }
+      done++; if (onEachDone) onEachDone(done, items.length);
+      const ci2 = await checkCancel();
+      if (ci2 && ci2.canceled) break;
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(MAX, items.length)) }, runOne));
+  pushLog('⚡ 智能并发结束：峰值 ' + cur + ' 路 · 用时 ' + Math.round((Date.now() - _t0) / 1000) + 's · 完成 ' + done + '/' + items.length);
+  return results_store;
+}
+
 // ---------- 提示词（与 sprint.js 本地管线同风格，独立内联） ----------
 const SUBJ_NAME = { math: '数学', ctrl: '专业课', eng: '英语', pol: '政治' };
 
@@ -456,7 +741,7 @@ function bpStructureDesc(bp) {
 function bpTotalScore(bp) { return Number(bp && bp.totalScore) || 150; }
 function bpTimeLimit(bp) { return Number(bp && bp.timeLimit) || 180; }
 
-// 蓝本预设（与 js/core/exam-pipeline.js 保持同步）
+// 蓝图预设（与 js/core/exam-pipeline.js 保持同步）
 const DEFAULT_BP = {
   shuyi: { name: '数学一（真题卷型）', subject: 'math', totalScore: 150, timeLimit: 180, types: [{ type: 'choice', count: 10, score: 5 }, { type: 'fill', count: 6, score: 5 }, { type: 'solve', count: 6, score: 0 }], starMix: { 1: 0, 2: 15, 3: 45, 4: 30, 5: 10 } },
   ctrl: { name: '专业课（6 道综合大题）', subject: 'ctrl', totalScore: 150, timeLimit: 180, types: [{ type: 'solve', count: 6, score: 25 }], starMix: { 1: 0, 2: 0, 3: 35, 4: 45, 5: 20 } },
@@ -465,6 +750,81 @@ const DEFAULT_BP = {
   ying2: { name: '英语二', subject: 'eng', totalScore: 100, timeLimit: 180, types: [{ type: 'fill', count: 10, score: 1 }, { type: 'choice', count: 15, score: 2 }, { type: 'essay', count: 2, score: 15 }, { type: 'solve', count: 1, score: 0 }], starMix: { 1: 8, 2: 22, 3: 40, 4: 25, 5: 5 } }
 };
 const SUBJ_TO_PRESET = { math: 'shuyi', ctrl: 'ctrl', eng: 'yingyi', pol: 'pol' };
+
+// 【2026-09-03 链路加固】从蓝图反推每道题的 score —— 不再相信出题 AI 自报 score。
+// 出题 schema 里没有 score 字段，AI 会自由发挥（常全 5）；必须由 blueprint.types[].score 决定性覆盖。
+// 旧版兜底 "|| 5" 是分值失真总根源（22 题 × 5 = 110 ≠ bp.totalScore 150，趋势图分母/成绩单档位全错）。
+function scoreForType(bp, qtype) {
+  var types = (bp && bp.types) || [];
+  var t = types.find(function (x) { return x && x.type === qtype; });
+  if (!t) return 5;   // 蓝图未规定（如 essay 0 分）→ 兜底 5
+  return Number(t.score) || 0;
+}
+// 把"每题 score 应分"转成自然语言描述注入 plannerSystem，让 AI 在规划阶段就把 score 写齐（方便审查对照）。
+function scoreSpecText(bp) {
+  var types = (bp && bp.types) || [];
+  return types.map(function (t) { return (t.score || 0) + '分/' + (t.type || '?') + '×' + t.count + '道'; }).join('，');
+}
+// 把"bp.starMix 比例"转成"目标数量"：例如 {1:0,2:15,3:45,4:30,5:10} + 22 题 → ★2×3 / ★3×10 / ★4×7 / ★5×2
+// 出题完成后若分布明显偏离（±2 道以上）做一次 forceStarMix 再平衡，star 字段不再是 AI 自由发挥。
+function starMixTargets(bp, n) {
+  var mix = (bp && bp.starMix) || {};
+  var targets = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  var assigned = 0;
+  [1, 2, 3, 4, 5].forEach(function (s) {
+    var c = Math.round((mix[s] || 0) / 100 * n);
+    targets[s] = c; assigned += c;
+  });
+  // 舍入误差：把差值贴到占比最大的档
+  var diff = n - assigned;
+  if (diff !== 0) {
+    var topS = [3, 4, 2, 5, 1].sort(function (a, b) { return (mix[b] || 0) - (mix[a] || 0); })[0];
+    targets[topS] = Math.max(0, targets[topS] + diff);
+  }
+  return targets;
+}
+// 根据目标分布，把当前 questions 数组按 star 重新平衡：只在分布差异 ≥2 道时才动手（避免无谓改写）。
+function forceStarMix(questions, bp) {
+  var n = questions.length;
+  if (!n) return { changed: 0, distribution: {} };
+  var targets = starMixTargets(bp, n);
+  // 统计当前各 star 的题数
+  var counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  questions.forEach(function (q) {
+    var s = clampStar(q.star);
+    counts[s] = (counts[s] || 0) + 1;
+  });
+  var changed = 0;
+  // 多于目标的 star → 把多出来的题的 star 降到目标数最少的 star（保持题内容不变）
+  [5, 4, 3, 2, 1].forEach(function (s) {
+    var over = counts[s] - (targets[s] || 0);
+    if (over <= 0) return;
+    var deficitStars = [];
+    [1, 2, 3, 4, 5].forEach(function (t) { if ((counts[t] || 0) < (targets[t] || 0)) deficitStars.push(t); });
+    if (!deficitStars.length) return;
+    var moved = 0;
+    for (var i = 0; i < questions.length && moved < over; i++) {
+      var q = questions[i];
+      if (clampStar(q.star) !== s) continue;
+      //  选当前缺口最大的目标 star
+      var pickT = deficitStars.sort(function (a, b) { return (targets[b] - counts[b]) - (targets[a] - counts[a]); })[0];
+      q.star = pickT;
+      counts[s]--; counts[pickT] = (counts[pickT] || 0) + 1;
+      changed++; moved++;
+    }
+  });
+  return { changed: changed, distribution: counts, targets: targets };
+}
+function clampStar(v) {
+  var n = Math.floor(Number(v));
+  if (n >= 1 && n <= 5) return n;
+  return 3;   // AI 不给或乱给 → 兜底 ★3（中档），避免渲染 ★?
+}
+// chiefSystem 的 targetHardPct 不再硬编码 40，按 bp.starMix 实际 ★4+★5 占比算
+function targetHardPct(bp) {
+  var mix = (bp && bp.starMix) || {};
+  return Math.round(((mix[4] || 0) + (mix[5] || 0)));
+}
 
 // 题量档缩放（与本地 sprint.js 的 volumeBp 同规则，保证云/地两端题量口径一致）：
 // lite：选择/填空减半、解答/写作保留，限时 ×0.7；full：全题型 ×1.5，限时 ×1.25。纯函数、不原地改蓝图。
@@ -492,7 +852,7 @@ function resolveBpFromPrefs(subj, prefs) {
   return scaleBp(def, prefs && prefs.count);
 }
 
-function plannerSystem(subj, prefs) {
+function plannerSystem(subj, prefs, styleNote) {
   const bp = resolveBpFromPrefs(subj, prefs);
   const diffNote = prefs.diff === 'superhard'
     ? '难度硬约束：全部为压轴难题（★4~★5），禁止基础题。'
@@ -503,20 +863,66 @@ function plannerSystem(subj, prefs) {
   const structure = bpStructureDesc(bp);
   const totalScore = bpTotalScore(bp);
   const timeLimit = bpTimeLimit(bp);
+  // 【2026-09-03】把 starMix 配比 + score 分值硬约束 + avoidHint 注入 prompt——出题 AI 不再自由发挥。
+  const starMixSpec = Object.keys((bp && bp.starMix) || {})
+    .filter(function (s) { return (bp.starMix[s] || 0) > 0; })
+    .map(function (s) { return '★' + s + ' ' + bp.starMix[s] + '%'; })
+    .join('，');
+  const scoreSpec = scoreSpecText(bp);
+  const historyTopics = Array.isArray(prefs.historyTopics) ? prefs.historyTopics : [];
+  const avoidHint = historyTopics.length
+    ? '\n【避重·硬约束】以下考点与角度在最近卷已考过：' + historyTopics.slice(0, 30).map(function (t) { return String(t).slice(0, 50); }).join(' / ')
+      + '——**严禁原样复刻**（可考同模块的不同考点，或换设问角度）。'
+    : '';
+  // 【v13 子母卷】styleNote：母卷命题形式研究报告（derive 模式）。注入后总工按母卷风格规划子卷，
+  //   而非自由押题。非 derive 模式此参数为空，行为与旧版完全一致（零回归）。
+  const styleBlock = styleNote
+    ? '\n【子卷·仿母卷命题形式】本卷是某母卷的子卷，须严格模仿下列命题形式研究报告的'
+      + '题型结构/考点分布逻辑/难度配比/设问风格出题（出新题、换数据换情境，绝不复刻母卷原题）：\n'
+      + styleNote + '\n'
+    : '';
   return '你是考研' + subjName(subj) + '命题总工程师。请按给定蓝本规划一份押题卷。'
     + '\n【蓝本】' + (bp.name || '押题卷') + '：' + structure + '，共 ' + n + ' 题，总分 ' + totalScore + '，限时 ' + timeLimit + ' 分钟。'
+    + '\n【难度配比硬约束】' + starMixSpec + '——每题 star 严格按此分布（★1-2 基础 / ★3 中档 / ★4-5 压轴）。'
+    + '\n【分值硬分配】每题 score = ' + scoreSpec + '；规划阶段把每题 score 直接写入（与蓝本严格一致）。'
     + '\n【难度】' + diffNote
+    + styleBlock
+    + avoidHint
     + '\n要求：①覆盖不同考点，突出今年高频与考生薄弱方向 ②题型分布严格符合蓝本结构 ③每题给出方向描述供出题 AI 执行。\n'
-    + '只输出 JSON：{"title":"卷名","timeLimit":' + timeLimit + ',"questions":[{"topicName":"考点","type":"choice|fill|solve|essay","direction":"命题方向一句话"}]}';
+    + '只输出 JSON：{"title":"卷名","timeLimit":' + timeLimit + ',"questions":[{"topicName":"考点","type":"choice|fill|solve|essay","direction":"命题方向一句话","star":1-5,"score":按分值硬分配}]}';
+}
+// 【v13 子母卷】母卷命题形式研究员：读母卷指纹（结构 + 每题选题摘要），产出一份
+//   「命题形式研究报告」文本，注入 plannerSystem 指导子卷规划。与「出题」解耦——
+//   研究员只做归纳（零编造：只依据指纹里给的结构与摘要，不臆测母卷没有的东西）。
+function deriveStyleSystem(subj, prefs) {
+  return '你是考研' + subjName(subj) + '命题形式研究员。给你一张母卷的结构化指纹（题型分布、分值、难度★配比、'
+    + '每题考点与题干摘要）。任务：归纳这张卷子的【命题形式特征】，供后续据此仿出一张同形式的子卷。'
+    + '【铁律】①只做归纳，严禁编造指纹里没有的题号/考点；②聚焦"形式"而非"具体题目内容"——'
+    + '要提炼出可迁移到一套全新题目的规律（如：选择题前 6 题考基础概念辨析、后 4 题考综合应用；'
+    + '大题按章节轮动、每题设置多问递进；计算量分布、陷阱类型偏好等）。'
+    + '只输出一段纯文本研究报告（≤500 字，分点陈述，不要 JSON、不要标题寒暄）：'
+    + '1) 题型与分值结构规律 2) 考点分布逻辑（哪些模块占多少、如何轮动）3) 难度梯度与★配比规律 '
+    + '4) 设问风格（直接求值/证明/辨析/应用情境的占比与套路）5) 仿制子卷时最该复刻的 3 个形式特征。';
 }
 function questionSystem(subj) {
   return '你是考研' + subjName(subj) + '命题专家。按给定蓝图出一道题：题目创新但解法严格在考纲内；题干严谨无歧义；选择题给 4 个选项（A. B. C. D. 开头）；答案必须正确——输出前自己把解答完整走一遍（能算的数值都算实），确保答案与解析逐步一致。\n'
     + '【解析完整性·硬要求】solution 必须"分步推导→结论→易错点"三段式完整；solve/essay 题解析 ≥60 字、choice 题 ≥25 字、fill 题 ≥20 字；禁止只写最终答案或一句话带过。\n'
+    + '【字段必填】star（1-5 整数，按蓝图分配，不要自由发挥）+ diff（easy|medium|hard，按 star 派生：★1-2→easy，★3→medium，★4-5→hard）。\n'
     + '只输出 JSON：{"stem":"题干(LaTeX用$...$)","type":"choice|fill|solve|essay","options":["A. ..","B. ..","C. ..","D. .."]或省略,"answer":"正确答案","solution":"详细解析","trap":"常见陷阱一句话","diff":"easy|medium|hard","star":1-5}';
 }
-function chiefSystem(subj) {
-  return '你是考研' + subjName(subj) + '押题卷总审查工程师。逐题检查：①解析是否完整（是否分步推导+结论+易错点、是否满足 solve/essay≥60字·choice≥25字·fill≥20字的下限——看的是**完整解析**，不是片段）②答案是否正确（工具开启时优先用 python_exec 真实验算关键步骤，不要心算）③题干是否严谨无歧义 ④选项是否有双对/无解 ⑤难度星级是否虚标。verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。\n'
-    + '只输出 JSON：{"verdict":"ok|minor|major","targetHardPct":40,"hardPct":实际hard百分比,"summary":"总评一句话","needsRewrite":[{"index":题号从1开始,"reason":"问题","fixHint":"修改指引"}]}';
+function chiefSystem(subj, bp) {
+  // 【2026-09-03】接收 bp → targetHardPct 从硬编码 40 改为按 bp.starMix 实际 ★4+★5 占比算（数学一 40 / 专业课 65 / 政治 20 / 英语一 30 / 英语二 30）；
+  // 同时要求审查时核对题分是否对齐蓝图。
+  var tHP = targetHardPct(bp);
+  var scoreSpec = scoreSpecText(bp);
+  return '你是考研' + subjName(subj) + '押题卷总审查工程师。逐题检查：'
+    + '①解析是否完整（是否分步推导+结论+易错点、是否满足 solve/essay≥60字·choice≥25字·fill≥20字的下限——看的是**完整解析**，不是片段）'
+    + '②答案是否正确（工具开启时优先用 python_exec 真实验算关键步骤，不要心算）'
+    + '③题干是否严谨无歧义 ④选项是否有双对/无解 ⑤难度星级 star 是否虚标（★1-2 基础 / ★3 中档 / ★4-5 压轴）'
+    + '⑥【新增】题目方向 direction 是否与考点 topicName 一致 ⑦【新增】题分 score 是否与蓝图分值硬分配一致（蓝图：' + scoreSpec + '）。\n'
+    + 'verdict 判定：全过关 ok；≤2 题小问题 minor；更多或整卷性问题 major。'
+    + 'targetHardPct（按蓝本 ★4+★5 占比）：' + tHP + '。\n'
+    + '只输出 JSON：{"verdict":"ok|minor|major","targetHardPct":' + tHP + ',"hardPct":实际hard百分比,"summary":"总评一句话","needsRewrite":[{"index":题号从1开始（必须在 1..' + (bpQuestionCount(bp)) + ' 范围内）, "reason":"问题","fixHint":"修改指引"}]}';
 }
 
 // ---------- 本地蓝本硬校验（纯代码，零幻觉防线） ----------
@@ -555,6 +961,523 @@ function braceBalanced(s) {
   return n === 0;
 }
 
+// ---------- 终止信号处理（2026-09-01「进度静止一小时不动」的另一半元凶） ----------
+// Actions 超时（timeout-minutes）或手动取消工作流时，runner 进程收到 SIGTERM 直接被杀，
+// status.json 永远停在最后一次成功回写——本地侧无限轮询一个死任务，表现为
+// 「进度/日志冻结，一小时回来还是静止」。终止前尽力写一条 error 终态（带原因 +
+// 可抢救题数），让本地立刻知道任务已死、该去抢救 partial.json，而不是干等。
+let _sigHandled = false;
+async function handleTermination(sig) {
+  if (_sigHandled) return;
+  _sigHandled = true;
+  log('!! 收到 ' + sig + '：执行器将被终止（Actions 超时或手动取消），尽力回写终态…');
+  dropPendingStatus();   // 丢弃节流攒着的待发 running，避免 8s 后迟到 PATCH 覆盖下面的 error 终态
+  // 被杀的宽限期只有几秒：直写不走 ghRetry（限额长退避会白等几分钟，等来 SIGKILL）
+  const payload = { files: {
+    'status.json': { content: JSON.stringify({ status: 'error', stage: '', msg: '⚠ 执行器被强制终止（' + sig + '：Actions 超时或手动取消）· 已出 ' + _partialCount + ' 题已落盘 partial.json，可点「🆘 抢救已出题目」收卷', progress: null, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: RUNNER_VER }) }
+  } };
+  for (let i = 0; i < 2; i++) {
+    try { await ghReq('PATCH', '/gists/' + GIST_ID, payload); log('✅ 终态已回写'); break; }
+    catch (e) { log('!! 终态回写失败（第 ' + (i + 1) + ' 次）：', e.message); await sleep(1500); }
+  }
+  process.exit(1);
+}
+process.on('SIGTERM', () => handleTermination('SIGTERM'));
+process.on('SIGINT', () => handleTermination('SIGINT'));
+
+// ---------- 主流程 ----------
+// ==================== 📥 PDF 试卷导入（v10，2026-09-02 新增通道） ====================
+/* 与「出卷通道」平行的第二条云端流水线：客户端把用户试卷（PDF/图片）base64 塞进
+ * 任务 Gist（source.pdf.b64 或 source.pdf），云端用 Actions runner 自带的 poppler 工具链解析：
+ *   pdfinfo 页数 → 逐页 pdftotext 判断文字层密度
+ *   → 文字页按连续页分组喂文本模型；扫描页 pdftoppm 转 PNG 喂视觉模型
+ *   → 逐题结构校验 + 跨组去重 → 每组识别完即 flushPartial 落盘（中途失败可抢救）
+ *   → result.json（builtBy:'pdf-import'，结构与 mockExams 条目一致）
+ * 零幻觉铁律：识别不出的题只标记（lowConfidence/noAnswer）绝不编造；
+ * 客户端收卷后走「预览确认」人工修订，未经人工过目的导入不当成品用。 */
+const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+function extOf(name) { const m = String(name || '').toLowerCase().match(/\.(\w+)$/); return m ? m[1] : ''; }
+
+// 【v14 乱码文字层判定】有些 PDF 用无 ToUnicode 映射的子集字体（CID 编码）：本地阅读器
+// 按内嵌字形直接画「看起来正常」，但 pdftotext 提取出来是「狶狶狶」碎片乱码。
+// 旧防御只看字符数 ≥240，乱码页照样放行文本通道 → AI 收到噪声直接拒答（"输出中没有 JSON"）。
+// 三重启发式（任一命中即乱码）：
+//   ① 非常用字符占比 >0.45（CJK 扩展区/兼容区生僻字——注意 CID 乱码也常用 U+4E00 区的生僻字，
+//      所以光靠①不够，见②③）
+//   ② 长度 ≥3 的连续同字符覆盖 >50%（「狶狶狶狶犥犥犥」式碎片重复）
+//   ③ 单一字符占比 >25%（真中文页 top 字频一般 <8%；乱码/点线页 top 字频暴增）
+// 常用字符白名单：CJK 基本区 U+4E00-9FA5 + 假名 + ASCII + CJK 标点 + 全角（一律用 \u 转义写，
+// 防止字面汉字区间被工具链编码破坏——曾发生「一-龥」变成「㐀-䶿」致全部正常中文误判乱码）
+const COMMON_CJK_RE = /[\u4e00-\u9fa5\u3040-\u30ffA-Za-z0-9\u3000-\u303f\uff00-\uffef]/;
+function garbledRatio(txt) {
+  // Array.from 按码点拆分：代理对（CJK 扩展区 𠀋/𪚥 等）算 1 字符——若用 s.length（UTF-16 计数）
+  // 会让这类字符的分母翻倍、rare 占比被稀释一半，导致扩展区乱码漏判。
+  const arr = Array.from(String(txt || '').replace(/\s+/g, ''));
+  const n = arr.length;
+  if (n < 30) return 0;
+  let rare = 0, topCnt = 0;
+  const cnt = {};
+  let runCover = 0, prev = '', run = 0;
+  // run≥4 的连续同字符计入「重复覆盖」：正常中文/英文几乎不会出现 4 连同字；
+  // CID 乱码（狶狶狶狶）与填空点线（＿＿＿＿）都会命中——前者是噪声该转视觉，
+  // 后者视觉同样能读，转过去无害。阈值取 4 而非 3，避开「看看」「谢谢」类自然叠字。
+  const flushRun = () => { if (run >= 4) runCover += run; };
+  for (const ch of arr) {
+    if (COMMON_CJK_RE.test(ch) === false) rare++;
+    cnt[ch] = (cnt[ch] || 0) + 1;
+    if (cnt[ch] > topCnt) topCnt = cnt[ch];
+    if (ch === prev) run++; else { flushRun(); prev = ch; run = 1; }
+  }
+  flushRun();
+  return Math.max(rare / n, runCover / n, topCnt / n * 0.9);
+}
+// 一页文字层是否「文本通道不可用」→ 转视觉。两个独立信号（任一命中即转）：
+// ① garbledRatio > 0.45：CID 碎片乱码（狶狶狶式，生僻字主导+高重复）；
+// ② PUA 私有区字符（\uE000-\uF8FF）占比 >3% 或绝对数 >30：字体无 ToUnicode 映射的
+//    「半坏文字层」——真·实测样本（李林四套卷）中文正常但公式括号全变 \uf0ee\uf0ee，
+//    pypdf 字频 rare 高达 0.80；整体 ratio 只 0.36 会漏判，但 PUA 信号 100% 特异
+//    （正常 PDF 文字层零 PUA）。公式残缺对文本模型是噪声，视觉模型反而能看原型。
+function puaCount(txt) {
+  let n = 0;
+  for (const ch of String(txt || '')) { const c = ch.codePointAt(0); if (c >= 0xE000 && c <= 0xF8FF) n++; }
+  return n;
+}
+function pageIsGarbled(txt) {
+  if (garbledRatio(txt) > 0.45) return true;
+  const s = String(txt || '').replace(/\s+/g, '');
+  if (s.length < 30) return false;
+  const pua = puaCount(txt);
+  return pua > 30 || pua / s.length > 0.03;
+}
+function importTextSystem(subj) {
+  return '你是考研' + subjName(subj) + '试卷数字化工程师。用户给你一份试卷其中几页的文字层提取（pdftotext 输出，'
+    + '可能含页眉页脚、双栏错序、公式残缺、题目跨页）。任务：把每一道题完整还原成结构化 JSON。'
+    + '【铁律】①只做搬运与整理，严禁增删改题意、严禁编造卷面上没有的答案或解析——卷面没给答案就输出 answer:"" 并置 noAnswer:true。'
+    + '②题目跨页出现时合并为一题（sourcePages 给全部页码）。③公式保留为 LaTeX（$...$），文字层里错乱的上下标/根号按你能确定的最小修改还原；'
+    + '拿不准是否还原正确就把 confidence 调低（0-1 小数），不要猜。④题号 no 用卷面原题号（数字），分卷/无题号按出现顺序编号。'
+    + '⑤页眉页脚、答题卡填涂说明、注意事项等非试题文字一律丢弃。'
+    + '只输出 JSON：{"questions":[{"no":1,"stem":"题干","type":"choice|fill|solve|essay","options":["A. ..","B. ..","C. ..","D. .."],"answer":"卷面答案","solution":"卷面解析（没有则空串）","noAnswer":false,"topicName":"考点","score":数字或null,"sourcePages":[1],"confidence":0.95}]}';
+}
+function importVisionSystem(subj) {
+  return '你是考研' + subjName(subj) + '试卷数字化工程师。用户给你试卷整页的高清图片（扫描版/拍照版）。'
+    + '任务：逐题识别图片中的试题，还原成结构化 JSON。'
+    + '【铁律】①忠实转录：识别什么输出什么，严禁补全图片里没有的题干、答案或解析；看不清的字用 □ 占位并调低 confidence。'
+    + '②卷面没印答案就 answer:"" + noAnswer:true，严禁用你的知识"顺手解出来"冒充卷面答案。'
+    + '③数学公式必须用 LaTeX（$...$）准确还原（分式/根号/上下标/积分号）。④题号 no 用卷面原题号。'
+    + '⑤一道题跨页时在两页都识别完整部分，sourcePages 标该页即可（合并由系统处理）。'
+    + '只输出 JSON：{"questions":[{"no":1,"stem":"题干","type":"choice|fill|solve|essay","options":["A. ..","B. ..","C. ..","D. .."],"answer":"卷面答案","solution":"卷面解析（没有则空串）","noAnswer":false,"topicName":"考点","score":数字或null,"sourcePages":[1],"confidence":0.95}]}';
+}
+// 【v13 答案解析补全】解答器：给卷面缺答案/解析的题补「AI 参考答案」。
+//   与转录通道解耦——转录铁律「严禁顺手解题」保持不变，补全是独立显式步骤（用户勾选才会跑）。
+//   开思考模式（opts.think=true）提高解题正确率；输出仍走 JSON 便于机器回填。
+function importFillSystem(subj) {
+  return '你是考研' + subjName(subj) + '命题解析专家。用户给你一道试卷原题（卷面没有答案或解析）。'
+    + '任务：把这道题完整解出来，给出参考答案与分步解析。'
+    + '【铁律】①输出前先自己把解答完整走一遍，能算的数值必须算实，确保答案与解析逐步一致；'
+    + '②解析按「思路→分步推导→结论」组织，solve/essay ≥60 字、choice/fill ≥25 字；'
+    + '③若题目信息不全（缺条件/题干有 □ 占位导致无法唯一求解），不要硬编——'
+    + 'answer 与 solution 各写「无法求解：<原因>」并在 unsure 里说明缺什么。'
+    + '只输出 JSON：{"answer":"参考答案（choice 给字母）","solution":"分步解析","unsure":"无法求解的原因或不确定点，确定则空串"}';
+}
+// 导入题结构校验（与出卷题的 validateQuestion 不同：忠实搬运优先，残次不判死只标记）
+function validateImported(q) {
+  if (!q || typeof q !== 'object' || !q.stem || String(q.stem).trim().length < 6) return '题干缺失';
+  const t = ['choice', 'fill', 'solve', 'essay'].indexOf(String(q.type)) >= 0 ? String(q.type) : ((Array.isArray(q.options) && q.options.length === 4) ? 'choice' : 'solve');
+  if (t === 'choice' && (!Array.isArray(q.options) || q.options.length < 2)) return '选择题缺选项';
+  if (t === 'choice' && Array.isArray(q.options) && q.options.length === 4 && q.answer) {
+    const letters = q.options.map(o => String(o || '').trim().charAt(0).toUpperCase());
+    if (letters.indexOf(String(q.answer).trim().charAt(0).toUpperCase()) < 0) return '答案不在选项中';
+  }
+  return '';
+}
+function normalizeImported(q, g) {
+  let type = ['choice', 'fill', 'solve', 'essay'].indexOf(String(q.type)) >= 0 ? String(q.type) : ((Array.isArray(q.options) && q.options.length === 4) ? 'choice' : 'solve');
+  let options = Array.isArray(q.options) ? q.options.filter(o => o != null && String(o).trim() !== '').map(o => String(o)) : [];
+  let stem = String(q.stem || '').trim();
+  let low = false;
+  const conf = typeof q.confidence === 'number' ? q.confidence : null;
+  if (conf != null && conf < 0.7) low = true;
+  // 选择题结构不完整：把选项并入题干（忠实保留信息），降级 solve——判分管线对坏 choice 会直接报错
+  if (type === 'choice' && (options.length !== 4 || !options.length)) {
+    if (options.length >= 2) stem += '\n' + options.join('\n');
+    options = []; type = 'solve'; low = true;
+  }
+  let answer = q.answer == null ? '' : String(q.answer).trim();
+  const noAnswer = !!q.noAnswer || answer === '';
+  if (noAnswer) low = true;
+  // choice 答案不在选项内（validateImported 拦下）→ 同样标低置信，交人工裁决
+  if (validateImported(q)) low = true;
+  let pages = Array.isArray(q.sourcePages) && q.sourcePages.length ? q.sourcePages.map(Number).filter(n => n > 0) : (g.pages || []);
+  return {
+    no: Number(q.no) || null,
+    stem: stem, type: type, options: options.length === 4 ? options : undefined,
+    answer: answer, solution: q.solution == null ? '' : String(q.solution).trim(),
+    noAnswer: noAnswer, topicName: q.topicName == null ? '' : String(q.topicName).trim(),
+    score: typeof q.score === 'number' && q.score > 0 ? q.score : null,
+    sourcePages: pages, confidence: conf, lowConfidence: low,
+    fromImport: true, importKind: g.kind, importNote: validateImported(q) || ''
+  };
+}
+function bookChapterSystem(subject, kind) {
+  const kn = kind === '习题册' ? '习题册' : '讲义';
+  return '你是考研资料数字化专家。下面是一本' + subject + kn + '中某一章的原文（文字层提取，可能有排版噪声）。'
+    + '请产出本章的结构化学习内容，只输出 JSON（不要 markdown 围栏）：'
+    + '{"content":["讲义要点段落1","段落2",…],"questions":[{"stem":"题目原文","options":["A. ..","B. .."]或省略,"answer":"答案","solution":"解析（含步骤）","page":原文页码}]}。'
+    + '要求：1) content 提炼本章真正的知识内容（定义/定理/方法/结论/例题讲解），每段≤300字，按原文顺序，公式用 $…$ LaTeX；'
+    + '2) questions 提取原文中出现的例题与习题（保留题号），没有题目就给空数组；3) 忠实原文，禁止编造原文没有的内容；4) 用简体中文。';
+}
+
+async function runImport(gist, job, prefs) {
+  const subj = prefs.subject && prefs.subject !== 'auto' ? prefs.subject : (prefs.importSubject || 'math');
+  // ---------- ① 拉源文件 ----------
+  await setStatus('running', 'parsing', '📥 拉取试卷源文件…', 2);
+  // 【v11 资源 Gist 拆文件】优先从独立资源 Gist 读源文件（任务 Gist 永远只几 KB，
+  // 不再与几 MB 的 PDF 同 Gist 触发 GitHub API 截断边界）。回退到任务 Gist 内源文件（兼容老路径）。
+  const gFiles = gist.files || {};
+  let buf = null;
+  let sourceOrigin = '';
+  try {
+    if (SOURCE_GIST_ID) {
+      const assetGist = await ghRetry('GET', '/gists/' + SOURCE_GIST_ID);
+      const aFiles = (assetGist && assetGist.files) || {};
+      buf = await readSourceBuffer(aFiles, '资源 Gist');
+      sourceOrigin = 'resource gist ' + SOURCE_GIST_ID;
+      pushLog('📂 源文件来自资源 Gist（' + Math.round(buf.length / 1024) + 'KB，gist=' + SOURCE_GIST_ID.slice(0, 8) + '…）');
+    }
+  } catch (e) { pushLog('⚠️ 资源 Gist 读取失败，回退任务 Gist：' + String(e.message || e).slice(0, 120), 'warn'); }
+  if (!buf) {
+    try {
+      buf = await readSourceBuffer(gFiles, '任务 Gist');
+      sourceOrigin = 'task gist';
+    } catch (e) { throw new Error('源文件读取失败：' + ((e && e.message) || e)); }
+  }
+  if (!buf || buf.length < 100) throw new Error('源文件读取为空（来源：' + sourceOrigin + '）——请确认提交时已上传试卷文件，或删除任务重试');
+  const isImg = prefs.importKind === 'image';
+  pushLog('📄 源文件 ' + Math.round(buf.length / 1024) + ' KB · 类型 ' + (isImg ? '图片' : 'PDF') + ' · ' + (prefs.fileName || '(未命名)') + ' · 来源 ' + sourceOrigin);
+  // 【2026-09-05 v13 修复：非标准 PDF 头】部分扫描件/下载器产物在 %PDF 魔数前混入 BOM 或
+  // 垃圾字节（如 \r\n、HTML 残片），旧版要求 %PDF 严格在 offset 0 → 整单报「不是合法 PDF」。
+  // 现在在前 4KB 内搜索魔数，找到即裁掉头部杂质继续解析；找不到才判非 PDF。
+  if (!isImg) {
+    const isMagic = (o) => buf[o] === 0x25 && buf[o + 1] === 0x50 && buf[o + 2] === 0x44 && buf[o + 3] === 0x46;
+    if (!isMagic(0)) {
+      let found = -1;
+      const scanMax = Math.min(buf.length - 4, 4096);
+      for (let i = 1; i <= scanMax; i++) { if (isMagic(i)) { found = i; break; } }
+      if (found > 0) {
+        pushLog('🔧 非标准 PDF 头：%PDF 位于偏移 ' + found + '（前有 ' + found + ' 字节杂质/BOM），自动裁头后继续解析');
+        buf = buf.subarray(found);
+      } else {
+        throw new Error('源文件不是合法 PDF（前 4KB 内未找到 %PDF 头）——若是图片请改用图片导入；'
+          + '若文件确实是 PDF 且是 v13 前提交的任务，属旧版上传通道把字节写坏（latin1 损坏），请删除该任务后用最新页面重新提交');
+      }
+    }
+  }
+  const wd = pathT.join(osT.tmpdir(), 'cjimp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7));
+  fsT.mkdirSync(wd, { recursive: true });
+  try {
+    // ---------- ② 分组（文字组 / 视觉组） ----------
+    const groups = [];
+    if (isImg) {
+      const mime = IMG_MIME[extOf(prefs.fileName)] || 'image/png';
+      if (buf.length > 2.6 * 1024 * 1024) throw new Error('图片过大（' + Math.round(buf.length / 1048576) + ' MB > 2.6 MB 接口上限），请在手机端压缩后重试');
+      groups.push({ kind: 'img', imgs: ['data:' + mime + ';base64,' + buf.toString('base64')], pages: [1] });
+    } else {
+      const pdfPath = pathT.join(wd, 'src.pdf');
+      fsT.writeFileSync(pdfPath, buf);
+      await ensurePoppler();   // 【v11】poppler 可能没预装 → 探测 + 缺失时自动 apt 安装
+      const vi = await runShell('pdfinfo ' + JSON.stringify(pdfPath), 30000);
+      if (!vi.ok) {
+        // 错误信息纠偏：工具缺失 ≠ 文件损坏。旧版把 not found 也报成「文件损坏/加密」，
+        // 用户会一直去换 PDF，而真正要做的是升级 workflow（或等 runner 自救失败后的明确指引）。
+        if (/not found|No such file|command not found/i.test(String(vi.err))) {
+          throw new Error('执行器环境缺少 poppler-utils（pdfinfo/pdftotext/pdftoppm 都不可用，自动安装也失败）——请到「🛠 配置向导」点一次「🚀 一键安装」升级 workflow（新版 workflow 自带安装步骤）');
+        }
+        throw new Error('PDF 解析失败（文件损坏或加密受保护）：' + String(vi.err).slice(0, 200));
+      }
+      const pm = vi.out.match(/^Pages:\s+(\d+)/m);
+      const pages = pm ? parseInt(pm[1], 10) : 0;
+      if (!pages) throw new Error('PDF 页数为 0');
+      if (pages > (prefs.mode === 'book' ? 300 : 40)) throw new Error('共 ' + pages + ' 页，超过单次导入上限 ' + (prefs.mode === 'book' ? 300 : 40) + ' 页（' + (prefs.mode === 'book' ? '建议按章拆分后分批导入' : '建议拆分后分批导入') + '）');
+      pushLog('🧾 pdfinfo：' + pages + ' 页，逐页提取文字层…');
+      const pgTxt = {};
+      for (let p = 1; p <= pages; p++) {
+        await checkCancel();   // 每页边界：拉取用户取消信号
+        const r = await runShell('pdftotext -f ' + p + ' -l ' + p + ' -layout ' + JSON.stringify(pdfPath) + ' -', 30000);
+        pgTxt[p] = r.ok ? r.out : '';
+        if (p === 1 || p === pages || p % 5 === 0) await setStatus('running', 'parsing', '🧾 逐页提取文字层 ' + p + '/' + pages + '…', 2 + Math.round(p / pages * 10));
+      }
+      // 文字密度阈值：pdftotext 压掉空白后 <240 字符判为「扫描页/公式页」，转图走视觉
+      // 【v14 乱码防御】字符数够但乱码率高的页（CID 无 ToUnicode 字体）同样转视觉——
+      //   否则喂文本模型只会得到「AI 已拒绝输出 JSON」。
+      const TEXT_MIN = 240;
+      let tGroup = [];
+      const flushT = () => {
+        if (!tGroup.length) return;
+        const gp = tGroup.map(g => g.p);
+        groups.push({
+          kind: 'text', text: tGroup.map(g => g.txt).join('\n\n'), pages: gp,
+          // 【v14 第二层防御】文本通道被 AI 拒答时的视觉重试闭包（renderPageImgs 声明提升，调用时才用）
+          visionRetry: async function () {
+            const out = [];
+            for (let i = 0; i < gp.length; i += 2) {
+              const chunk = gp.slice(i, i + 2);
+              const pngs = await renderPageImgs(chunk);
+              if (pngs.length) out.push({ imgs: pngs, pages: chunk });
+            }
+            return out;
+          }
+        });
+        tGroup = [];
+      };
+      const imgPages = [];
+      let garbledN = 0;
+      for (let p = 1; p <= pages; p++) {
+        const flat = String(pgTxt[p] || '').replace(/\s+/g, '').trim();
+        const garbled = flat.length >= TEXT_MIN && pageIsGarbled(pgTxt[p]);
+        if (garbled) garbledN++;
+        if (flat.length >= TEXT_MIN && !garbled) tGroup.push({ p: p, txt: pgTxt[p] });
+        else { flushT(); imgPages.push(p); }
+      }
+      flushT();
+      if (garbledN) pushLog('⚠️ 检测到 ' + garbledN + ' 页文字层为乱码（PDF 用无 ToUnicode 的子集字体），已转视觉识别');
+      if (imgPages.length) pushLog('👁 转视觉的页：' + imgPages.join(',') + '（文字层不足 ' + TEXT_MIN + ' 字符或乱码，转 150dpi 图片）');
+      // 【v14】单页渲染 helper：分组转图与「文本组被拒后转视觉重试」共用（150dpi 与 2.6MB 上限口径一致）
+      async function renderPageImgs(pList) {
+        const out = [];
+        for (const p of pList) {
+          const base = pathT.join(wd, 'pg' + p);
+          const r = await runShell('pdftoppm -f ' + p + ' -l ' + p + ' -png -r 150 ' + JSON.stringify(pdfPath) + ' ' + JSON.stringify(base), 90000);
+          if (!r.ok) { pushLog('⚠️ 第 ' + p + ' 页转图失败：' + String(r.err).slice(0, 120), 'warn'); continue; }
+          for (const f of fsT.readdirSync(wd).filter(x => x.indexOf('pg' + p) === 0 && /\.png$/.test(x))) {
+            const data = fsT.readFileSync(pathT.join(wd, f));
+            if (data.length > 2.6 * 1024 * 1024) { pushLog('⚠️ 第 ' + p + ' 页图 ' + Math.round(data.length / 1048576) + 'MB 过大，跳过', 'warn'); continue; }
+            out.push('data:image/png;base64,' + data.toString('base64'));
+          }
+        }
+        return out;
+      }
+      for (let i = 0; i < imgPages.length; i += 2) {
+        const chunk = imgPages.slice(i, i + 2);
+        const pngs = await renderPageImgs(chunk);
+        if (pngs.length) groups.push({ kind: 'img', imgs: pngs, pages: chunk });
+      }
+
+      /* 【2026-09-06 资料库·book 分支】讲义/习题册整本导入：
+       * 与试卷拆题共用逐页文字提取与乱码判定，分支差异在 AI 目标——
+       *   ① AI 目录划分（整本 → 章节页码范围，2-30 章）
+       *   ② 分章提取（并发 2）：讲义要点段落 + 例题/习题（题干/答案/解析）
+       *   ③ book.json（结构 = studyBook 记录）→ 前端资料库阅读
+       * v1 边界：仅处理文字层页；乱码/扫描页跳过并记录（电子讲义/习题册绝大多数是文字层 PDF）。 */
+      if (prefs.mode === 'book') {
+        if (garbledN) pushLog('⚠️ ' + garbledN + ' 页乱码/扫描页跳过（资料库 v1 仅处理文字层页）');
+        await setStatus('running', 'parsing', '🗂 AI 划分章节结构…', 15);
+        const digest = [];
+        for (let p = 1; p <= pages; p++) {
+          const t = String(pgTxt[p] || '').replace(/\s+/g, ' ').trim();
+          if (t.length >= 40) digest.push('P' + p + ': ' + t.slice(0, 110));
+        }
+        if (digest.length < 3) throw new Error('可读文字页过少（' + digest.length + ' 页）——纯扫描版 PDF 暂不支持整本导入，可按章拍照分批处理');
+        const outline = await aiJson(
+          [{ role: 'system', content: '你是教材结构分析专家。根据一份资料的逐页摘要（P页码: 内容首行）划分章节结构。只输出 JSON：{"chapters":[{"title":"章节名(≤24字)","from":起始页,"to":结束页}]}。要求：2-30 个章节；页码范围连续、覆盖全部有内容的页；粒度=书的一级目录（章/讲），不要拆到小节。' },
+           { role: 'user', content: '【逐页摘要】（共 ' + pages + ' 页）\n' + digest.join('\n') + '\n\n请划分章节。' }],
+          { think: false, temperature: 0.2, maxTokens: JOB_MAXTOK });
+        const chapters = (Array.isArray(outline.chapters) ? outline.chapters : [])
+          .map(c => ({ title: String((c && c.title) || '未命名章节').slice(0, 24), from: Math.max(1, Number(c && c.from) || 1), to: Math.min(pages, Number(c && c.to) || 1) }))
+          .filter(c => c.to >= c.from).slice(0, 30);
+        if (!chapters.length) throw new Error('AI 未划分出有效章节');
+        pushLog('🗂 章节划分：' + chapters.length + ' 章（' + chapters.map(c => c.from + '-' + c.to).join('，') + '）');
+
+        // ② 分章提取（并发 2）：要点段落 + 题目，每章独立落盘
+        const out = [];
+        let done = 0;
+        await pool(chapters, 2, async (ch, ci) => {
+          await cancelCheckpoint();
+          let text = '';
+          for (let p = ch.from; p <= ch.to; p++) text += '\n【P' + p + '】\n' + String(pgTxt[p] || '');
+          text = text.trim().slice(0, 24000);
+          if (!text) return;
+          const res = await aiJson(
+            [{ role: 'system', content: bookChapterSystem(subject, prefs.bookKind) },
+             { role: 'user', content: '【章节】' + ch.title + '（原文页 ' + ch.from + '-' + ch.to + '）\n【原文】\n' + text + '\n\n请按系统规约提取本章讲义要点与题目，只输出 JSON。' }],
+            { think: false, temperature: 0.3, maxTokens: 16000 });
+          const content = (Array.isArray(res.content) ? res.content : []).map(x => String(x || '').trim().slice(0, 500)).filter(Boolean).slice(0, 30);
+          const questions = (Array.isArray(res.questions) ? res.questions : []).slice(0, 30).map(function (q, qi) {
+            return {
+              id: 'bq' + ci + '_' + qi,
+              stem: String((q && q.stem) || '').trim().slice(0, 600),
+              options: Array.isArray(q.options) ? q.options.slice(0, 4).map(o => String(o || '').slice(0, 120)) : undefined,
+              answer: String((q && q.answer) || '').trim().slice(0, 200),
+              solution: String((q && q.solution) || '').trim().slice(0, 800),
+            };
+          }).filter(q => q.stem);
+          if (!content.length && !questions.length) return;
+          out.push({ id: 'ch' + (ci + 1), title: (ch.title || '章节').slice(0, 24), from: ch.from, to: ch.to, content: content, questions: questions });
+          done++;
+          await setStatus('running', 'extracting', '📖 已提取 ' + done + '/' + chapters.length + ' 章 · ' + ch.title, 20 + Math.round(done / chapters.length * 70));
+        }, (d, n) => { });
+        out.sort((a, b) => a.from - b.from);
+        const qTotal = out.reduce((a, c) => a + c.questions.length, 0);
+        if (!out.length) throw new Error('全部章节提取失败（模型未产出有效内容）——可重试或换模型');
+        const book = {
+          id: (job.jobId || 'book') + '-book',
+          title: (String(prefs.bookTitle || '').trim() || '未命名资料').slice(0, 60),
+          kind: (prefs.bookKind === '习题册' ? '习题册' : '讲义'),
+          subject: subject,
+          chapters: out, chapterCount: out.length, questionCount: qTotal,
+          basedOnPages: pages, builtBy: 'book-import', generatedAt: new Date().toISOString()
+        };
+        pushLog('✅ 整本提取完成：' + out.length + ' 章 · ' + qTotal + ' 题');
+        dropPendingStatus();
+        await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
+          'result.json': { content: JSON.stringify({ builtBy: 'book-import', book: book }) },
+          'status.json': { content: JSON.stringify({ status: 'done', stage: 'finalizing', msg: '📚 整本提取完成（' + out.length + ' 章 · ' + qTotal + ' 题），可收录到资料库', progress: 100, log: RUN_LOG, updatedAt: new Date().toISOString(), runnerVer: RUNNER_VER, isBook: true }) }
+        } });
+        log('✅ 资料库任务完成');
+        return;
+      }
+    }
+    if (!groups.length) throw new Error('没有可识别的页面（文字层与转图均失败）');
+    pushLog('🗂 识别分组：' + groups.map(g => g.kind + '(' + g.pages.join('+') + ')').join(' · '));
+    await setStatus('running', 'parsing', '🗂 ' + groups.length + ' 组页面就绪（文字 ' + groups.filter(g => g.kind === 'text').length + ' · 视觉 ' + groups.filter(g => g.kind === 'img').length + '）', 13);
+    // ---------- ③ 逐组识别（并发 3，组内按页保序） ----------
+    const all = [];
+    const failedGroups = [];
+    // 识别一个组（text/img 两种形态共用）：返回题数；AI 失败抛错由调用方处理
+    async function extractGroup(g) {
+      await cancelCheckpoint();
+      const userTxt = g.kind === 'text'
+        ? '【第 ' + g.pages.join('、') + ' 页 · 文字层提取】\n' + String(g.text).slice(0, 24000)
+        : '【第 ' + g.pages.join('、') + ' 页 · 整页图片】请从图片逐题识别。';
+      const sys = g.kind === 'text' ? importTextSystem(subj) : importVisionSystem(subj);
+      const msgs = g.kind === 'img'
+        ? [{ role: 'system', content: sys }, { role: 'user', content: [{ type: 'text', text: userTxt }].concat(g.imgs.map(u => ({ type: 'image_url', image_url: { url: u } }))) }]
+        : [{ role: 'system', content: sys }, { role: 'user', content: userTxt }];
+      const res = await aiJson(msgs, { think: false, temperature: 0.1 });
+      const rawList = res && Array.isArray(res.questions) ? res.questions : (Array.isArray(res) ? res : []);
+      const qs = [];
+      for (const raw of rawList) {
+        try { qs.push(normalizeImported(raw, g)); } catch (e) { pushLog('⚠️ 一题规范化失败已跳过：' + String(e.message || e).slice(0, 100), 'warn'); }
+      }
+      qs.forEach(q => all.push(q));
+      // 每组识别完立即落盘 partial.json（含 imported 标记）：中途失败/停止也能抢救已识别题
+      await flushPartial(all, { subject: subj, imported: true });
+      pushLog('🔎 第 ' + g.pages.join(',') + ' 页（' + g.kind + '）识别出 ' + qs.length + ' 题，累计 ' + all.length + ' 题已落盘');
+      return qs.length;
+    }
+    await pool(groups, 3, async (g) => {
+      try { return { n: await extractGroup(g) }; }
+      catch (e) {
+        const m = String((e && e.message) || e);
+        // 【v14 第二层防御】文字组被 AI 拒答（大概率是漏网的乱码文字层）→ 渲染整页转视觉重试一次。
+        //   判据取反更稳：除明确的传输层错误（HTTP 401/403/408/429/5xx、断网、超时）外全部转视觉——
+        //   解析类失败文案多样（没有 JSON / Unexpected token / 被截断 / 空正文），白名单容易漏。
+        const transportErr = /HTTP 40[138]|HTTP 429|HTTP 5\d\d|Failed to fetch|timeout|超时|ECONN/i.test(m);
+        if (g.kind === 'text' && typeof g.visionRetry === 'function' && !transportErr) {
+          try {
+            pushLog('🔁 第 ' + g.pages.join(',') + ' 页文本通道失败（' + m.slice(0, 60) + '），自动转视觉重试…', 'warn');
+            await setStatus('running', 'extracting', '🔁 第 ' + g.pages.join(',') + ' 页转视觉重试…', 40);
+            const imgGroups = await g.visionRetry();
+            let n2 = 0, lastErr = null;
+            for (const ig of imgGroups) {
+              try { n2 += await extractGroup(Object.assign({ kind: 'img' }, ig)); }
+              catch (e2) { lastErr = e2; pushLog('⚠️ 第 ' + ig.pages.join(',') + ' 页视觉重试仍失败：' + String(e2.message || e2).slice(0, 120), 'warn'); }
+            }
+            if (n2 > 0) return { n: n2, visionRescued: true };
+            failedGroups.push({ pages: g.pages, err: (lastErr && String(lastErr.message || lastErr)) || m });
+            return { __err: m };
+          } catch (e3) {
+            pushLog('⚠️ 第 ' + g.pages.join(',') + ' 页转视觉准备失败：' + String(e3.message || e3).slice(0, 120), 'warn');
+          }
+        }
+        failedGroups.push({ pages: g.pages, err: m.slice(0, 160) });
+        pushLog('⚠️ 第 ' + g.pages.join(',') + ' 页组识别失败：' + m.slice(0, 140), 'warn');
+        return { __err: m };
+      }
+    }, (d, n) => setStatus('running', 'extracting', '🔎 AI 拆题中（' + d + '/' + n + ' 组 · 已识出 ' + all.length + ' 题）…', 15 + Math.round(d / n * 65)));
+    if (!all.length) {
+      throw new Error('所有页面识别失败（共 ' + groups.length + ' 组' + (failedGroups.length ? '：' + failedGroups.map(f => 'P' + f.pages.join('+') + ' ' + f.err).join('；') : '') + '）');
+    }
+    // ---------- ④ 合并去重 + 排序 + 打包 ----------
+    await cancelCheckpoint();
+    await setStatus('running', 'finalizing', '📦 整理成卷…', 85);
+    const seen = {};
+    const uniq = [];
+    for (const q of all) {
+      const k = String(q.stem).replace(/\s+/g, '').slice(0, 90);
+      if (seen[k]) continue;
+      seen[k] = 1; uniq.push(q);
+    }
+    const dropped = all.length - uniq.length;
+    if (dropped) pushLog('🧹 跨页边界去重：丢弃 ' + dropped + ' 道重复题');
+    uniq.sort((a, b) => ((a.sourcePages[0] || 0) - (b.sourcePages[0] || 0)) || ((Number(a.no) || 0) - (Number(b.no) || 0)));
+    uniq.forEach((q, i) => { if (q.no == null) q.no = i + 1; });
+    const lowN = uniq.filter(q => q.lowConfidence).length;
+    // ---------- ④.5 AI 思考补全参考答案与解析（v13，prefs.fillAnswers 开启时） ----------
+    // 只补「卷面缺答案/缺解析」的题：answer/solution 为空的才进补全队列。
+    // 补全产物挂到 q.aiAnswer/q.aiSolution + aiFilled:true——绝不覆盖卷面原文字段，
+    // 客户端预览与卷页用「🧠 AI 补全」徽标区分展示（零幻觉：卷面有无答案永远可溯）。
+    let filledN = 0, fillFailN = 0;
+    if (prefs.fillAnswers) {
+      const needFill = uniq.filter(q => !String(q.answer || '').trim() || !String(q.solution || '').trim());
+      if (needFill.length) {
+        await setStatus('running', 'finalizing', '🧠 AI 思考补全 ' + needFill.length + ' 题的答案解析…', 86);
+        pushLog('🧠 开始补全：' + needFill.length + '/' + uniq.length + ' 题缺卷面答案或解析（思考模式逐题求解）');
+        await smartPool(needFill, 4, async (q) => {
+          try {
+            const r = await aiJson(
+              [{ role: 'system', content: importFillSystem(subj) },
+               { role: 'user', content: '【第 ' + (q.no || '?') + ' 题·' + (q.type || 'solve') + '】\n题干：' + String(q.stem).slice(0, 3000)
+                 + (Array.isArray(q.options) && q.options.length ? '\n选项：\n' + q.options.join('\n') : '')
+                 + (String(q.answer || '').trim() ? '\n（卷面已有答案，仅需补解析）：' + String(q.answer).slice(0, 300) : '') }],
+              { think: true, temperature: 0.2 });
+            const aiAns = String((r && r.answer) || '').trim();
+            const aiSol = String((r && r.solution) || '').trim();
+            if (/^无法求解/.test(aiAns) || (!aiAns && !aiSol)) {
+              fillFailN++;
+              q.aiNote = String((r && r.unsure) || aiAns || 'AI 判定信息不足').slice(0, 200);
+              pushLog('⚠️ 第 ' + (q.no || '?') + ' 题无法补全：' + String(q.aiNote).slice(0, 80), 'warn');
+              return;
+            }
+            if (!String(q.answer || '').trim() && aiAns) q.aiAnswer = aiAns;
+            if (!String(q.solution || '').trim() && aiSol) q.aiSolution = aiSol;
+            if (r.unsure) q.aiNote = String(r.unsure).slice(0, 200);
+            q.aiFilled = true;
+            filledN++;
+          } catch (e) {
+            fillFailN++;   // 单题失败不致命：该题保持无答案进人工复核
+            log('补全失败 @题' + (q.no || '?'), e.message);
+          }
+        }, (d, n) => setStatus('running', 'finalizing', '🧠 AI 补全中（' + d + '/' + n + ' 题）…', 86 + Math.round(d / n * 9)));
+        pushLog('🧠 补全完成：成功 ' + filledN + ' 题' + (fillFailN ? '，无法求解/失败 ' + fillFailN + ' 题（保持待人工）' : ''));
+      } else {
+        pushLog('🧠 已勾选补全，但所有题都有卷面答案与解析，跳过');
+      }
+    }
+    const totalScore = uniq.reduce((a, q) => a + (Number(q.score) || 0), 0);
+    const exam = {
+      id: job.jobId + '-imp',
+      title: (String(prefs.importTitle || '').trim() || '📄 导入试卷').slice(0, 60) + '（' + uniq.length + ' 题）',
+      subject: subj,
+      timeLimit: Number(prefs.importTimeLimit) > 0 ? Number(prefs.importTimeLimit) : Math.max(30, uniq.length * 6),
+      totalScore: totalScore || uniq.length * 5,
+      questions: uniq,
+      imported: true, lowConfidenceCount: lowN, failedPages: failedGroups.map(f => f.pages.join('+')),
+      aiFilledCount: filledN,
+      builtBy: 'pdf-import', generatedAt: new Date().toISOString()
+    };
+    pushLog('✅ 识别完成：' + uniq.length + ' 题 · 待人工复核 ' + lowN + ' 题' + (failedGroups.length ? ' · 失败页组 ' + failedGroups.length : ''));
+    await flushPartial(uniq, { subject: subj, imported: true, force: true });
+    dropPendingStatus();
+    await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
+      'result.json': { content: JSON.stringify(exam) },
+      'status.json': { content: JSON.stringify({ status: 'done', stage: 'finalizing', msg: '📄 识别完成（' + uniq.length + ' 题 · 待复核 ' + lowN + '），可收卷导入预览确认', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, imported: true, updatedAt: new Date().toISOString(), runnerVer: RUNNER_VER }) }
+    } });
+    log('✅ 导入任务完成');
+  } finally {
+    try { fsT.rmSync(wd, { recursive: true, force: true }); } catch (e) {}
+  }
+}
+
 // ---------- 主流程 ----------
 (async function main() {
   // 供 catch（取消/失败路径）使用：try 块内 let/const 的作用域到不了 catch，
@@ -572,9 +1495,20 @@ function braceBalanced(s) {
     }
     if (!gist || !gist.files || !gist.files['job.json']) throw new Error('Gist 缺 job.json');
     JOB_GIST = gist;
-    const job = JSON.parse(gist.files['job.json'].content);
+    // 【2026-09-02 容错】用容错读取（content 缺失/空/size 不符自动 raw_url 回补）；
+    // 万一仍失败，把 GIST_ID + files keys/sizes 全打出来方便直接定位
+    var jobJsonRaw = await gistFileText(gist.files, 'job.json');
+    if (!jobJsonRaw) {
+      var fk = Object.keys(gist.files || {}).map(function (k) {
+        var f = gist.files[k];
+        return k + '(size=' + (f.size || 0) + ',truncated=' + !!f.truncated + ',contentLen=' + (f.content ? f.content.length : 0) + ')';
+      }).join(',');
+      throw new Error('GIST_ID=' + GIST_ID + ' job.json 读取为空/损坏。files=' + fk);
+    }
+    const job = JSON.parse(jobJsonRaw);
     JOB_JOBID = String(job.jobId || '');
-    const stNow = gist.files['status.json'] ? JSON.parse(gist.files['status.json'].content) : {};
+    var statusJsonRaw = gist.files['status.json'] ? await gistFileText(gist.files, 'status.json') : '{}';
+    const stNow = JSON.parse(statusJsonRaw || '{}');
     if (stNow.status === 'canceled') { log('任务已被用户取消，直接退出'); return; }
     const prefs = job.prefs || {};
     /* 【H1 断点续跑】job.resume 存在 → 从 partial.json 取回上次已出的题，只补缺口。
@@ -614,17 +1548,21 @@ function braceBalanced(s) {
     }
 
     // ①.5 自检模式：只验证链路（Gist 读写 + secret 有效 + AI 配置在场），不调 AI、不耗 token
-    if (prefs.check) {
-      const aiOk = !!(aiConf('endpoint') && aiConf('key') && aiConf('model'));
+    if (prefs.check) {const aiOk = !!(aiConf('endpoint') && aiConf('key') && aiConf('model'));
       await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
         'result.json': { content: JSON.stringify({ cloudJobCheck: true, ok: true, aiConfigPresent: aiOk, checkedAt: new Date().toISOString() }) },
-        'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '🧪 自检通过：Gist 读写 ✓ · CLOUDJOB_GH_TOKEN ✓ · AI 配置在场' + (aiOk ? ' ✓' : ' ✗'), progress: 100, updatedAt: new Date().toISOString(), runnerVer: 'v1' }) }
+        'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '🧪 自检通过：Gist 读写 ✓ · CLOUDJOB_GH_TOKEN ✓ · AI 配置在场' + (aiOk ? ' ✓' : ' ✗'), progress: 100, updatedAt: new Date().toISOString(), runnerVer: RUNNER_VER }) }
       } });
       log('🧪 自检完成');
       return;
     }
     const subj = prefs.subject === 'auto' ? 'math' : (prefs.subject || 'math');   // auto 由规划阶段自行判断科目语境
     JOB_SUBJ = subj;
+    // 【v10 导入通道】prefs.mode==='import' → 走 PDF/图片识别流水线，与出卷流水线平行
+    if (prefs.mode === 'import') {
+      await runImport(gist, job, prefs);
+      return;
+    }
     log('接单', job.jobId, JSON.stringify(prefs));
     pushLog('📋 接单 ' + job.jobId + ' · ' + (SUBJ_NAME[subj] || subj) + ' · 难度 ' + (prefs.diff || 'mix') + ' · 模型 ' + (aiConf('model') || '?') + ' · maxTok ' + JOB_MAXTOK + (JOB_THINK ? ' · 💭 思考模式' : ' · ⚡ 不思考(结构化)'));
     pushLog('🧠 思考开关已对齐本地：' + (JOB_THINK ? '开启（若思考模型烧光 token 会自动关思考降级）' : '关闭（结构化 JSON 默认不思考，避免空正文卡死）'));
@@ -647,7 +1585,36 @@ function braceBalanced(s) {
 
     // ② 总工规划
     const isResume = resuming && resumeQs.length > 0;
-    await setStatus('running', 'planning', isResume ? ('续跑规划中…（已有 ' + resumeQs.length + ' 题，补 ' + resumeNeed + ' 题）') : '总工程师正在规划蓝图…', 5);
+    // 【2026-09-03】把生效蓝图提到主流程作用域：worker / chief / 终检都要用到 bp.starMix 与 bp.types
+    // （不再在 plannerSystem 里局部声明，避免 worker/chief 引用不到）。
+    const bp = resolveBpFromPrefs(subj, prefs);
+    // 【v13 子母卷】derive 模式：先读母卷指纹 → AI 归纳「命题形式研究报告」→ 注入 planner。
+    //   研究报告失败不致命（降级为无风格约束的普通出卷，任务仍能完成，只是不"仿母卷"）。
+    let deriveStyleNote = null;
+    if (prefs.mode === 'derive' && !isResume) {
+      await setStatus('running', 'planning', '🧬 研究母卷命题形式…', 3);
+      try {
+        let srcTxt = await gistFileText(gist.files, 'source.json');
+        if (!srcTxt && SOURCE_GIST_ID) {
+          const assetGist = await ghRetry('GET', '/gists/' + SOURCE_GIST_ID);
+          srcTxt = await gistFileText((assetGist && assetGist.files) || {}, 'source.json');
+        }
+        if (!srcTxt) throw new Error('任务未携带 source.json 母卷指纹');
+        const src = JSON.parse(srcTxt);
+        pushLog('🧬 母卷《' + (src.motherTitle || '?') + '》指纹就绪：' + (src.questions || []).length + ' 题 · ★配比 ' + JSON.stringify(src.starMix || {}));
+        deriveStyleNote = await aiText(
+          [{ role: 'system', content: deriveStyleSystem(subj, prefs) },
+           { role: 'user', content: '【母卷命题形式指纹】\n' + JSON.stringify(src).slice(0, 30000) }],
+          { temperature: 0.3 });
+        deriveStyleNote = String(deriveStyleNote || '').trim().slice(0, 1200);
+        if (!deriveStyleNote) deriveStyleNote = null;
+        pushLog(deriveStyleNote ? ('📝 命题形式研究报告完成（' + deriveStyleNote.length + ' 字），据此规划子卷') : '⚠️ 研究报告为空，降级为普通出卷');
+      } catch (e) {
+        pushLog('⚠️ 母卷形式研究失败，降级为普通出卷：' + String((e && e.message) || e).slice(0, 120), 'warn');
+        deriveStyleNote = null;
+      }
+    }
+    await setStatus('running', 'planning', isResume ? ('续跑规划中…（已有 ' + resumeQs.length + ' 题，补 ' + resumeNeed + ' 题）') : (deriveStyleNote ? '🧬 子卷总工按母卷形式规划蓝图…' : '总工程师正在规划蓝图…'), 5);
     let plan;
     if (isResume && resumeNeed <= 0) {
       // 题已够：跳过规划与出题，直接进入终检打包（单纯把上次落盘的题走完审查流程）
@@ -655,7 +1622,7 @@ function braceBalanced(s) {
       pushLog('✅ 题量已满足（' + resumeQs.length + '/' + job.resume.target + '），跳过出题直接终检');
     } else if (isResume) {
       plan = await aiJson(
-        [{ role: 'system', content: plannerSystem(subj, prefs) },
+        [{ role: 'system', content: plannerSystem(subj, prefs, deriveStyleNote) },
          { role: 'user', content: '【续跑任务】本卷此前已出好 ' + resumeQs.length + ' 题，还缺 ' + resumeNeed + ' 题。\n'
            + '已有题目涉及的考点与设问角度如下——请只规划**剩余的 ' + resumeNeed + ' 题**，'
            + '严禁重复已有考点与设问角度（否则用户会拿到两道雷同的题）：\n'
@@ -664,41 +1631,54 @@ function braceBalanced(s) {
         {});
     } else {
       plan = await aiJson(
-        [{ role: 'system', content: plannerSystem(subj, prefs) },
-         { role: 'user', content: '请规划本卷蓝图。' }],
+        [{ role: 'system', content: plannerSystem(subj, prefs, deriveStyleNote) },
+         { role: 'user', content: deriveStyleNote ? '请依据上述母卷命题形式，规划一张同形式的子卷蓝图（新题、不复刻母卷）。' : '请规划本卷蓝图。' }],
         {});
     }
     // 续跑且题已够时 questions 允许为空；其余情况空蓝图就是失败
     if (!plan || !Array.isArray(plan.questions)) throw new Error('蓝图规划失败：返回格式不对');
     if (!plan.questions.length && !(isResume && resumeNeed <= 0)) throw new Error('蓝图规划失败：无 questions');
-    log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '');
-    pushLog('🗺 蓝图《' + (plan.title || '未命名卷') + '》规划完成：共 ' + plan.questions.length + ' 题 · 限时 ' + (plan.timeLimit || 120) + ' 分钟');
-    plan.questions.forEach((pq, i) => pushLog('　第' + (i + 1) + '题 ' + (pq.topicName || '?') + ' · ' + (pq.type || '?') + ' · ★' + (pq.star || '?')));
+    // 【2026-09-03 链路加固】蓝图落地时按 bp 决定性覆盖 score + star，AI 自由发挥不再生效。
+    // 1) score 用 scoreForType(bp, type) 反查（避免 AI 全填 5）；2) star 用 clampStar 兜底（避免 ?）;
+    // 3) starMixTargets/bp 决定每题目标档 → 超过 ±2 道差异再 forceStarMix 再平衡。
+    plan.questions.forEach(function (pq, i) {
+      pq.score = scoreForType(bp, pq.type);
+      pq.star = clampStar(pq.star);
+    });
+    var planStarMix = forceStarMix(plan.questions, bp);
+    log('蓝图完成：', plan.questions.length, '题 ·', plan.title || '', '· star 分布=', JSON.stringify(planStarMix.distribution));
+    pushLog('🗺 蓝图《' + (plan.title || '未命名卷') + '》规划完成：共 ' + plan.questions.length + ' 题 · 限时 ' + (plan.timeLimit || 120) + ' 分钟 · ★分布 ' + JSON.stringify(planStarMix.distribution));
+    plan.questions.forEach((pq, i) => pushLog('　第' + (i + 1) + '题 ' + (pq.topicName || '?') + ' · ' + (pq.type || '?') + ' · ★' + (pq.star || '?') + ' · ' + (pq.score || 0) + '分'));
     // 初始化逐题状态墙（浮窗卡片数据源）
     // 续跑时先为「上次已落盘的题」占位（st=done + resumed 标记），浮窗一眼能看出哪些是接着出的
     if (isResume) {
-      resumeQs.forEach((q, i) => QS.push({ i: i + 1, topic: String(q.topicName || '?').slice(0, 30), star: q.star || '?', type: q.type || '?', score: q.score || 5,
+      resumeQs.forEach((q, i) => QS.push({ i: i + 1, topic: String(q.topicName || '?').slice(0, 30), star: clampStar(q.star), type: q.type || '?', score: Number(q.score) || 5,
         st: 'done', resumed: true, stem: String(q.stem || '').slice(0, 140), ans: String(q.answer || '').slice(0, 60) }));
     }
-    plan.questions.forEach((pq, i) => QS.push({ i: resumeQs.length + i + 1, topic: String(pq.topicName || '?').slice(0, 30), star: pq.star || '?', type: pq.type || '?', score: pq.score || 5, st: 'wait' }));
+    plan.questions.forEach((pq, i) => QS.push({ i: resumeQs.length + i + 1, topic: String(pq.topicName || '?').slice(0, 30), star: pq.star, type: pq.type || '?', score: pq.score || 5, st: 'wait' }));
     await setStatus('running', 'generating', '并发出题中… 0/' + plan.questions.length, 10);
 
     // ③ 并发出题池
     let genDone = 0;
     const genTotal = plan.questions.length;
-    let questions = genTotal ? await pool(plan.questions, 4, async (pq, i) => {
+    let questions = genTotal ? await smartPool(plan.questions, 4, async (pq, i) => {
       const ci = await checkCancel();
       if (ci && ci.canceled) throw new CancelError('cancel');
       QS[i].st = 'run';
       QS[i].t0 = Date.now();
-      await setStatus('running', 'generating', '并发出题中… ' + genDone + '/' + genTotal, 10 + Math.round(genDone / genTotal * 45));
+      // 【2026-09-03 配额治理】开工不再单独 setStatus：QS[i].st='run' 会随「上一题完成」或
+      // 「本题完成」的节流窗口合并写入，浮窗逐题卡片仍会更新，省掉每题一次的冗余 PATCH。
       const out = await aiToolJson(
         [{ role: 'system', content: questionSystem(subj) },
          { role: 'user', content: '蓝图第' + (i + 1) + '题：' + JSON.stringify(pq) }],
         {});
       out.topicName = pq.topicName || out.topicName || '';
-      out.score = out.score || pq.score || 5;
+      // 【2026-09-03】出题 AI 经常乱填 score → 一律按蓝图 scoreForType 决定性覆盖；
+      // diff 字段也按 clampStar 反推，避免与 star 自相矛盾。
+      out.score = scoreForType(bp, out.type || pq.type);
       out.type = pq.type || out.type || 'solve';
+      out.star = clampStar(out.star);
+      out.diff = ({ 1: 'easy', 2: 'easy', 3: 'medium', 4: 'hard', 5: 'hard' })[out.star] || 'medium';
       if (!validateQuestion(out)) {
         QS[i].st = 'done';
         QS[i].sec = Math.round((Date.now() - QS[i].t0) / 1000);
@@ -737,15 +1717,31 @@ function braceBalanced(s) {
     // ⑤ 总工审查
     await setStatus('running', 'reviewing', '总工程师审查中…', 58);
     let review = {};
+    let reviewFailed = false;
     try {
       review = await aiToolJson(
-        [{ role: 'system', content: chiefSystem(subj) },
-         { role: 'user', content: '审查这份押题卷（题号从1开始）：\n' + JSON.stringify(questions.map((q, i) => ({ index: i + 1, stem: q.stem, options: q.options, answer: q.answer, solution: String(q.solution || ''), star: q.star })) ) }],
+        [{ role: 'system', content: chiefSystem(subj, bp) },
+         { role: 'user', content: '审查这份押题卷（题号从1开始，共 ' + questions.length + ' 题）：\n' + JSON.stringify(questions.map((q, i) => ({
+           index: i + 1, stem: q.stem, options: q.options, answer: q.answer,
+           solution: String(q.solution || ''), star: q.star, diff: q.diff, score: q.score,
+           topicName: q.topicName, type: q.type, direction: plan.questions[i] && plan.questions[i].direction
+         })) ) }],
         {});
-    } catch (e) { log('审查调用失败，仅按本地校验处理：', e.message); }
+    } catch (e) {
+      reviewFailed = true;
+      log('审查调用失败，仅按本地校验处理：', e.message);
+      pushLog('⚠️ 总审查调用失败（' + String((e && e.message) || '').slice(0, 60) + '），降级为本地校验通过', 'warn');
+    }
     const rewriteList = [];
     const seenRw = {};
-    ((review.needsRewrite) || []).forEach(r => { if (r && r.index && !seenRw[r.index]) { seenRw[r.index] = 1; rewriteList.push(r); } });
+    // 【2026-09-03】needsRewrite 的 index 必须落在 1..questions.length 范围内（之前不校验，
+    // AI 可能写 0 或超大下标 → 后续 questions[i] = undefined → 重写池空跑或越界）。
+    ((review.needsRewrite) || []).forEach(r => {
+      if (!r || !r.index) return;
+      var idx = parseInt(r.index, 10);
+      if (!(idx >= 1 && idx <= questions.length)) { log('审查 needsRewrite.index 越界：', r.index); return; }
+      if (!seenRw[idx]) { seenRw[idx] = 1; rewriteList.push(r); }
+    });
     localIssues.forEach(li => { if (!seenRw[li.index]) { seenRw[li.index] = 1; rewriteList.push(li); } });
     log('审查 verdict=', review.verdict || 'n/a', '待重写', rewriteList.length, '题');
     pushLog('🧐 总审查 verdict=' + (review.verdict || 'n/a') + (review.summary ? '（' + String(review.summary).slice(0, 60) + '）' : '') + '，待重写 ' + rewriteList.length + ' 题');
@@ -756,7 +1752,7 @@ function braceBalanced(s) {
     if (rewriteList.length) {
       await setStatus('running', 'rewriting', '定向重写 ' + rewriteList.length + ' 题…', 68);
       rewriteList.forEach(rw => { const q = QS[rw.index - 1]; if (q) q.st = 'rewrite'; });
-      await pool(rewriteList, 3, async (rw) => {
+      await smartPool(rewriteList, 3, async (rw) => {
         const i = rw.index - 1;
         const old = questions[i];
         if (!old) return null;
@@ -772,7 +1768,14 @@ function braceBalanced(s) {
             [{ role: 'system', content: questionSystem(subj) },
              { role: 'user', content: '重写这道题（原题如下）。' + feedback + '\n原题：' + JSON.stringify(old) }],
             {});
-          cand.topicName = old.topicName; cand.score = old.score; cand.type = old.type || cand.type;
+          // 旧题可能是 worker 失败占位（{__err}），topicName/score 会丢——回退到蓝图原题参数
+          const pq0 = plan.questions[i];
+          cand.topicName = old.topicName || (pq0 && pq0.topicName) || '';
+          // 【2026-09-03】重写也按蓝图决定性覆盖 score（避免 AI 在重写 prompt 里再填 5）
+          cand.score = scoreForType(bp, cand.type || (pq0 && pq0.type) || old.type);
+          cand.type = old.type || (pq0 && pq0.type) || cand.type;
+          cand.star = clampStar(cand.star);
+          cand.diff = ({ 1: 'easy', 2: 'easy', 3: 'medium', 4: 'hard', 5: 'hard' })[cand.star] || 'medium';
           const bad = validateQuestion(cand);
           if (!bad) { fixed = cand; break; }
           lastBad = bad;
@@ -795,14 +1798,32 @@ function braceBalanced(s) {
     // 剔除个别终检仍坏的题（宁缺毋滥），至少保留 60%
     questions = questions.filter(q => !validateQuestion(q));
     if (questions.length < 5) throw new Error('合格题不足 5 题，放弃交付');
-    const totalScore = questions.reduce((a, q) => a + (Number(q.score) || 5), 0);
+    // 【2026-09-03】重写后 / 终检后做一次 forceStarMix（防止 AI 自由发挥让 ★4+★5 远超 bp.starMix）
+    var finalMix = forceStarMix(questions, bp);
+    if (finalMix.changed > 0) pushLog('🎯 终检再平衡 star 配比：调整 ' + finalMix.changed + ' 题 → ' + JSON.stringify(finalMix.distribution));
+    // 【2026-09-03】总分对齐：Σ q.score 必须 = bp.totalScore（除不尽的零头贴最后一题）。
+    // 出题阶段已按 scoreForType 决定性覆盖，理论已对齐；此处兜底防止某个 review/chief 误改了 score。
+    var bpTotal = bpTotalScore(bp);
+    var sumScore = questions.reduce(function (a, q) { return a + (Number(q.score) || 0); }, 0);
+    if (Math.abs(sumScore - bpTotal) > 0.01 && questions.length) {
+      var drift = +(bpTotal - sumScore).toFixed(2);
+      questions[questions.length - 1].score = +((Number(questions[questions.length - 1].score) || 0) + drift).toFixed(2);
+      sumScore = questions.reduce(function (a, q) { return a + (Number(q.score) || 0); }, 0);
+      pushLog('⚖️ 总分对齐：原 Σ ' + sumScore.toFixed(0) + ' → 强制贴齐蓝图 ' + bpTotal + '（最后一题吸收 ' + drift + ' 分）');
+    }
+    const totalScore = sumScore;
     const exam = {
       title: plan.title || ('云端押题卷 · ' + (SUBJ_NAME[subj] || '')),
       subject: subj,
       timeLimit: plan.timeLimit || 120,
       totalScore: totalScore,
       questions: questions,
-      chiefReview: { verdict: review.verdict || (rewriteList.length ? 'minor' : 'ok'), hardPct: review.hardPct || null, targetHardPct: review.targetHardPct || null, summary: review.summary || '', rewrittenCount: rewriteList.length },
+      // 【2026-09-03】审查异常时不再默 ok（之前 reviewFailed=true 时 chiefReview.verdict 走 fallback 仍写 ok → 用户误以为"已过审"）；
+      // 降级为 'unknown' 让前端明示"AI 审查未响应，本地校验通过"
+      chiefReview: { verdict: reviewFailed ? 'unknown' : (review.verdict || (rewriteList.length ? 'minor' : 'ok')),
+        hardPct: review.hardPct || null, targetHardPct: targetHardPct(bp),
+        summary: review.summary || (reviewFailed ? 'AI 审查未响应，已按本地校验通过' : ''),
+        rewrittenCount: rewriteList.length, reviewFailed: reviewFailed },
       builtBy: 'cloud-actions',
       generatedAt: new Date().toISOString()
     };
@@ -812,13 +1833,17 @@ function braceBalanced(s) {
     // 先落盘终稿再写 result.json：这一步是整条链路的最后一跳、文件最大、最容易失败
     // （Gist 限额/网络/权限都可能在这一刻报错），落盘后即使它挂了，
     // 客户端也能从 partial.json 抢救出「已过总工审查的完整卷」，而不是退回初稿。
-    await flushPartial(questions, { reviewed: true, subject: subj });
+    await flushPartial(questions, { reviewed: true, subject: subj, force: true });
+    dropPendingStatus();
     await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
       'result.json': { content: JSON.stringify(exam) },
-      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: 'v8' }) }
+      'status.json': { content: JSON.stringify({ status: 'done', stage: '', msg: '出卷完成（' + questions.length + ' 题 · ' + totalScore + ' 分），可收卷导入', progress: 100, log: RUN_LOG, qs: QS, savedCount: _partialCount, updatedAt: new Date().toISOString(), runnerVer: RUNNER_VER }) }
     } });
     log('✅ 完成');
   } catch (e) {
+    // 进入终态处理（取消/失败）：先丢弃节流攒着的待发 running，否则它会在下面
+    // 直写 canceled/error 之后迟到触发，把终态覆盖回 running（客户端永远看到「进行中」）。
+    dropPendingStatus();
     // 取消路径：用户主动停止 → 按 savePartial 决定是否把已出合格题打包成 partial 卷
     if (e && e.name === 'CancelError') {
       const wantSave = !(e.message === 'user-cancel-no-save');
@@ -827,7 +1852,7 @@ function braceBalanced(s) {
         if (wantSave && cands.length) {
           // 取消路径也补一次落盘：把「最后一次 flush 之后才完成」的题补进 partial.json，
           // 保证 result.json 与 partial.json 内容一致（客户端优先用前者，后者作兜底）。
-          await flushPartial(cands);
+          await flushPartial(cands, { force: true });
           const partial = {
             title: '☁️ 云端押题卷（部分 · ' + cands.length + ' 题）',
             subject: (function () {
@@ -840,7 +1865,7 @@ function braceBalanced(s) {
           };
           await ghRetry('PATCH', '/gists/' + GIST_ID, { files: {
             'result.json': { content: JSON.stringify(partial) },
-            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: 'v8' }) }
+            'status.json': { content: JSON.stringify({ status: 'canceled', stage: '', msg: '⏹ 已停止 · 已保存 ' + cands.length + ' 题（可收卷导入部分卷）', progress: 100, partialSaved: true, partialCount: cands.length, savedCount: _partialCount, log: RUN_LOG, qs: QS, updatedAt: new Date().toISOString(), runnerVer: RUNNER_VER }) }
           } });
           log('⏹ 已停止并保存', cands.length, '题');
         } else {
@@ -862,7 +1887,7 @@ function braceBalanced(s) {
     // 这是本次重构的核心场景——执行器失败退出后，本地仍能从 partial.json 捞回已出的题，
     // 而不是像旧实现那样「进程一死，题目全没，本地点多少次保存都没用」。
     // SAVED 定义在 try 块之外，catch 里可安全引用（gist/subj 是 try 内 const，不可引用）。
-    try { await flushPartial(SAVED); } catch (e0) { log('!! 失败前抢救落盘异常：', e0.message); }
+    try { await flushPartial(SAVED, { force: true }); } catch (e0) { log('!! 失败前抢救落盘异常：', e0.message); }
     // 【H5】先把完整日志单独落盘，再写 error 状态：
     // 万一写 status 这一步也失败，日志已经在 log.json 里，客户端仍能看到「AI 在哪一步挂的」。
     pushLog('❌ 执行失败：' + String((e && e.message) || e).slice(0, 200), 'error');
