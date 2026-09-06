@@ -132,7 +132,7 @@ async function readSourceBuffer(files, tag) {
 // 执行器版本（单一事实来源）：本地 cloudjob.ts 用正则从本文件源码提取（本地资产 vs 仓库远端），
 // 向导第②步显示「云端 v? vs 本地 v?」。改版本只改这一处，所有 status.json 回写自动跟随。
 // 版本规则：runner 行为变更才 +1（v15 = 资料库 book 通道；v16 = 429 共享闸门不弃题 + score=0 自动均摊修复；v17 = book 分发致命修复 + 数学乱码转视觉）。
-const RUNNER_VER = 'v18';
+const RUNNER_VER = 'v19';
 
 if (!GIST_ID || !GH_TOKEN) { console.error('缺 GIST_ID 或 GH_TOKEN'); process.exit(1); }
 
@@ -1501,7 +1501,9 @@ async function runImport(gist, job, prefs) {
           const base = pathT.join(wd, 'pg' + p);
           const r = await runShell('pdftoppm -f ' + p + ' -l ' + p + ' -png -r 150 ' + JSON.stringify(pdfPath) + ' ' + JSON.stringify(base), 90000);
           if (!r.ok) { pushLog('⚠️ 第 ' + p + ' 页转图失败：' + String(r.err).slice(0, 120), 'warn'); continue; }
-          for (const f of fsT.readdirSync(wd).filter(x => x.indexOf('pg' + p) === 0 && /\.png$/.test(x))) {
+          // 【v19 致命修复】前缀必须带 '-'：旧版 indexOf('pg'+p)===0 让第 1 页同时命中
+          // pg10~pg16（2 页组实际塞 8 张图 → payload 暴涨/网关拒收）。pg{p}- 才是精确匹配。
+          for (const f of fsT.readdirSync(wd).filter(x => x.indexOf('pg' + p + '-') === 0 && /\.png$/.test(x))) {
             const data = fsT.readFileSync(pathT.join(wd, f));
             if (data.length > 2.6 * 1024 * 1024) { pushLog('⚠️ 第 ' + p + ' 页图 ' + Math.round(data.length / 1048576) + 'MB 过大，跳过', 'warn'); continue; }
             out.push('data:image/png;base64,' + data.toString('base64'));
@@ -1509,10 +1511,14 @@ async function runImport(gist, job, prefs) {
         }
         return out;
       }
-      for (let i = 0; i < imgPages.length; i += 2) {
-        const chunk = imgPages.slice(i, i + 2);
-        const pngs = await renderPageImgs(chunk);
-        if (pngs.length) groups.push({ kind: 'img', imgs: pngs, pages: chunk });
+      // 【v19】book 模式跳过这次预渲染：groups 对 book 无用（分章提取自己按页转图），
+      //   旧版白烧 16 次 pdftoppm 还留下满目录 pg*.png 诱发前缀误匹配 bug。
+      if (prefs.mode !== 'book') {
+        for (let i = 0; i < imgPages.length; i += 2) {
+          const chunk = imgPages.slice(i, i + 2);
+          const pngs = await renderPageImgs(chunk);
+          if (pngs.length) groups.push({ kind: 'img', imgs: pngs, pages: chunk });
+        }
       }
 
       /* 【2026-09-06 资料库·book 分支】讲义/习题册整本导入：
@@ -1570,10 +1576,35 @@ async function runImport(gist, job, prefs) {
         }
         pushLog('🗂 章节划分（' + structSrc + '）：' + chapters.length + ' 章 · ' + (chapters.some(c => c.group) ? chapters.length + ' 个小类 / ' + deriveBookGroups(chapters).length + ' 个大类' : '单层级'));
 
+        // 【v19 视觉能力预检】李林做题本事故根因：乱码书全部走视觉，而文本模型挂在宽容网关后时
+        // 会「静默丢图」——模型没收到任何图片却照常回 {"content":[],"questions":[]}，
+        // 旧版把空结果当正常跳过（无日志），最终只剩一句「模型未产出有效内容」，用户无从下手。
+        // 现在开跑前用首页做一次 3 行小测：读不出图上文字 = 模型不支持视觉，立即中止并给出换模型指引。
+        const visHeavy = pages > 0 && imgPages.length * 2 >= pages;
+        if (visHeavy) {
+          await setStatus('running', 'parsing', '👁 视觉能力预检…', 16);
+          try {
+            const probePages = imgPages.slice(0, 2);   // 首页可能是纯封面：带第 2 页，任一页读出文字即通过
+            const t1 = await renderPageImgs(probePages);
+            if (!t1.length) throw new Error('首页转图失败（pdftoppm 无产出）');
+            const probe = await aiJson(
+              [{ role: 'system', content: '你是视觉能力探针。给你资料页面图片，只输出 JSON：{"lines":["图中能读到的前 3 行文字原文"]}' },
+               { role: 'user', content: [{ type: 'text', text: '请逐字读出第一张图片最靠上的 3 行文字（若全是公式或无文字，读第二张图的标题行；都没有则返回空数组）。' }].concat(t1.map(u => ({ type: 'image_url', image_url: { url: u } }))) }],
+              { think: false, temperature: 0, maxTokens: 600 });
+            const got = Array.isArray(probe && probe.lines) ? probe.lines.filter(l => String(l).trim().length >= 2) : [];
+            if (!got.length) throw new Error('模型对图片返回空内容（典型症状：网关丢弃了图片段 / 模型不支持图片输入）');
+            pushLog('👁 视觉预检通过：模型能读图（示例识别：「' + String(got[0]).slice(0, 24) + '」）');
+          } catch (e) {
+            throw new Error('视觉预检失败——这本书 ' + imgPages.length + '/' + pages + ' 页文字层不可用，整本必须靠视觉模型提取。'
+              + '当前模型读不了图（' + String((e && e.message) || e).slice(0, 140) + '）。'
+              + '出路：到 设置→AI 把模型换成支持图片输入的视觉模型（如 GLM-4V-Plus / Qwen-VL-Max / GPT-4o / gemini-2.5-flash），保存后回到 ☁️ 云端任务点「♻️ 重发」。');
+          }
+        }
+
         // ② 分章提取（并发 3）：要点段落 + 题目，每章独立落盘
         const out = [];
-        let done = 0;
-        await pool(chapters, 3, async (ch, ci) => {
+        let done = 0, emptyN = 0;
+        const poolRes = await pool(chapters, 3, async (ch, ci) => {
           await cancelCheckpoint();
           const ps = []; for (let p = ch.from; p <= ch.to; p++) ps.push(p);
           const visN = ps.filter(p => imgSet[p]).length;
@@ -1583,7 +1614,7 @@ async function runImport(gist, job, prefs) {
             for (let i = 0; i < ps.length; i += 2) {
               const chunk = ps.slice(i, i + 2);
               const pngs = await renderPageImgs(chunk);
-              if (!pngs.length) continue;
+              if (!pngs.length) { pushLog('⚠️ 《' + ch.title + '》第 ' + chunk.join('、') + ' 页转图无产出，该 2 页跳过', 'warn'); continue; }
               const vr = await aiJson(
                 [{ role: 'system', content: bookChapterVisionSystem(subject, prefs.bookKind) },
                  { role: 'user', content: [{ type: 'text', text: '【章节】' + ch.title + '（原文页 ' + chunk.join('、') + ' · 整页图片）\n请按系统规约提取本页讲义要点与题目，只输出 JSON。' }] }
@@ -1592,7 +1623,11 @@ async function runImport(gist, job, prefs) {
               if (Array.isArray(vr.content)) res.content = res.content.concat(vr.content);
               if (Array.isArray(vr.questions)) res.questions = res.questions.concat(vr.questions);
             }
-            if (!res.content.length && !res.questions.length) return;
+            if (!res.content.length && !res.questions.length) {
+              emptyN++;
+              pushLog('⚠️ 《' + ch.title + '》视觉提取返回空（预检虽过，模型对这几页没读出内容——可重试或换更强的视觉模型）', 'warn');
+              return;
+            }
           } else {
             // 文字为主（原路径）
             let text = '';
@@ -1621,7 +1656,14 @@ async function runImport(gist, job, prefs) {
         }, (d, n) => { });
         out.sort((a, b) => a.from - b.from);
         const qTotal = out.reduce((a, c) => a + c.questions.length, 0);
-        if (!out.length) throw new Error('全部章节提取失败（模型未产出有效内容）——可重试或换模型');
+        if (!out.length) {
+          // 【v19】pool 把 worker 异常只记进 results[i].__err（console），用户端日志此前全盲。
+          // 最终失败必须带第一个真实错误，否则「模型未产出有效内容」永远猜不动根因。
+          const firstErr = (poolRes || []).find(r => r && r.__err);
+          throw new Error('全部章节提取失败（' + chapters.length + ' 章：' + emptyN + ' 章返回空' + (firstErr ? '，' + chapters.length - emptyN + ' 章报错' : '') + '）'
+            + (firstErr ? '。首个错误：' + String(firstErr.__err).slice(0, 220) : '')
+            + '——视觉书请确认用的是支持图片输入的模型（GLM-4V/Qwen-VL/GPT-4o 等），换模型后点「♻️ 重发」');
+        }
         const groups = deriveBookGroups(out);
         const book = {
           id: (job.jobId || 'book') + '-book',
