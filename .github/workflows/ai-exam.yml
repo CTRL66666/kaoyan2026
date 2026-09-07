@@ -1,10 +1,14 @@
-# kaoyan2026 云端出卷执行器 workflow（2026-08-24）
-# 触发：本地工具通过 workflow_dispatch 派发（inputs.gist_id = 任务 Gist id）
+# kaoyan2026 云端出卷执行器 workflow（2026-08-24；v11 增 PDF 导入资源 Gist）
+# 触发：本地工具通过 workflow_dispatch 派发
+#   inputs.gist_id          = 任务 Gist id（出卷/导入任务本身）
+#   inputs.resource_gist_id = 【v11 可选】PDF 导入时源文件所在的资源 Gist id
+#                              （任务 Gist 只剩几 KB，彻底绕开 Gist 单文件 1MB 截断边界）
+#                              不传则走老路径（源文件在任务 Gist 内）——向下兼容
 # 所需 repo secrets（仓库 Settings → Secrets and variables → Actions）：
 #   CLOUDJOB_GH_TOKEN     GitHub 令牌（需 gist 权限，用于读写任务 Gist）—— 必配
 #   CLOUDJOB_AI_ENDPOINT / CLOUDJOB_AI_KEY / CLOUDJOB_AI_MODEL —— 可选回退：
-#     本地工具提交任务时会把 AI 配置自动写进 job.json（存于用户本人 secret Gist，
-#     执行器优先读取；仅当任务未自带时才用这三个 secrets）。
+#     本地工具提交任务时会把 AI 配置自动写进 job.json（存于用户本人 secret Gist），
+#     执行器优先读取；仅当任务未自带时才用这三个 secrets。
 name: AI Exam Runner
 
 on:
@@ -13,11 +17,18 @@ on:
       gist_id:
         description: 'CloudJob Gist ID'
         required: true
+      resource_gist_id:
+        description: '【可选】试卷源文件 Gist ID（导入任务专用）'
+        required: false
+        default: ''
 
 jobs:
   run-exam:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 【2026-09-07】90 → 360：85 套卷整本视觉提取实测单调用 60-120s×170+ 次，90 分钟必死。原 45→90：慢模型出强化卷（35+ 题）本就可能跑 40 分钟+，
+    # 叠加 API 限额退避（v9 起最长等 30 分钟）后 45 分钟必死。超时被杀时
+    # runner 已有 SIGTERM 终态回写（不再留「冻结在半路」的假运行状态）。
+    timeout-minutes: 360
     steps:
       - name: Checkout runner
         uses: actions/checkout@v4
@@ -35,9 +46,20 @@ jobs:
       - name: Install sympy
         run: pip install sympy
 
+      # 【v11 PDF 导入】poppler-utils（pdfinfo / pdftotext / pdftoppm）——解析试卷必需的三个命令行工具。
+      # 踩坑实证（2026-09-02）：ubuntu-latest **并未预装** poppler-utils，缺它时导入任务会在
+      # 「已拉到源文件之后」直接崩 pdfinfo: not found。这里显式安装（约 10~20s，Actions runner 有免密 sudo）。
+      # runner 侧另有运行时自救（检测到 not found 会自己 apt-get 装一次再重试），双保险。
+      - name: Install poppler-utils (PDF 解析：页数/文字层/转图)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+          pdfinfo -v 2>&1 | head -1
+
       - name: Run cloud exam job
         env:
           GIST_ID: ${{ github.event.inputs.gist_id }}
+          SOURCE_GIST_ID: ${{ github.event.inputs.resource_gist_id }}
           GH_TOKEN: ${{ secrets.CLOUDJOB_GH_TOKEN }}
           AI_ENDPOINT: ${{ secrets.CLOUDJOB_AI_ENDPOINT }}
           AI_KEY: ${{ secrets.CLOUDJOB_AI_KEY }}
