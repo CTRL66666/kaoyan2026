@@ -132,7 +132,7 @@ async function readSourceBuffer(files, tag) {
 // 执行器版本（单一事实来源）：本地 cloudjob.ts 用正则从本文件源码提取（本地资产 vs 仓库远端），
 // 向导第②步显示「云端 v? vs 本地 v?」。改版本只改这一处，所有 status.json 回写自动跟随。
 // 版本规则：runner 行为变更才 +1（v15 = 资料库 book 通道；v16 = 429 共享闸门不弃题 + score=0 自动均摊修复；v17 = book 分发致命修复 + 数学乱码转视觉）。
-const RUNNER_VER = 'v21';
+const RUNNER_VER = 'v22';
 
 if (!GIST_ID || !GH_TOKEN) { console.error('缺 GIST_ID 或 GH_TOKEN'); process.exit(1); }
 
@@ -1411,6 +1411,65 @@ async function extractBookTocVision(deps) {
   return tocEntriesToChapters(entries, tocLastPage, pages);
 }
 
+/* 【v22 R4 缩略图定界】最后一层兜底：纯扫描 + 无书签 + 无页脚锚点 + 无目录页的书
+ * （实测：26合工大超越 1-25，25 页全扫描 0 书签）——旧版到 R5 直接抛「可读文字页过少」死路。
+ * 方法论 R4：每 12 页一组低分辨率整页图喂 VLM，找「新套卷起始页」（每套首页顶部大字套名、题号从 1 重启）。
+ * 返回 {chapters:[{title,from,to,group}]}（≥1 套）或 null。 */
+async function detectSetsByGrid(deps) {
+  const { pages, renderPageImgs, aiJson, budgetOk } = deps;
+  const found = [];
+  for (let i = 1; i <= pages; i += 12) {
+    const group = []; for (let p = i; p < Math.min(i + 12, pages + 1); p++) group.push(p);
+    if (budgetOk && !budgetOk('宫格定界 P' + group[0] + '-' + group[group.length - 1])) break;
+    const imgs = await renderPageImgs(group, { dpi: 96, forceWhole: true });
+    if (!imgs.length) continue;
+    const r = await aiJson(
+      [{ role: 'system', content: '你是试卷合订本结构分析引擎。给你的图片按顺序是一本书的连续页面（缩略图，只看版面结构不必读题）。'
+        + '这是「多套模拟卷合订」：每套卷第一页同时满足两个特征——①顶部有大字试卷标题（如「XX模拟试卷N」「XX六套卷第N套」）；②该页从题号 (1)/1. 重新开始。'
+        + '若某页题号从上页延续（如从 (15)、三、解答题 17 开始），它是续页，不是套首。'
+        + '找出每一套卷的起始页。只输出 JSON：{"sets":[{"startPage":物理页码,"title":"套卷标题原文(≤40字)"}]}。'
+        + '封面/目录/空白页不算套；整本就一套时输出 1 条；不确定就别列。' },
+       { role: 'user', content: [{ type: 'text', text: '这些是全书第 ' + group[0] + '—' + group[group.length - 1] + ' 页（按图片顺序）。请找出新套卷的起始页。' }].concat(imgs.map(u => ({ type: 'image_url', image_url: { url: u } }))) }],
+      { think: false, temperature: 0.1, maxTokens: 2000 });
+    const sets = Array.isArray(r && r.sets) ? r.sets : [];
+    sets.forEach(function (s) {
+      const sp = parseInt(s && s.startPage, 10);
+      if (sp >= group[0] && sp <= group[group.length - 1]) found.push({ page: sp, title: String((s && s.title) || '').trim().slice(0, 40) });
+    });
+  }
+  // 【S2 边界精化】候选套首逐页高清确认（缩略图实测会把续页 (15)(16) 误判成套首）；
+  //   首页 1 也强制确认（模型常因「书从中途开始」不自信而漏报第一套）。
+  const cands = {};
+  found.forEach(function (f) { cands[f.page] = f.title; });
+  if (!cands[1]) cands[1] = '';
+  const confirmed = [];
+  const candPages = Object.keys(cands).map(Number).sort(function (a, b) { return a - b; });
+  for (const cp of candPages) {
+    if (budgetOk && !budgetOk('套首确认 P' + cp)) break;
+    const one = await renderPageImgs([cp], { dpi: 200, forceWhole: true });
+    if (!one.length) { confirmed.push({ page: cp, title: cands[cp] || '' }); continue; }
+    const v = await aiJson(
+      [{ role: 'system', content: '给你一本书的一页（高清）。判断它是否是一套试卷的第一页：①顶部有大字试卷标题；②本页从题号 (1)/1. 重新开始（若从 (15) 等延续题号开始则是续页）。'
+        + '只输出 JSON：{"isStart":true/false,"title":"若 isStart 给出卷标题原文(≤40字)，否则空串"}。' },
+       { role: 'user', content: [{ type: 'text', text: '请判断这一页是否新套卷首页。' }].concat(one.map(u => ({ type: 'image_url', image_url: { url: u } }))) }],
+      { think: false, temperature: 0, maxTokens: 400 });
+    if (v && v.isStart) confirmed.push({ page: cp, title: String(v.title || cands[cp] || '').trim().slice(0, 40) });
+  }
+  if (!confirmed.length) return null;
+  confirmed.sort(function (a, b) { return a.page - b.page; });
+  const starts = [];
+  confirmed.forEach(function (f) { if (!starts.length || f.page > starts[starts.length - 1].page) starts.push(f); });
+  if (starts[0].page > 1) starts.unshift({ page: 1, title: '前段（未识别到套首，按一套处理）' });
+  const chapters = [];
+  for (let i = 0; i < starts.length; i++) {
+    let from = starts[i].page;
+    let to = i + 1 < starts.length ? starts[i + 1].page - 1 : pages;
+    if (to < from) to = from;
+    chapters.push({ title: (starts[i].title || ('第' + (i + 1) + '部分')).slice(0, 40), from: from, to: to, group: '' });
+  }
+  return { chapters: chapters.slice(0, 150), headersFound: false, entries: starts, groups: [] };
+}
+
 /* 大类归类校验：AI 给的 groups 必须每个条目恰好落一组，否则全部退回「全册」单组。
  * ids 为 1-based 条目编号。纯函数。 */
 function validateBookGroups(aiGroups, nEntries) {
@@ -1725,10 +1784,10 @@ async function runImport(gist, job, prefs) {
       // 【v21 2-up】RENDER_2UP 置位时（book 分支探测到横版双联页），每物理页渲染成左/右两个半页图，
       //   dpi 提到 200（半页宽度减半，方法论要求 scale≥2.0 公式才认得清）。
       let RENDER_2UP = null;   // {pageW, pageH} pt（由 book 分支置位）
-      async function renderPageImgs(pList) {
+      async function renderPageImgs(pList, opts) {
         const out = [];
-        const two = !!(RENDER_2UP && RENDER_2UP.pageW > RENDER_2UP.pageH * 1.1);
-        const DPI = two ? 200 : 150;
+        const two = !opts && !!(RENDER_2UP && RENDER_2UP.pageW > RENDER_2UP.pageH * 1.1);   // opts.forceWhole 时不裁半（宫格定界看整页版面）
+        const DPI = (opts && opts.dpi) || (two ? 200 : 150);
         for (const p of pList) {
           if (two) {
             for (const half of ['l', 'r']) {
@@ -1783,6 +1842,13 @@ async function runImport(gist, job, prefs) {
         // 分章提取就 ReferenceError，整条链路从未真正跑通过。中文科目名供提示词用。
         const subject = SUBJ_NAME[subj] || subj;
         const imgSet = {}; imgPages.forEach(p => { imgSet[p] = 1; });
+        // 【v21 预算硬顶】铁律⑤：视觉调用 ≤ 页数×1.2+20（声明提前：宫格定界/预检/提取/补提共用闸门）
+        let BOOK_VLM = 0;
+        const BOOK_BUDGET = Math.floor(pages * 1.2 + 20);
+        function budgetOk(tag) {
+          if (BOOK_VLM >= BOOK_BUDGET) { pushLog('⛔ 视觉调用预算到顶（' + BOOK_BUDGET + '），跳过：' + tag, 'warn'); return false; }
+          BOOK_VLM++; return true;
+        }
         if (garbledN) pushLog('⚠️ ' + garbledN + ' 页文字层乱码（公式字体无 ToUnicode），对应章节将走整页视觉识别');
         await setStatus('running', 'parsing', '🗂 解析目录结构…', 15);
         // 【v21 PDF 提取方法论·Runner Skill】结构来源决策树（S0→S5，禁止跳步）：
@@ -1847,6 +1913,19 @@ async function runImport(gist, job, prefs) {
             } catch (e) { pushLog('⚠️ 大类归类失败（' + String(e.message || e).slice(0, 80) + '），全部归入「全册」', 'warn'); }
           }
         }
+        // R4b 宫格定界（v22 纯扫描兜底）：书签/页脚/目录全空但整本以扫描页为主时，
+        //   每 12 页一组低分辨率整页图让 VLM 找「新套卷起始页」（方法论 R4）。
+        if (!chapters && imgPages.length * 2 >= pages) {
+          try {
+            pushLog('🧩 书签/页脚/目录均无结构 → 缩略图宫格定界（纯扫描兜底）…');
+            const g = await detectSetsByGrid({ pages: pages, renderPageImgs: renderPageImgs, aiJson: aiJson, budgetOk: budgetOk });
+            if (g && g.chapters.length) {
+              chapters = g.chapters;
+              structSrc = '🧩 宫格定界（VLM 找套首页）';
+              pushLog('🧩 宫格定界：' + chapters.length + ' 套（起始页 ' + chapters.slice(0, 12).map(c => c.from).join('、') + (chapters.length > 12 ? '…' : '') + '）');
+            }
+          } catch (e) { pushLog('⚠️ 宫格定界失败（' + String((e && e.message) || e).slice(0, 100) + '）', 'warn'); }
+        }
         // R5 AI 逐页摘要划分（最后兜底）
         if (!chapters) {
           structSrc = 'AI 划分';
@@ -1855,7 +1934,7 @@ async function runImport(gist, job, prefs) {
             const t = String(pgTxt[p] || '').replace(/\s+/g, ' ').trim();
             if (t.length >= 40) digest.push('P' + p + ': ' + t.slice(0, 110));
           }
-          if (digest.length < 3) throw new Error('可读文字页过少（' + digest.length + ' 页）——纯扫描版 PDF 暂不支持整本导入，可按章拍照分批处理');
+          if (digest.length < 3) throw new Error('无法建立结构：书签/页脚/目录/宫格定界四条路都没拿到结构，且可读文字页过少（' + digest.length + ' 页）——若是纯扫描版合订书，请确认已安装 v22+ 执行器（宫格定界）后重发；仍失败可按套拍照分批导入');
           const outline = await aiJson(
             [{ role: 'system', content: '你是教材结构分析专家。根据一份资料的逐页摘要（P页码: 内容首行）划分章节结构。只输出 JSON：{"chapters":[{"title":"章节名(≤40字)","from":起始页,"to":结束页,"group":"所属大类(≤12字，没有则留空)"}]}。要求：2-150 个章节；页码范围连续、不重叠、覆盖全部有内容的页。粒度=书的一级目录（章/讲），不要拆到小节。【特例】若这份资料是「多套试卷/习题的合集」（每套 2-6 页、标题形如 XX五套卷第N套 / 模拟卷N），则每一套卷单独成章（title 用套卷全名，如 "2024余炳森五套卷第3套"），并按难度层级或系列给出 group（如 入门/进阶/难；同书同层级时 group 可留空）。' },
              { role: 'user', content: '【逐页摘要】（共 ' + pages + ' 页）\n' + digest.join('\n') + '\n\n请划分章节。' }],
@@ -1893,14 +1972,9 @@ async function runImport(gist, job, prefs) {
         }
 
         // ② 分章提取（并发 3）：要点段落 + 题目，每章独立落盘；【v20】题号审计 + 缺题定向补提
-        // 【v21 预算硬顶】铁律⑤：视觉调用 ≤ 页数×1.2+20，超限停止并报告已完成部分（不烧穿用户额度）
+        // 预算闸门 BOOK_VLM/budgetOk 已在 book 分支开头声明（宫格定界/预检/提取/补提共用）
         const out = [];
-        let done = 0, emptyN = 0, repairedN = 0, BOOK_VLM = 0;
-        const BOOK_BUDGET = Math.floor(pages * 1.2 + 20);
-        function budgetOk(tag) {
-          if (BOOK_VLM >= BOOK_BUDGET) { pushLog('⛔ 视觉调用预算到顶（' + BOOK_BUDGET + '），跳过：' + tag, 'warn'); return false; }
-          BOOK_VLM++; return true;
-        }
+        let done = 0, emptyN = 0, repairedN = 0;
         const poolRes = await pool(chapters, 3, async (ch, ci) => {
           await cancelCheckpoint();
           const ps = []; for (let p = ch.from; p <= ch.to; p++) ps.push(p);
