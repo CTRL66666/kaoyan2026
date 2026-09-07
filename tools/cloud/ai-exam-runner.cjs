@@ -132,7 +132,7 @@ async function readSourceBuffer(files, tag) {
 // 执行器版本（单一事实来源）：本地 cloudjob.ts 用正则从本文件源码提取（本地资产 vs 仓库远端），
 // 向导第②步显示「云端 v? vs 本地 v?」。改版本只改这一处，所有 status.json 回写自动跟随。
 // 版本规则：runner 行为变更才 +1（v15 = 资料库 book 通道；v16 = 429 共享闸门不弃题 + score=0 自动均摊修复；v17 = book 分发致命修复 + 数学乱码转视觉）。
-const RUNNER_VER = 'v25';
+const RUNNER_VER = 'v27';
 
 if (!GIST_ID || !GH_TOKEN) { console.error('缺 GIST_ID 或 GH_TOKEN'); process.exit(1); }
 
@@ -525,8 +525,15 @@ async function aiText(messages, opts) {
  * JSON 转义（\s \d 不在合法集），严格 JSON.parse 必炸——李林四套卷实测
  * 「Bad escaped character in JSON at position 4247」整章报废。修复：非法 \x 补成合法 \\x。 */
 function jsonRepairEscapes(t) {
-  // 先处理 \u 后不跟 4 位十六进制的（LaTeX \use 等），再处理其余非法转义（\s \d 等）
-  return String(t).replace(/\\u(?![0-9a-fA-F]{4})/g, '\\\\u').replace(/\\(?!["\\\/bfnrtu])/g, '\\\\');
+  // 【v26 真跑验证修复】三趟，顺序不能换：
+  //  1) \b\f\n\r\t 后紧跟字母 → 是 LaTeX 命令（\frac \beta \nu \right \times），双写；单独保留。
+  //  2) \u 后不跟 4 位十六进制（\use 等）→ 双写。
+  //  3) 其余：先整体「消费」合法转义（\\ \" \/ \b\f\n\r\t \uXXXX）原样保留，只把非法 \X 双写。
+  //     ——v25 逐字符正则会二次破坏模型合法输出的 \\! → \\\!（新增非法转义），故必须消费式。
+  return String(t)
+    .replace(/\\([bfnrt])(?=[A-Za-z])/g, '\\\\$1')
+    .replace(/\\u(?![0-9a-fA-F]{4})/g, '\\\\u')
+    .replace(/\\(["\\\/bfnrtu]|u[0-9a-fA-F]{4})|\\(.)/g, function (m, ok, bad) { return ok !== undefined ? m : '\\\\' + bad; });
 }
 function extractJson(txt) {
   let t = String(txt || '')
@@ -2154,6 +2161,16 @@ async function runImport(gist, job, prefs) {
         }, (d, n) => { });
         out.sort((a, b) => a.from - b.from);
         const qTotal = out.reduce((a, c) => a + c.questions.length, 0);
+        // 【v27 逐章错误可见化】pool 把 worker 异常吞进 results[i].__err（仅 console）。
+        //   部分章成功时，失败章此前完全静默（李林 4 卷只出 2 卷却看不到另 2 卷为何崩）。
+        //   这里按索引把每个 __err 连同章节标题写进用户可见日志，并汇总计数。
+        const errChs = []
+        ;(poolRes || []).forEach(function (r, i) { if (r && r.__err) errChs.push({ t: (chapters[i] || {}).title || ('第' + (i + 1) + '章'), e: String(r.__err) }) })
+        if (errChs.length) {
+          errChs.slice(0, 6).forEach(function (x) { pushLog('⚠️ 章《' + x.t + '》提取失败：' + x.e.slice(0, 160), 'warn') })
+          if (errChs.length > 6) pushLog('⚠️ …另有 ' + (errChs.length - 6) + ' 章同类失败', 'warn')
+          pushLog('🧮 章节完成度：' + out.length + '/' + chapters.length + ' 章成功，' + errChs.length + ' 章报错，' + emptyN + ' 章空', 'warn')
+        }
         if (!out.length) {
           // 【v19】pool 把 worker 异常只记进 results[i].__err（console），用户端日志此前全盲。
           // 最终失败必须带第一个真实错误，否则「模型未产出有效内容」永远猜不动根因。
