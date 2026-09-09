@@ -36,9 +36,12 @@
       // 资源完成 → 阶梯推进（entry/vendor/css 约三四件，完成一件推一档）
       function watch() {
         try {
+          // 进度来源＝已加载的 JS/CSS 资源数。原来只匹配 /assets/（生产），dev 下模块走
+          // /src/… 与 /.vite/deps/…，一条都不匹配 → 进度条死钉在 6% 直到挂载，看着像卡住。
+          // 放宽到任意 .js/.mjs/.css（含 query），dev 也能平滑推进；生产行为不变。
           var n = performance.getEntriesByType('resource')
-            .filter(function (e) { return /\/assets\/.+\.(js|css)/.test(e.name); }).length;
-          if (n > step) { step = n; target = Math.min(92, 18 + n * 20); }
+            .filter(function (e) { return /\.(js|mjs|css)(\?|$)/.test(e.name); }).length;
+          if (n > step) { step = n; target = Math.min(92, 12 + n * 6); }
         } catch (e) {}
       }
       function tick() {
@@ -127,14 +130,14 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-DWIpVnab.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/vendor-DtLasZHs.js">
+  <script type="module" crossorigin src="./assets/index-JLQHAnLO.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/vendor-DDyFRiVC.js">
   <link rel="modulepreload" crossorigin href="./assets/utils-Bn1Okx2s.js">
-  <link rel="modulepreload" crossorigin href="./assets/tex-42tN-y6V.js">
+  <link rel="modulepreload" crossorigin href="./assets/tex-qiIH3sfJ.js">
   <link rel="modulepreload" crossorigin href="./assets/index-PPVm8Dsz.js">
   <link rel="modulepreload" crossorigin href="./assets/share-Dp9ztnAQ.js">
   <link rel="stylesheet" crossorigin href="./assets/vendor-DLVrwanO.css">
-  <link rel="stylesheet" crossorigin href="./assets/index-BDtV6FRR.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-BVuduZPh.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="boot-splash">
