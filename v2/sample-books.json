@@ -1,0 +1,96 @@
+{
+  "studyBooks": [
+    {
+      "id": "sample-gaoshu-001",
+      "title": "示例·高等数学重点公式卡",
+      "subject": "math",
+      "kind": "讲义",
+      "structSrc": "示例",
+      "chapterCount": 2,
+      "questionCount": 4,
+      "groups": [
+        { "title": "极限与连续", "chapters": [0] },
+        { "title": "导数与微分", "chapters": [1] }
+      ],
+      "chapters": [
+        {
+          "id": "g1",
+          "title": "第一章 · 重要极限与等价无穷小",
+          "content": "两个重要极限：\n(1) $\\lim_{x\\to0}\\frac{\\sin x}{x}=1$\n(2) $\\lim_{x\\to\\infty}\\left(1+\\frac{1}{x}\\right)^x=e$\n\n常用等价无穷小（$x\\to0$）：$\\sin x\\sim x$，$\\tan x\\sim x$，$1-\\cos x\\sim \\frac{x^2}{2}$，$e^x-1\\sim x$，$\\ln(1+x)\\sim x$，$(1+x)^a-1\\sim ax$。",
+          "questions": [
+            {
+              "stem": "求 $\\lim_{x\\to0}\\dfrac{e^x-1-x}{x^2}$。",
+              "type": "solve",
+              "answer": "1/2",
+              "solution": "分子 $e^x-1-x=\\frac{x^2}{2}+o(x^2)$，故原式 $=\\lim\\limits_{x\\to0}\\dfrac{x^2/2+o(x^2)}{x^2}=\\dfrac{1}{2}$。",
+              "trap": "只用 $e^x-1\\sim x$ 会得 0/0 误判，需展开到二阶。"
+            },
+            {
+              "stem": "$\\lim\\limits_{x\\to0}\\dfrac{\\tan x-\\sin x}{x^3}=$（　）",
+              "type": "choice",
+              "options": ["A. $\\frac{1}{2}$", "B. $1$", "C. $\\frac{1}{6}$", "D. $0$"],
+              "answer": "A",
+              "solution": "$\\tan x-\\sin x=\\sin x\\cdot\\dfrac{1-\\cos x}{\\cos x}\\sim x\\cdot\\dfrac{x^2/2}{1}=\\dfrac{x^3}{2}$，故 $=\\dfrac{1}{2}$。选 A。",
+              "trap": "减法不能直接换等价，需提公因式或用泰勒。"
+            }
+          ]
+        },
+        {
+          "id": "g2",
+          "title": "第二章 · 导数定义与求导法则",
+          "content": "导数定义：$f'(x_0)=\\lim\\limits_{h\\to0}\\dfrac{f(x_0+h)-f(x_0)}{h}$。\n基本公式：$(x^a)'=ax^{a-1}$，$(\\sin x)'=\\cos x$，$(\\cos x)'=-\\sin x$，$(e^x)'=e^x$，$(\\ln x)'=\\dfrac{1}{x}$。\n乘积与商：$(uv)'=u'v+uv'$，$\\left(\\dfrac{u}{v}\\right)'=\\dfrac{u'v-uv'}{v^2}$。",
+          "questions": [
+            {
+              "stem": "设 $f(x)=x^2\\ln x$，求 $f'(x)$。",
+              "type": "solve",
+              "answer": "2x\\ln x + x",
+              "solution": "乘积法则：$f'=2x\\ln x+x^2\\cdot\\dfrac{1}{x}=2x\\ln x+x$。"
+            },
+            {
+              "stem": "$\\dfrac{d}{dx}\\left(\\dfrac{\\sin x}{x}\\right)=$（　）",
+              "type": "choice",
+              "options": ["A. $\\dfrac{x\\cos x-\\sin x}{x^2}$", "B. $\\dfrac{\\cos x}{1}$", "C. $\\dfrac{x\\sin x-\\cos x}{x^2}$", "D. $-\\dfrac{\\sin x}{x^2}$"],
+              "answer": "A",
+              "solution": "商法则：$\\dfrac{(\\sin x)'x-\\sin x\\cdot(x)'}{x^2}=\\dfrac{x\\cos x-\\sin x}{x^2}$。选 A。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sample-linai-002",
+      "title": "示例·线性代数核心结论",
+      "subject": "math",
+      "kind": "习题册",
+      "structSrc": "示例",
+      "chapterCount": 1,
+      "questionCount": 2,
+      "groups": [
+        { "title": "行列式与矩阵", "chapters": [0] }
+      ],
+      "chapters": [
+        {
+          "id": "l1",
+          "title": "第一章 · 行列式与逆矩阵",
+          "content": "$|A^{-1}|=|A|^{-1}$；$|kA|=k^{n}|A|$（$n$ 阶）。\n可逆 $\\iff |A\\neq0$ $\\iff r(A)=n$ $\\iff$ 特征值全非零。",
+          "questions": [
+            {
+              "stem": "设 3 阶矩阵 $A$ 满足 $|A|=2$，求 $|2A^{-1}|$。",
+              "type": "solve",
+              "answer": "4",
+              "solution": "$|2A^{-1}|=2^{3}|A^{-1}|=8\\cdot\\dfrac{1}{|A|}=8\\cdot\\dfrac{1}{2}=4$。",
+              "trap": "提系数要按阶数 $n=3$ 取 $2^3$，别漏成 $2$。"
+            },
+            {
+              "stem": "$n$ 阶方阵 $A$ 可逆的充要条件是（　）",
+              "type": "choice",
+              "options": ["A. $|A|\\neq0$", "B. $A$ 有非零解", "C. $r(A)<n$", "D. $A$ 对称"],
+              "answer": "A",
+              "solution": "可逆 $\\iff |A\\neq0\\iff r(A)=n$。选 A。"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
