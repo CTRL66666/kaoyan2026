@@ -94,6 +94,28 @@
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
       else start();
     })();
+    /* 【2026-09-12 迭代2 · 内核探测】构建目标是 es2022（无 legacy 降级）。旧 WebView 解析不了
+       新语法时，整个 bundle 静默死亡=白屏，且此时 React/Vue 内的探测代码也不会执行——
+       悖论只能在 ES5 内联脚本里解：模块加载前先用引擎自己的解析器探语法能力，过旧则
+       留在启动屏并给出明确指引（升级 WebView / 换 Chrome），绝不让用户对着白屏猜。 */
+    (function () {
+      var ok = true;
+      try { new Function('const f=(a)=>a?.b??1; return f({b:1});'); } catch (e) { ok = false; }
+      try { new Function('let x=1; x??=2; class A{p=1}'); } catch (e) { ok = false; }
+      if (!ok) {
+        window.__KERNEL_TOO_OLD__ = true;
+        window.__BOOT_READY = null;
+        var el = document.getElementById('boot-splash');
+        var tip = document.createElement('div');
+        tip.style.cssText = 'position:fixed;left:16px;right:16px;bottom:20px;z-index:100000;background:#b42318;color:#fff;border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.7;text-align:left';
+        tip.innerHTML = '<b>⚠️ 浏览器内核过旧，无法运行本系统</b><br>请升级系统 WebView，或改用最新版 Chrome / Edge 打开。<br>（本页已停止加载，避免出现白屏）';
+        (el || document.body).appendChild(tip);
+        var st = document.getElementById('boot-progress') || (el && el.querySelector('[id*=progress]'));
+        try { if (el) el.style.display = 'flex'; } catch (e) {}
+        // 阻断后续模块脚本：替换全局 import 触发器不存在，直接 return（主脚本仍会尝试执行，
+        // 但旧内核本就执行不了；此处保证用户看到的是指引而非白屏）
+      }
+    })();
   </script>
   <style>
     /* 启动屏：全部内联（HTML 一到即渲染，白屏时间为 0）；亮/暗自适应 */
@@ -130,14 +152,17 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-DMMd_TR8.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/vendor-DDyFRiVC.js">
-  <link rel="modulepreload" crossorigin href="./assets/utils-Bn1Okx2s.js">
-  <link rel="modulepreload" crossorigin href="./assets/tex-qiIH3sfJ.js">
+  <script type="module" crossorigin src="./assets/index-4pavFWMJ.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-PPVm8Dsz.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-BVCdKi1G.js">
+  <link rel="modulepreload" crossorigin href="./assets/utils-Bn1Okx2s.js">
+  <link rel="modulepreload" crossorigin href="./assets/tex-DM1sK5vY.js">
+  <link rel="modulepreload" crossorigin href="./assets/ai-BgMe9yo4.js">
+  <link rel="modulepreload" crossorigin href="./assets/index-BSDxLz4U.js">
+  <link rel="modulepreload" crossorigin href="./assets/dashboardLogic-CbzWA-eN.js">
   <link rel="modulepreload" crossorigin href="./assets/share-Dp9ztnAQ.js">
   <link rel="stylesheet" crossorigin href="./assets/vendor-DLVrwanO.css">
-  <link rel="stylesheet" crossorigin href="./assets/index-1SdQiyGq.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-Bvr95RwP.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="boot-splash">
