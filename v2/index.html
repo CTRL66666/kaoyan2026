@@ -41,7 +41,9 @@
           // 放宽到任意 .js/.mjs/.css（含 query），dev 也能平滑推进；生产行为不变。
           var n = performance.getEntriesByType('resource')
             .filter(function (e) { return /\.(js|mjs|css)(\?|$)/.test(e.name); }).length;
-          if (n > step) { step = n; target = Math.min(92, 12 + n * 6); }
+          if (n > step) { step = n; target = Math.min(96, 12 + n * 6); }
+          // 资源已齐但应用仍在挂载（安卓约 1s）：让条子继续缓爬到 96，别钉死在某个值装死
+          else if (pct >= target && target < 96) target = Math.min(96, target + 0.15);
         } catch (e) {}
       }
       function tick() {
@@ -152,7 +154,7 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-Dmx0lEw3.js"></script>
+  <script type="module" crossorigin src="./assets/index-kPvssk8a.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-PPVm8Dsz.js">
   <link rel="modulepreload" crossorigin href="./assets/vendor-BVCdKi1G.js">
   <link rel="modulepreload" crossorigin href="./assets/utils-BjiCGh9R.js">
@@ -162,7 +164,7 @@
   <link rel="modulepreload" crossorigin href="./assets/dashboardLogic-DsPrrRKB.js">
   <link rel="modulepreload" crossorigin href="./assets/share-Dp9ztnAQ.js">
   <link rel="stylesheet" crossorigin href="./assets/vendor-DLVrwanO.css">
-  <link rel="stylesheet" crossorigin href="./assets/index-DD-TjW5A.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-B5LBN0Ff.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="boot-splash">
