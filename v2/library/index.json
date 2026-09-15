@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "name": "公共资料库",
+  "updatedAt": "2026-09-15",
+  "_doc": "客户端读取本清单渲染「公共资料库」列表；每个 item 的 file 是相对本目录的内容文件，点击一键拉取即 fetch 该文件并交给 Store.importBooksFromText 合并入库。",
+  "items": [
+    {
+      "key": "zhangyu",
+      "title": "张宇 习题册（数学）",
+      "desc": "张宇习题册拆解入库，每题带答案与解析，适合按章刷题后回看错题。",
+      "file": "zhangyu.json",
+      "size": 457870,
+      "sizeText": "447 KB",
+      "bookCount": 1,
+      "chapterCount": 22,
+      "questionCount": 490,
+      "bookIds": [
+        "mtricwd47o3lb-book"
+      ],
+      "books": [
+        {
+          "id": "mtricwd47o3lb-book",
+          "title": "张宇",
+          "kind": "习题册",
+          "subject": "数学",
+          "chapters": 22,
+          "questions": 490
+        }
+      ],
+      "subject": "数学"
+    },
+    {
+      "key": "sanben-v30",
+      "title": "李林四套卷 + 贾基八十五套卷（数学一 / 二）",
+      "desc": "三本练习卷合集：李林四套卷数学一、贾基八十五套卷数学一、贾基八十五套卷数学二，整卷按套拆分。",
+      "file": "sanben-v30.json",
+      "size": 2732330,
+      "sizeText": "2.61 MB",
+      "bookCount": 3,
+      "chapterCount": 172,
+      "questionCount": 3041,
+      "bookIds": [
+        "zt1788761794228_0-book",
+        "zt1788761794228_1-book",
+        "zt1788761794228_2-book"
+      ],
+      "books": [
+        {
+          "id": "zt1788761794228_0-book",
+          "title": "李林四套卷 数学一（做题本）",
+          "kind": "习题册",
+          "subject": "数学",
+          "chapters": 4,
+          "questions": 90
+        },
+        {
+          "id": "zt1788761794228_1-book",
+          "title": "贾基八十五套卷 数学一",
+          "kind": "习题册",
+          "subject": "数学",
+          "chapters": 83,
+          "questions": 1383
+        },
+        {
+          "id": "zt1788761794228_2-book",
+          "title": "贾基八十五套卷 数学二",
+          "kind": "习题册",
+          "subject": "数学",
+          "chapters": 85,
+          "questions": 1568
+        }
+      ],
+      "subject": "数学"
+    }
+  ]
+}
