@@ -9,13 +9,13 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="考研作战">
+  <meta name="apple-mobile-web-app-title" content="鸦荔考研">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
-  <meta name="theme-color" content="#121a2f">
-  <title>26考研全能作战系统</title>
+  <meta name="theme-color" content="#4B91FA">
+  <title>buchii鸦荔考研</title>
   <script>
     // 【2026-08-31 用户需求】首加载可视化：自包含启动屏（不依赖任何待下载资源，
     // HTML 一到就渲染）。进度来源＝PerformanceObserver 追踪 /assets/ 关键资源完成数
@@ -23,7 +23,7 @@
     (function () {
       var done = false;
       var tips = [
-        '正在唤醒作战系统…',
+        '正在唤醒鸦荔考研…',
         '排程 / 错题本 / AI 教练整装待发',
         '你的复习数据正在本地装载',
         '提示：添加到主屏幕，可离线使用',
@@ -124,7 +124,7 @@
     #boot-splash {
       position: fixed; inset: 0; z-index: 99999;
       display: flex; align-items: center; justify-content: center;
-      background: linear-gradient(160deg, #f7f8fa 0%, #eef1f6 100%);
+      background: #ffffff;
       font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
       transition: opacity .35s;
     }
@@ -148,31 +148,29 @@
     }
     .boot-bar {
       height: 100%; width: 6%; border-radius: 999px;
-      background: linear-gradient(90deg, #2f54eb, #69a1ff);
+      background: linear-gradient(90deg, #4B91FA, #8fbcff);
       transition: width .25s ease-out;
     }
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-C-j0J7bo.js"></script>
+  <script type="module" crossorigin src="./assets/index-3rcKs9h5.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-CgvsJPj0.js">
-  <link rel="modulepreload" crossorigin href="./assets/vendor-BOOKib7A.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-BoA9_h_Z.js">
   <link rel="modulepreload" crossorigin href="./assets/utils-BjuT2MU1.js">
-  <link rel="modulepreload" crossorigin href="./assets/store-B7XlSf-A.js">
-  <link rel="modulepreload" crossorigin href="./assets/tex-C0anOJV4.js">
-  <link rel="modulepreload" crossorigin href="./assets/ai-DApBm8uj.js">
-  <link rel="modulepreload" crossorigin href="./assets/siteSearch-CukUmRXq.js">
-  <link rel="modulepreload" crossorigin href="./assets/index-DUUuEeoW.js">
-  <link rel="modulepreload" crossorigin href="./assets/dashboardLogic-B4AzWCnP.js">
-  <link rel="modulepreload" crossorigin href="./assets/share-DbkLqU9A.js">
+  <link rel="modulepreload" crossorigin href="./assets/store-CBXQz7K2.js">
+  <link rel="modulepreload" crossorigin href="./assets/tex-_AljE6z3.js">
+  <link rel="modulepreload" crossorigin href="./assets/spaced-BQn2XacP.js">
+  <link rel="modulepreload" crossorigin href="./assets/siteSearch-RxmGMXvn.js">
+  <link rel="modulepreload" crossorigin href="./assets/share-9KUZbCZd.js">
   <link rel="stylesheet" crossorigin href="./assets/vendor-DLVrwanO.css">
-  <link rel="stylesheet" crossorigin href="./assets/index-CpKwnGQ1.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-4rCLEkWg.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="boot-splash">
     <div class="boot-card">
-      <div class="boot-logo">🎖️</div>
-      <div class="boot-title">26 考研全能作战系统</div>
+      <img class="boot-logo" src="icon.svg" alt="buchii 鸦荔考研" width="64" height="64" style="border-radius:50%">
+      <div class="boot-title">buchii 鸦荔考研</div>
       <div class="boot-track"><div class="boot-bar" id="boot-bar"></div></div>
       <div class="boot-num" id="boot-num">0%</div>
       <div class="boot-tip" id="boot-tip">正在唤醒作战系统…</div>

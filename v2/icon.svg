@@ -1,23 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- 26考研全能作战系统 · 应用图标：星阑夜空底 + 琥珀金星旗（对应主题令牌 --nk-deep / --nk-acc） -->
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#16203d"/>
-      <stop offset="1" stop-color="#0a0f1e"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <!-- 旗杆 -->
-  <rect x="152" y="96" width="20" height="320" rx="10" fill="#e9edf6"/>
-  <!-- 旗帜 -->
-  <path d="M172 116 L 392 116 L 332 186 L 392 256 L 172 256 Z" fill="#f0b95a"/>
-  <!-- 旗面文字区（抽象书籍线条） -->
-  <rect x="204" y="150" width="120" height="14" rx="7" fill="#2a1c04" opacity="0.85"/>
-  <rect x="204" y="184" width="88" height="14" rx="7" fill="#2a1c04" opacity="0.6"/>
-  <!-- 底座 -->
-  <rect x="116" y="408" width="280" height="24" rx="12" fill="#e9edf6" opacity="0.92"/>
-  <!-- 星点 -->
-  <circle cx="96" cy="104" r="10" fill="#f0b95a"/>
-  <circle cx="428" cy="72" r="7" fill="#e9edf6" opacity="0.8"/>
-  <circle cx="416" cy="352" r="9" fill="#f0b95a" opacity="0.9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="buchii 鸦荔考研">
+  <!-- 站点品牌图标：乌鸦立于摊开的书上，头顶一颗荔枝（绿叶短梗），蓝底。
+       与 tools/pdf-guide/assets/logo-lychee-full.png 同设计，矢量化供 favicon / 启动屏 / 站内引用。 -->
+  <circle cx="256" cy="256" r="256" fill="#4B91FA"/>
+  <!-- 摊开的书：白色书页 + 深蓝左封 / 棕右封 + 中央书脊 -->
+  <path d="M104 376 L256 356 L408 376 L408 398 L256 378 L104 398 Z" fill="#FFFFFF"/>
+  <path d="M104 398 L256 378 L256 400 L104 420 Z" fill="#0B1C2C"/>
+  <path d="M256 378 L408 398 L408 420 L256 400 Z" fill="#8E4626"/>
+  <rect x="251" y="356" width="10" height="44" fill="#8E4626"/>
+  <!-- 腿 -->
+  <rect x="230" y="344" width="9" height="34" rx="3" fill="#8E4626"/>
+  <rect x="262" y="344" width="9" height="34" rx="3" fill="#8E4626"/>
+  <!-- 乌鸦身体（面向左） -->
+  <path d="M256 150 C322 150 366 202 366 268 C366 300 386 330 404 350 L250 350 C196 350 158 318 150 262 C143 212 190 150 256 150 Z" fill="#0B1C2C"/>
+  <!-- 白色肚皮（左下月牙） -->
+  <path d="M151 296 C160 334 200 350 238 350 C206 338 180 314 172 280 C162 284 154 289 151 296 Z" fill="#FFFFFF"/>
+  <!-- 白喙 -->
+  <path d="M158 206 L110 224 L158 244 Z" fill="#FFFFFF"/>
+  <!-- 白眼（上半圆） -->
+  <path d="M196 208 A14 14 0 0 1 224 208 Z" fill="#FFFFFF"/>
+  <!-- 头顶荔枝：短梗 + 两片绿叶 + 红果身 + 深色凸点 -->
+  <rect x="253" y="86" width="6" height="16" rx="3" fill="#6B4423"/>
+  <path d="M256 92 C244 78 226 76 216 84 C226 96 244 98 256 92 Z" fill="#43A047"/>
+  <path d="M256 92 C268 78 286 76 296 84 C286 96 268 98 256 92 Z" fill="#2E7D32"/>
+  <circle cx="256" cy="122" r="40" fill="#C0392B"/>
+  <g fill="#96281B">
+    <circle cx="244" cy="112" r="4"/><circle cx="262" cy="108" r="4"/><circle cx="274" cy="120" r="4"/>
+    <circle cx="250" cy="128" r="4"/><circle cx="266" cy="134" r="4"/><circle cx="238" cy="126" r="3.5"/>
+    <circle cx="256" cy="144" r="3.5"/><circle cx="276" cy="136" r="3.5"/>
+  </g>
 </svg>
