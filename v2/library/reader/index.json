@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "name": "云端资料",
+  "updatedAt": "2026-10-07",
+  "_doc": "客户端读取本清单渲染「我的阅读 → 在线拉取 → 云端资料」列表；每个 item 的 file 是相对本目录的文件（PDF/HTML），点击拉取即 fetch 该文件并按稳定 id 覆盖入库到本机书架（不重复堆副本，阅读进度保留）。",
+  "items": [
+    {
+      "key": "proof-lecture",
+      "title": "证明类大题专题讲义（内部资料）",
+      "desc": "证明类大题专题训练：题型分类 + 常用结论 + 逐步推导，适合构建证明题的框架。",
+      "file": "proof-lecture-internal.pdf",
+      "kind": "pdf",
+      "size": 6662678,
+      "sizeText": "6.35 MB",
+      "subject": "数学一"
+    },
+    {
+      "key": "surface-integral",
+      "title": "曲面积分强化讲义",
+      "desc": "曲面积分强化：投影法/高斯公式/积分区域拆分，附典型题与解析。",
+      "file": "surface-integral-drill.pdf",
+      "kind": "pdf",
+      "size": 5600787,
+      "sizeText": "5.34 MB",
+      "subject": "数学一"
+    },
+    {
+      "key": "prob-density",
+      "title": "考研数学一 · 概率密度与分布题型全图鉴（完整版）",
+      "desc": "密度与分布函数题型全图鉴：常见分布 + 求密度/分布函数/期望的常规与变形套路。",
+      "file": "probability-density-atlas.pdf",
+      "kind": "pdf",
+      "size": 2473454,
+      "sizeText": "2.36 MB",
+      "subject": "数学一"
+    },
+    {
+      "key": "line-integral",
+      "title": "曲线积分强化讲义（第二类曲线积分 · 格林公式 · 挖洞补线）",
+      "desc": "第二类曲线积分专题：格林公式、路径无关、挖洞补线（奇点处理）等核心技巧。",
+      "file": "line-integral-drill.pdf",
+      "kind": "pdf",
+      "size": 3147834,
+      "sizeText": "3.00 MB",
+      "subject": "数学一"
+    },
+    {
+      "key": "line-surface-solutions",
+      "title": "曲线曲面积分题型全解讲义",
+      "desc": "曲线曲面积分题型全解：按题型逐类拆解，兼顾第一类/第二类与两类积分的联动。",
+      "file": "line-surface-integral-solutions.pdf",
+      "kind": "pdf",
+      "size": 1775308,
+      "sizeText": "1.69 MB",
+      "subject": "数学一"
+    }
+  ]
+}
