@@ -47,10 +47,23 @@
       var G = window.__BOOT_GUARD = { t0: T0, errs: errs, booted: false, ver: 'r19-1013' };
       window.__BOOT_ERRS = errs;   // main.ts 的 pushErrLog 会把它并入设置页「复制诊断报告」
       function rec(kind, msg, detail) {
+        var m = String(msg == null ? '' : msg).slice(0, 240), d = String(detail == null ? '' : detail).slice(0, 900);
+        // 同键连击折叠成 ×n（favicon/图标类瞬时噪音会连发同一条，不折叠会淹没真错误）
+        var last = errs[errs.length - 1];
+        if (last && last.k === kind && last.m === m) { last.n = (last.n || 1) + 1; return; }
         if (errs.length >= 40) return;
-        errs.push({ t: Date.now() - T0, k: kind, m: String(msg == null ? '' : msg).slice(0, 240), d: String(detail == null ? '' : detail).slice(0, 900) });
+        errs.push({ t: Date.now() - T0, k: kind, m: m, d: d, n: 1 });
       }
       G.rec = rec;
+      // 【关键】自愈/结论文本只认 **SCRIPT/LINK** 的资源失败 —— 图标类（IMG）加载失败
+      // 不影响启动，若也算数就会在鸿蒙上"因 favicon 误触发清缓存重载"。
+      function hasScriptRes() {
+        for (var i = 0; i < errs.length; i++) {
+          if (errs[i].k === '资源' && /SCRIPT|LINK/.test(errs[i].m)) return true;
+        }
+        return false;
+      }
+      G.hasScriptRes = hasScriptRes;
       function esc(s) {
         return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       }
@@ -160,8 +173,7 @@
         if (probeDead) return '环境禁止 eval，无法判定内核能力（探测本身被 CSP 掐死）。请按下方「启动期错误」定位。';
         if (missingSyntax.length) return '内核过旧：缺 ' + missingSyntax.join('、') + '，整个 es2022 包会解析失败（静默死亡）。这是内核问题，站点侧只能降级构建。';
         for (var j = 0; j < errs.length; j++) { if (errs[j].k === '脚本' || errs[j].k === '异步') return '应用脚本已开始执行并抛错 —— 见下方「启动期错误」，那就是根因。'; }
-        var hasRes = false;
-        for (var jj = 0; jj < errs.length; jj++) { if (errs[jj].k === '资源') hasRes = true; }
+        var hasRes = hasScriptRes();
         var p = G.probe;
         if (hasRes && p && p.status >= 200 && p.status < 400) return '脚本文件能下载（HTTP ' + p.status + '，' + p.bytes + 'B）却仍被拒绝执行 —— 环境限制（跨域/来源/内容策略），不是站点内容问题。';
         if (hasRes) return '有资源加载失败（见错误列表）：网络或缓存问题，站点侧可尝试走「清理缓存并重载」。';
@@ -173,11 +185,7 @@
       /* ── ⑤ 自愈一次（只在确有可疑信号时）──────────────────────────────────── */
       var HEAL_KEY = 'kaoyan2026_boot_heal';
       function healOnce() {
-        var hasResErr = false, hasJn = false;
-        for (var i2 = 0; i2 < errs.length; i2++) {
-          if (errs[i2].k === '资源') hasResErr = true;
-          if (errs[i2].k === '内核') hasJn = true;
-        }
+        var hasResErr = hasScriptRes();
         var controlled = false;
         try { controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller); } catch (e) {}
         // 慢网络不应被误伤：只有"确有资源失败"或"被 SW 接管（可能是坏缓存）"才动手
@@ -241,7 +249,7 @@
         L.push('启动期错误（' + errs.length + '）：');
         for (var i3 = 0; i3 < errs.length; i3++) {
           var e = errs[i3];
-          L.push('  [# ' + e.t + 'ms][' + e.k + '] ' + e.m + (e.d ? ('\n        ' + e.d.split('\n').slice(0, 3).join('\n        ')) : ''));
+          L.push('  [# ' + e.t + 'ms][' + e.k + '] ' + e.m + (e.n > 1 ? ' ×' + e.n : '') + (e.d ? ('\n        ' + e.d.split('\n').slice(0, 3).join('\n        ')) : ''));
         }
         return L.join('\n');
       }
@@ -284,7 +292,7 @@
           var lines = [];
           for (var i4 = 0; i4 < errs.length; i4++) {
             var e4 = errs[i4];
-            lines.push('[# ' + e4.t + 'ms][' + e4.k + '] ' + e4.m + (e4.d ? ('\n    ' + e4.d.split('\n').slice(0, 3).join('\n    ')) : ''));
+            lines.push('[# ' + e4.t + 'ms][' + e4.k + '] ' + e4.m + (e4.n > 1 ? ' ×' + e4.n : '') + (e4.d ? ('\n    ' + e4.d.split('\n').slice(0, 3).join('\n    ')) : ''));
           }
           box.textContent = lines.join('\n') || '(空 —— 说明脚本请求被环境静默拦截，连错误回调都没有)';
         } catch (e) {}
@@ -387,8 +395,7 @@
       // 主应用挂载失败兜底：8s 后给出更准确的提示（有资源失败就直说）
       setTimeout(function () {
         if (done) return;
-        var hasRes = false;
-        for (var i5 = 0; i5 < errs.length; i5++) if (errs[i5].k === '资源') hasRes = true;
+        var hasRes = hasScriptRes();
         var t = document.getElementById('boot-tip');
         if (!t) return;
         if (hasRes) t.textContent = '有资源加载失败，15 秒后将给出诊断面板';
@@ -411,6 +418,7 @@
 
       // 首屏渲染后立刻启动（DOM 就绪即可，无需等任何资源）
       var start = function () {
+        findEntry();               // DOM 就绪后入口 script 已在文档里（头部一次定死会扑空）
         var t = document.getElementById('boot-tip');
         if (t) t.textContent = tips[0];
         requestAnimationFrame(tick);
@@ -457,7 +465,7 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-jaDDwHLy.js"></script>
+  <script type="module" crossorigin src="./assets/index-Dh3QgCNC.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-CgvsJPj0.js">
   <link rel="modulepreload" crossorigin href="./assets/vendor-DMwg4gBF.js">
   <link rel="modulepreload" crossorigin href="./assets/utils-X-x9WMdR.js">
