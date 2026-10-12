@@ -17,10 +17,319 @@
   <meta name="theme-color" content="#4B91FA">
   <title>buchii鸦荔考研</title>
   <script>
-    // 【2026-08-31 用户需求】首加载可视化：自包含启动屏（不依赖任何待下载资源，
-    // HTML 一到就渲染）。进度来源＝PerformanceObserver 追踪 /assets/ 关键资源完成数
-    // （阶梯推进 + 平滑动画），应用挂载完成后由 main.ts 置 __APP_READY 触发淡出。
+    /* ══════════════════════════════════════════════════════════════════════════
+       【2026-10-13 轮19 · 启动护栏 + 自诊断】
+       现象：鸿蒙平板（封装 App、第三方浏览器壳）打开本站 → 启动屏进度条爬到上限
+       就停住（96%），界面永远画不出来；换鸿蒙内置浏览器、安卓、Windows 均正常。
+
+       为什么以前查不出原因：**所有错误捕获都写在 src/main.ts 里**（底部 #g-err 红条、
+       诊断环形缓冲、SW 更新提示）。而"模块化 bundle 一行都没执行 / 解析即死"这类故障，
+       恰恰让那段代码永不执行 —— 排障信息与故障同生共死，用户只能对着 96% 猜。
+       （旧版仅在 head 里探了 4 个语法特性，未命中就只弹一句"内核过旧"，且探针失败也
+        不区分"真过旧"与"CSP 禁 eval"，更看不到资源级失败。）
+
+       本脚本因此坚持三条：**ES5、内联、零依赖，且在模块脚本之前执行**：
+         ① 错误总账：资源加载失败 / 运行期异常 / 未处理 Promise，记时记名（捕获阶段监听，
+            才能拿到 <script>/<link> 的 err）；
+         ② 能力探针：逐项 new Function 探语法特性（旧内核解析不了新语法＝整包静默死亡），
+            并区分"语法级致命"与"仅 API 缺失"；
+         ③ 模块支持探测（'noModule' in script）+ <script nomodule> 兜底文案；
+         ④ 入口脚本"直取"探测：XHR 单独拉入口 chunk，拿到 HTTP 状态/字节数 ——
+            能区分"文件下载不来"与"下载来了但被拒绝执行"（后者是本类故障的关键分野）；
+         ⑤ 自愈一次：仅在**确有资源失败**或**被 SW 接管**时，注销 SW + 清 Cache 后重载一次
+            （sessionStorage 限一次，绝不对慢网络误伤）；
+         ⑥ 15s 未挂载 → 展开诊断面板（可滚动 / 可复制 / 可强刷 / 带一句话结论），
+            把"黑盒 96%"变成可以直接截图的证据。?boot=diag 可在正常设备上手动唤出。
+       ══════════════════════════════════════════════════════════════════════ */
     (function () {
+      var T0 = Date.now();
+      var errs = [];
+      var G = window.__BOOT_GUARD = { t0: T0, errs: errs, booted: false, ver: 'r19-1013' };
+      window.__BOOT_ERRS = errs;   // main.ts 的 pushErrLog 会把它并入设置页「复制诊断报告」
+      function rec(kind, msg, detail) {
+        if (errs.length >= 40) return;
+        errs.push({ t: Date.now() - T0, k: kind, m: String(msg == null ? '' : msg).slice(0, 240), d: String(detail == null ? '' : detail).slice(0, 900) });
+      }
+      G.rec = rec;
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+
+      /* ── ① 错误总账 ───────────────────────────────────────────────────────── */
+      window.addEventListener('error', function (e) {
+        var t = e && e.target;
+        if (t && t.tagName && (t.tagName === 'SCRIPT' || t.tagName === 'LINK' || t.tagName === 'IMG')) {
+          rec('资源', t.tagName + ' ' + String(t.src || t.href || '(inline)').split('/').pop());
+          return;
+        }
+        if (e && e.message) rec('脚本', e.message, (e.error && e.error.stack) || (e.filename ? e.filename + ':' + e.lineno + ':' + e.colno : ''));
+      }, true);
+      window.addEventListener('unhandledrejection', function (ev) {
+        var r = ev && ev.reason;
+        rec('异步', (r && (r.message || String(r))) || '未知异步错误', (r && r.stack) || '');
+      });
+
+      /* ── ②③ 能力探针 + 模块支持 ──────────────────────────────────────────── */
+      // fatal=true 的项属于「语法级」：缺一个，整个 es2022 包解析失败＝静默白屏。
+      // fatal=false 的只是运行时 API，缺了会在具体用到时报错（有错误总账兜着）。
+      var FEATS = [
+        ['const/let/箭头函数', 'const f=(a)=>a; return f(1)', true],
+        ['可选链 ?.', 'const f=(a)=>a?.b??1; return f({b:1})', true],
+        ['空值合并赋值 ??=', 'let x=1; x??=2; return x', true],
+        ['类字段 p=1', 'class A{p=1} return new A().p', true],
+        ['私有字段 #p', 'class A{#p=1;g(){return this.#p}} return new A().g()', true],
+        ['生成器/for-of', 'function*g(){yield 1} let n=0; for(const v of g())n+=v; return n', true],
+        ['Object.hasOwn', "return Object.hasOwn({a:1},'a')", false],
+        ['Array.prototype.at', 'return [1,2].at(-1)', false],
+        ['String.replaceAll', "return 'aa'.replaceAll('a','b')", false],
+        ['结构 clone', 'return typeof structuredClone === "function"', false],
+        ['WeakRef', 'return typeof WeakRef === "function"', false],
+        ['Intl.RelativeTimeFormat', 'return typeof Intl.RelativeTimeFormat === "function"', false]
+      ];
+      var missingSyntax = [], missingApi = [], probeBlocked = false, probeDead = false;
+      for (var i = 0; i < FEATS.length; i++) {
+        var f = FEATS[i], okOne = false, emsg = '';
+        try { okOne = !!new Function(f[1])(); }
+        catch (e) {
+          emsg = String((e && e.message) || e);
+          if (/unsafe-eval|Content Security Policy|CSP|function constructor|not allowed/i.test(emsg)) probeBlocked = true;
+          okOne = false;
+        }
+        if (!okOne) { if (f[2]) missingSyntax.push(f[0]); else missingApi.push(f[0]); }
+      }
+      // 若**每一项**都挂且报的是 eval 被禁，说明是 CSP 而非内核过旧
+      if (probeBlocked && missingSyntax.length + missingApi.length >= FEATS.length) probeDead = true;
+      var moduleOk = false;
+      try { moduleOk = !!(document.createElement('script') && ('noModule' in document.createElement('script'))); } catch (e) { moduleOk = false; }
+      G.caps = { missingSyntax: missingSyntax, missingApi: missingApi, probeBlocked: probeBlocked, probeDead: probeDead, moduleOk: moduleOk };
+      if (missingSyntax.length) rec('内核', '缺失语法级能力：' + missingSyntax.join('、') + ' —— 模块包会整包解析失败（静默死亡）');
+      if (missingApi.length) rec('内核', '缺失运行时 API：' + missingApi.join('、') + '（用到时才报错，非致命）');
+      if (!moduleOk) rec('内核', '本环境不支持 ES 模块（<script type="module">），本站为模块化构建');
+      if (probeBlocked) rec('内核', '特性探针被 CSP 限制（禁 eval），探测结果仅供参考');
+
+      /* ── ④ 入口脚本「直取」探测（只在应用没起来时才跑）───────────────────── */
+      // ⚠ 本内联脚本在 head 里先于 Vite 注入的模块脚本执行，**当时 DOM 里还没有入口
+      // script 标签** —— 必须等到要用时再查（6s 探测 / 15s 面板），不能在头部一次定死。
+      var entryUrl = '';
+      function findEntry() {
+        if (entryUrl) return entryUrl;
+        try {
+          var sc = document.querySelectorAll('script[src]');
+          for (var k = 0; k < sc.length; k++) {
+            var s = sc[k];
+            var ty = String(s.type || '').toLowerCase();
+            if (ty === 'module' || /\/(assets|src)\//.test(s.src)) { entryUrl = s.src; break; }
+          }
+          if (!entryUrl && sc.length) entryUrl = sc[sc.length - 1].src;
+        } catch (e) { entryUrl = ''; }
+        G.entryUrl = entryUrl;
+        return entryUrl;
+      }
+      G.entryUrl = '';
+      G.probe = null;
+      function probeEntry() {
+        if (G.probe || !findEntry() || G.booted) return;
+        G.probe = { url: entryUrl, status: 0, bytes: 0, err: '', done: false };
+        try {
+          var x = new XMLHttpRequest();
+          x.open('GET', entryUrl, true);
+          x.timeout = 9000;
+          try { x.setRequestHeader('Range', 'bytes=0-1023'); } catch (e2) {}
+          x.onreadystatechange = function () {
+            if (x.readyState !== 4) return;
+            G.probe.done = true;
+            var body = '';
+            try { body = x.responseText || ''; } catch (e3) { body = ''; }
+            G.probe.status = x.status || 0;
+            var cl = ''; try { cl = x.getResponseHeader('content-length') || ''; } catch (e4) {}
+            G.probe.bytes = body.length || (cl ? Number(cl) : 0);
+            G.probe.head = body.slice(0, 60).replace(/\s+/g, ' ');
+            if (!x.status) G.probe.err = '网络层失败（status 0：被拦截 / 跨域拒绝 / 断网）';
+            else if (x.status >= 400) G.probe.err = 'HTTP ' + x.status + '（文件不存在或不可访问）';
+          };
+          x.onerror = function () { G.probe.done = true; G.probe.err = '请求出错（onerror，无状态码）'; };
+          x.ontimeout = function () { G.probe.done = true; G.probe.err = '请求超时（9s）'; };
+          x.send();
+        } catch (e) { G.probe.done = true; G.probe.err = 'XHR 无法建立：' + String((e && e.message) || e); }
+      }
+
+      /* ── ⑥ 一句话结论（决定下一步修什么）────────────────────────────────── */
+      function verdict() {
+        if (G.booted) return '应用已挂载 —— 护栏空跑（无故障）。';
+        if (!moduleOk) return '本环境不支持 ES 模块：本站按 es2022 打包，模块脚本根本不会执行。需改用支持 ES 模块的内核（升级 WebView / 换内置浏览器）。';
+        if (probeDead) return '环境禁止 eval，无法判定内核能力（探测本身被 CSP 掐死）。请按下方「启动期错误」定位。';
+        if (missingSyntax.length) return '内核过旧：缺 ' + missingSyntax.join('、') + '，整个 es2022 包会解析失败（静默死亡）。这是内核问题，站点侧只能降级构建。';
+        for (var j = 0; j < errs.length; j++) { if (errs[j].k === '脚本' || errs[j].k === '异步') return '应用脚本已开始执行并抛错 —— 见下方「启动期错误」，那就是根因。'; }
+        var hasRes = false;
+        for (var jj = 0; jj < errs.length; jj++) { if (errs[jj].k === '资源') hasRes = true; }
+        var p = G.probe;
+        if (hasRes && p && p.status >= 200 && p.status < 400) return '脚本文件能下载（HTTP ' + p.status + '，' + p.bytes + 'B）却仍被拒绝执行 —— 环境限制（跨域/来源/内容策略），不是站点内容问题。';
+        if (hasRes) return '有资源加载失败（见错误列表）：网络或缓存问题，站点侧可尝试走「清理缓存并重载」。';
+        if (p && p.err) return '入口脚本请求失败：' + p.err + '（域名/资源被环境拦截）。';
+        if (p && p.done) return '入口脚本可下载且无任何错误，脚本却始终没执行 —— 环境静默拦截（常见于注入式壳浏览器）。';
+        return '未捕获到任何错误，脚本也没有执行 —— 环境静默拦截（常见于注入式壳浏览器）。';
+      }
+
+      /* ── ⑤ 自愈一次（只在确有可疑信号时）──────────────────────────────────── */
+      var HEAL_KEY = 'kaoyan2026_boot_heal';
+      function healOnce() {
+        var hasResErr = false, hasJn = false;
+        for (var i2 = 0; i2 < errs.length; i2++) {
+          if (errs[i2].k === '资源') hasResErr = true;
+          if (errs[i2].k === '内核') hasJn = true;
+        }
+        var controlled = false;
+        try { controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller); } catch (e) {}
+        // 慢网络不应被误伤：只有"确有资源失败"或"被 SW 接管（可能是坏缓存）"才动手
+        if (!hasResErr && !controlled) return false;
+        // 内核本身不支持模块：清缓存也没用，别浪费用户一次重载
+        if (!moduleOk || missingSyntax.length) return false;
+        var tried = 1;
+        try { tried = Number(sessionStorage.getItem(HEAL_KEY) || '0'); } catch (e) { tried = 1; }
+        if (tried >= 1) return false;
+        try { sessionStorage.setItem(HEAL_KEY, '1'); } catch (e) {}
+        rec('自愈', '疑似坏缓存（' + (hasResErr ? '有资源加载失败' : '被 Service Worker 接管') + '）→ 注销 SW、清 Cache 后重载一次');
+        // 【探针实证过的坑】go 会被两条路径同时安排（Promise.all 的 then + 2500ms 兜底），
+        // 不做幂等就会**连刷两次** —— 用户看到两次白闪，还多耗一倍流量。
+        var went = false;
+        var go = function () {
+          if (went) return;
+          went = true;
+          var i = location.href.indexOf('#');
+          var base = i < 0 ? location.href : location.href.slice(0, i);
+          var hash = i < 0 ? '' : location.href.slice(i);
+          base = base.replace(/([?&])rb=\d+/, '');
+          var lc = base.charAt(base.length - 1);
+          if (lc === '?' || lc === '&') base = base.slice(0, -1);
+          location.replace(base + (base.indexOf('?') < 0 ? '?' : '&') + 'rb=' + Date.now() + hash);
+        };
+        try {
+          if (typeof Promise !== 'function') { go(); return true; }
+          var jobs = [];
+          try {
+            if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+              jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+                return Promise.all((rs || []).map(function (r) { return r.unregister(); }));
+              })['catch'](function () {}));
+            }
+          } catch (e) {}
+          try {
+            if (window.caches && caches.keys) {
+              jobs.push(caches.keys().then(function (ks) {
+                return Promise.all((ks || []).map(function (k) { return caches.delete(k); }));
+              })['catch'](function () {}));
+            }
+          } catch (e) {}
+          Promise.all(jobs).then(go, go);
+          setTimeout(go, 2500);  // 清理挂住也要走
+        } catch (e) { go(); }
+        return true;
+      }
+
+      /* ── ⑥ 诊断面板 ──────────────────────────────────────────────────────── */
+      function reportText() {
+        var L = [];
+        L.push('【结论】' + verdict());
+        L.push('版本/时间：' + G.ver + ' / ' + new Date().toString() + ' / 启动耗时 ' + (Date.now() - T0) + 'ms');
+        L.push('UA：' + navigator.userAgent);
+        L.push('地址：' + location.href);
+        L.push('baseURI：' + document.baseURI + '  appBase=' + (window.__APP_BASE__ || '-'));
+        L.push('模块支持：' + (moduleOk ? '有' : '无') + '；缺语法能力：' + (missingSyntax.join('、') || '无') + '；缺 API：' + (missingApi.join('、') || '无') + (probeBlocked ? '（探针受 CSP 限制）' : ''));
+        L.push('入口脚本：' + (findEntry() || '(未识别)'));
+        L.push('入口直取：' + (G.probe ? (G.probe.done ? ('HTTP ' + G.probe.status + ' / ' + G.probe.bytes + 'B / ' + (G.probe.err || '正常')) : '探测中…') : '未探测'));
+        L.push('SW 接管：' + (function () { try { return navigator.serviceWorker && navigator.serviceWorker.controller ? '是' : '否'; } catch (e) { return '不可用'; } })());
+        L.push('启动期错误（' + errs.length + '）：');
+        for (var i3 = 0; i3 < errs.length; i3++) {
+          var e = errs[i3];
+          L.push('  [# ' + e.t + 'ms][' + e.k + '] ' + e.m + (e.d ? ('\n        ' + e.d.split('\n').slice(0, 3).join('\n        ')) : ''));
+        }
+        return L.join('\n');
+      }
+
+      function showPanel(force) {
+        // force=true（?boot=diag）时不因"已挂载"而退出：正常设备也能唤出面板做**对照基线**
+        // （例如安卓正常、鸿蒙异常时，两张截图一比就知道差在内核哪一项）。
+        if ((G.booted && !force) || document.getElementById('boot-diag')) return;
+        G.forced = !!force;
+        var d = document.createElement('div');
+        d.id = 'boot-diag';
+        d.style.cssText = 'position:fixed;inset:0;z-index:100002;background:#101317;color:#e6e8eb;font:12.5px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:auto;-webkit-overflow-scrolling:touch;padding:14px 14px 26px';
+        var caps = G.caps;
+        var rows = '';
+        function kv(k, v, bad) {
+          rows += '<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.07)"><span style="flex:0 0 92px;color:#8b939c">' + esc(k) + '</span><span style="flex:1;word-break:break-all;color:' + (bad ? '#ff8a80' : '#dfe3e8') + '">' + esc(v) + '</span></div>';
+        }
+        kv('模块支持', moduleOk ? '有' : '无', !moduleOk);
+        kv('缺语法能力', caps.missingSyntax.join('、') || '无', !!caps.missingSyntax.length);
+        kv('缺运行时 API', caps.missingApi.join('、') || '无', false);
+        kv('入口脚本', findEntry() || '(未识别)', false);
+        kv('入口直取', G.probe ? (G.probe.done ? ('HTTP ' + G.probe.status + ' · ' + G.probe.bytes + 'B · ' + (G.probe.err || '正常')) : '探测中…') : '未探测', !!(G.probe && G.probe.err));
+        var el2 = document.createElement('div');
+        el2.innerHTML = '<div style="font-size:15px;font-weight:700;margin-bottom:4px">⚠️ 启动失败诊断</div>'
+          + '<div style="color:#ffd479;background:rgba(255,212,121,.1);border:1px solid rgba(255,212,121,.28);border-radius:10px;padding:10px 12px;margin:8px 0 14px">' + esc(verdict()) + '</div>'
+          + '<div style="font-weight:700;margin:14px 0 4px">环境</div>' + rows
+          + '<div style="font-weight:700;margin:14px 0 4px">启动期错误 · ' + errs.length + ' 条</div>'
+          + '<pre id="boot-diag-errs" style="white-space:pre-wrap;word-break:break-all;background:rgba(255,255,255,.05);border-radius:8px;padding:9px;margin:0;max-height:44vh;overflow:auto;font-size:11.5px"></pre>'
+          + '<div style="color:#8b939c;margin:12px 0 0">UA：' + esc(navigator.userAgent) + '</div>'
+          + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'
+          + '<button id="bd-reload" style="flex:1;min-width:110px;padding:11px 10px;border:0;border-radius:9px;background:#4B91FA;color:#fff;font-size:13.5px">重新加载</button>'
+          + '<button id="bd-clear" style="flex:1;min-width:110px;padding:11px 10px;border:0;border-radius:9px;background:#2b3238;color:#e6e8eb;font-size:13.5px">清缓存并重载</button>'
+          + '<button id="bd-copy" style="flex:1;min-width:110px;padding:11px 10px;border:0;border-radius:9px;background:#2b3238;color:#e6e8eb;font-size:13.5px">复制诊断</button>'
+          + '</div>'
+          + '<div style="color:#8b939c;margin-top:12px;line-height:1.7">若结论指向「内核过旧 / 不支持 ES 模块」：请升级系统 WebView，或直接用系统「浏览器」打开本页（内置浏览器正常即属此类）。把本页截图发我即可定位。</div>';
+        d.appendChild(el2);
+        document.body.appendChild(d);
+        try {
+          var box = document.getElementById('boot-diag-errs');
+          var lines = [];
+          for (var i4 = 0; i4 < errs.length; i4++) {
+            var e4 = errs[i4];
+            lines.push('[# ' + e4.t + 'ms][' + e4.k + '] ' + e4.m + (e4.d ? ('\n    ' + e4.d.split('\n').slice(0, 3).join('\n    ')) : ''));
+          }
+          box.textContent = lines.join('\n') || '(空 —— 说明脚本请求被环境静默拦截，连错误回调都没有)';
+        } catch (e) {}
+        document.getElementById('bd-reload').onclick = function () { location.reload(); };
+        document.getElementById('bd-clear').onclick = function () {
+          this.textContent = '清理中…';
+          var went = false;
+          var go = function () {
+            if (went) return;
+            went = true;
+            var i = location.href.indexOf('#');
+            var base = i < 0 ? location.href : location.href.slice(0, i);
+            var hash = i < 0 ? '' : location.href.slice(i);
+            base = base.replace(/([?&])rb=\d+/, '');
+            var lc = base.charAt(base.length - 1);
+            if (lc === '?' || lc === '&') base = base.slice(0, -1);
+            location.replace(base + (base.indexOf('?') < 0 ? '?' : '&') + 'rb=' + Date.now() + hash);
+          };
+          try {
+            if (typeof Promise !== 'function') { go(); return; }
+            var jobs = [];
+            try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all((rs || []).map(function (r) { return r.unregister(); })); })['catch'](function () {})); } catch (e) {}
+            try { if (window.caches && caches.keys) jobs.push(caches.keys().then(function (ks) { return Promise.all((ks || []).map(function (k) { return caches.delete(k); })); })['catch'](function () {})); } catch (e) {}
+            Promise.all(jobs).then(go, go); setTimeout(go, 2000);
+          } catch (e) { go(); }
+        };
+        document.getElementById('bd-copy').onclick = function () {
+          var txt = reportText(), bt = this;
+          var done = function () { bt.textContent = '已复制 ✓'; setTimeout(function () { bt.textContent = '复制诊断'; }, 1600); };
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt).then(done, function () { fallback(); }); return; }
+          } catch (e) {}
+          fallback();
+          function fallback() {
+            try {
+              var ta = document.createElement('textarea');
+              ta.value = txt; ta.style.cssText = 'position:fixed;left:-9999px';
+              document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, txt.length);
+              document.execCommand('copy'); document.body.removeChild(ta); done();
+            } catch (e) { try { window.prompt('手动复制下面的诊断信息', txt); } catch (e2) {} }
+          }
+        };
+      }
+
+      /* ── 启动屏（自包含，HTML 一到即渲染）───────────────────────────────── */
       var done = false;
       var tips = [
         '正在唤醒鸦荔考研…',
@@ -59,6 +368,9 @@
       function ready() {
         if (done) return;
         done = true;
+        G.booted = true;
+        var dg = document.getElementById('boot-diag');
+        if (dg && dg.parentNode && !G.forced) dg.parentNode.removeChild(dg);
         var bar = document.getElementById('boot-bar');
         if (bar) bar.style.width = '100%';
         var num = document.getElementById('boot-num');
@@ -70,53 +382,44 @@
         }, 180);
       }
       window.__BOOT_READY = ready;
-      // 主应用挂载失败兜底：8s 后提示换浏览器（原有提示升级为样式化卡片）
+      G.done = ready;
+
+      // 主应用挂载失败兜底：8s 后给出更准确的提示（有资源失败就直说）
       setTimeout(function () {
         if (done) return;
+        var hasRes = false;
+        for (var i5 = 0; i5 < errs.length; i5++) if (errs[i5].k === '资源') hasRes = true;
         var t = document.getElementById('boot-tip');
-        if (t) t.textContent = '加载较慢，请检查网络；若长时间停留，请用 Chrome / Edge 打开';
+        if (!t) return;
+        if (hasRes) t.textContent = '有资源加载失败，15 秒后将给出诊断面板';
+        else if (!moduleOk || missingSyntax.length) t.textContent = '当前浏览器内核过旧，无法运行本系统';
+        else t.textContent = '加载较慢，请检查网络；若长时间停留，15 秒后将给出诊断面板';
       }, 8000);
       // 每 2.2s 轮换等待文案
       var ti = 0;
       setInterval(function () {
         if (done) { clearInterval(this); return; }
         ti = (ti + 1) % tips.length;
-        var t = document.getElementById('boot-tip');
-        if (t) t.textContent = tips[ti];
+        var t2 = document.getElementById('boot-tip');
+        if (t2) t2.textContent = tips[ti];
       }, 2200);
+
+      /* 时间轴：6s 若无起色 → 预探测入口脚本；9s → 自愈一次；15s → 诊断面板 */
+      setTimeout(function () { if (!done) probeEntry(); }, 6000);
+      setTimeout(function () { if (!done) healOnce(); }, 9000);
+      setTimeout(function () { if (!done) showPanel(); }, 15000);
+
       // 首屏渲染后立刻启动（DOM 就绪即可，无需等任何资源）
       var start = function () {
         var t = document.getElementById('boot-tip');
         if (t) t.textContent = tips[0];
         requestAnimationFrame(tick);
-        try {
-          new PerformanceObserver(watch).observe({ type: 'resource', buffered: true });
-        } catch (e) {}
+        try { new PerformanceObserver(watch).observe({ type: 'resource', buffered: true }); } catch (e) {}
+        // ?boot=diag：正常设备也能手动唤出诊断面板（对照用）
+        try { if (/(\?|&)boot=diag(&|$)/.test(location.search)) { setTimeout(function () { showPanel(true); }, 1200); } } catch (e) {}
       };
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
       else start();
-    })();
-    /* 【2026-09-12 迭代2 · 内核探测】构建目标是 es2022（无 legacy 降级）。旧 WebView 解析不了
-       新语法时，整个 bundle 静默死亡=白屏，且此时 React/Vue 内的探测代码也不会执行——
-       悖论只能在 ES5 内联脚本里解：模块加载前先用引擎自己的解析器探语法能力，过旧则
-       留在启动屏并给出明确指引（升级 WebView / 换 Chrome），绝不让用户对着白屏猜。 */
-    (function () {
-      var ok = true;
-      try { new Function('const f=(a)=>a?.b??1; return f({b:1});'); } catch (e) { ok = false; }
-      try { new Function('let x=1; x??=2; class A{p=1}'); } catch (e) { ok = false; }
-      if (!ok) {
-        window.__KERNEL_TOO_OLD__ = true;
-        window.__BOOT_READY = null;
-        var el = document.getElementById('boot-splash');
-        var tip = document.createElement('div');
-        tip.style.cssText = 'position:fixed;left:16px;right:16px;bottom:20px;z-index:100000;background:#b42318;color:#fff;border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.7;text-align:left';
-        tip.innerHTML = '<b>⚠️ 浏览器内核过旧，无法运行本系统</b><br>请升级系统 WebView，或改用最新版 Chrome / Edge 打开。<br>（本页已停止加载，避免出现白屏）';
-        (el || document.body).appendChild(tip);
-        var st = document.getElementById('boot-progress') || (el && el.querySelector('[id*=progress]'));
-        try { if (el) el.style.display = 'flex'; } catch (e) {}
-        // 阻断后续模块脚本：替换全局 import 触发器不存在，直接 return（主脚本仍会尝试执行，
-        // 但旧内核本就执行不了；此处保证用户看到的是指引而非白屏）
-      }
     })();
   </script>
   <style>
@@ -154,13 +457,13 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-bFnfXlkt.js"></script>
+  <script type="module" crossorigin src="./assets/index-jaDDwHLy.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-CgvsJPj0.js">
   <link rel="modulepreload" crossorigin href="./assets/vendor-DMwg4gBF.js">
   <link rel="modulepreload" crossorigin href="./assets/utils-X-x9WMdR.js">
   <link rel="modulepreload" crossorigin href="./assets/store-LKT07tQt.js">
   <link rel="modulepreload" crossorigin href="./assets/tex-CKo-iOwz.js">
-  <link rel="modulepreload" crossorigin href="./assets/ai-Dp_4fYmT.js">
+  <link rel="modulepreload" crossorigin href="./assets/ai-Du6CDlBY.js">
   <link rel="modulepreload" crossorigin href="./assets/siteSearch-BaNh85Os.js">
   <link rel="modulepreload" crossorigin href="./assets/engDrill-D5qy0gQ7.js">
   <link rel="modulepreload" crossorigin href="./assets/inkStore--j6wz3UQ.js">
@@ -169,7 +472,7 @@
   <link rel="modulepreload" crossorigin href="./assets/share-1BIrfKtZ.js">
   <link rel="modulepreload" crossorigin href="./assets/writingEngine-CsNaznaf.js">
   <link rel="stylesheet" crossorigin href="./assets/vendor-DLVrwanO.css">
-  <link rel="stylesheet" crossorigin href="./assets/index-BsMaGDuC.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-CU2KwyiT.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="boot-splash">
@@ -182,5 +485,25 @@
     </div>
   </div>
   <div id="app"></div>
+  <!-- 【轮19】nomodule 兜底：仅当内核**不支持** ES 模块时执行（模块脚本在本类环境里
+       根本不会跑，必须由经典脚本把话说清楚，否则用户只看到一条爬不动的进度条）。 -->
+  <script nomodule>
+    (function () {
+      var tryShow = function () {
+        try { if (window.__BOOT_GUARD) window.__BOOT_GUARD.rec('内核', 'nomodule 脚本已执行：确认本环境不支持 ES 模块'); } catch (e) {}
+        var t = document.getElementById('boot-tip');
+        if (t) t.textContent = '本浏览器内核不支持 ES 模块，请升级 WebView 或换浏览器打开';
+        var s = document.getElementById('boot-splash');
+        if (s) {
+          var tip = document.createElement('div');
+          tip.style.cssText = 'position:fixed;left:16px;right:16px;bottom:20px;z-index:100000;background:#b42318;color:#fff;border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.7;text-align:left';
+          tip.innerHTML = '<b>⚠️ 浏览器内核过旧，无法运行本系统</b><br>本系统使用 ES 模块化构建，当前内核不支持。请升级系统 WebView，或改用最新版 Chrome / Edge / 系统浏览器打开。';
+          document.body.appendChild(tip);
+        }
+      };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tryShow);
+      else tryShow();
+    })();
+  </script>
 </body>
 </html>
