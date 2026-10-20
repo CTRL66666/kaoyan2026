@@ -1,5 +1,5 @@
 /* ============================================================
- * paper-extract.plugin.js — 试卷提取（单文件插件）· v1.1
+ * paper-extract.plugin.js — 试卷提取（单文件插件）· v1.2
  * ------------------------------------------------------------
  * 设计边界（重要）：
  *   · 不引 pdf.js / 不接预览 / 不用 Python；PDF 解析全部走站点注入的 window.PdfKit。
@@ -9,6 +9,12 @@
  *       window.PaperKit = { parseJson(text) → {ok,papers,warnings,stats},
  *                           addDrafts(drafts) → {ids,skipped}, open(id,qi), brief(), remove(id) }
  *     （PaperKit 缺失时自动降级为"只导出 JSON，手动去题卷模块导入"，不假装能入库。）
+ *
+ * ── v1.2 做了什么（相对 1.1.0）────────────────────────────────
+ *   ① **提取过程可持久化**：任务状态（阶段/进度/日志/结果）落宿主新的 ctx.keep（本机状态槽），
+ *      切换模块/刷新浏览器回来都能看到刚才跑到哪；**destroy 不再掐死任务**（旧版切个页就 abort）。
+ *   ② 跑完时如果人不在提取台，用宿主新的 ctx.notify 推一张通知卡（点「回提取台」直接跳回来）。
+ *   ③ 状态是唯一事实源、DOM 只是投影：progress() 改状态 → 订阅者重绘，所以后台跑 + 前台看能对齐。
  *
  * ── v1.1 做了什么（相对 1.0.0）────────────────────────────────
  *   ① 拆成三个子页：提取台 / 卷库 / 设置体检（同一套顶部导航，互跳不丢状态）
@@ -22,7 +28,7 @@
 ;(function () {
   'use strict'
 
-  let VERSION = '1.1.0'
+  let VERSION = '1.2.0'
   let AI_CTX = 'plugin.paper'
   let MAX_PAGES_DEFAULT = 40
   let TEXT_MIN = 80
@@ -977,6 +983,60 @@
     return n
   }
 
+  /* ---------------- 提取任务状态（ctx.keep 持久化 · 切模块/刷新都不丢） ----------------
+   * 【2026-10-20 用户报「插件的提取工作不能持久化，切换模块会刷新状态」】
+   * 旧版把所有进度放在 mountExtract 的闭包里，还让 destroy() 直接 abort ——
+   * 结果「切个模块 = 半小时的活被掐死，回来还是白纸」。
+   *
+   * 现在把「任务状态」当唯一事实源，落宿主的 ctx.keep（本机持久化槽，不进云同步）：
+   *   · progress()/log() 只改状态，UI 由订阅者重绘（人不在页面上时它就是纯数据）
+   *   · mountExtract 先 restore() 再订阅，回来能看到跑到哪、跑完没有
+   *   · 跑完时若已不在提取台 → ctx.notify 推一张通知卡（点「回提取台」跳回来）
+   *
+   * 体积纪律：卷本体只在 ≤900KB 时随状态存（配图是数据 URL）；超了靠卷库里的 examId 回读，
+   * 并如实告诉用户「结果在卷库里，不回显预览」——绝不假装还在。 */
+  let JOB_KEY = 'job'
+  let JOB_EXAM_MAX = 900000
+  let JOB_LOG_MAX = 80
+  /* 本上下文正在跑的那次 runId：切模块后它还在（同一个 JS 上下文）；
+   * 刷新浏览器后它消失 —— 用它区分「还在跑」和「上次跑到一半页面被刷掉了」。 */
+  let LIVE_RID = ''
+  let MEM_KEEP = null
+
+  /** 宿主没提供 ctx.keep 时的兜底（老站点/单测）：同会话内行为一致，只是不跨刷新 */
+  function memKeep() {
+    if (!MEM_KEEP) MEM_KEEP = {}
+    let box = MEM_KEEP
+    return {
+      get: function (k, dft) { return Object.prototype.hasOwnProperty.call(box, k) ? box[k] : dft },
+      set: function (k, v) { box[k] = v },
+      patch: function (k, o) { box[k] = Object.assign({}, box[k] || {}, o || {}); return box[k] },
+      del: function (k) { delete box[k] },
+      keys: function () { return Object.keys(box) },
+      on: function () { return function () { } }
+    }
+  }
+  function keepOf(ctx) {
+    return ctx && ctx.keep && typeof ctx.keep.patch === 'function' ? ctx.keep : memKeep()
+  }
+  function jobGet(ctx) {
+    let j = keepOf(ctx).get(JOB_KEY, null)
+    return j && typeof j === 'object' ? j : null
+  }
+  function jobPatch(ctx, patch) {
+    /* 自己合并再 set（不用 keep.patch）：日志要**裁剪后再落盘**，
+     * 先写后裁等于把 80 条上限写在注释里、实际存的是全量。 */
+    let kp = keepOf(ctx)
+    let cur = kp.get(JOB_KEY, null)
+    let next = Object.assign({}, (cur && typeof cur === 'object' ? cur : {}), patch || {})
+    if (Array.isArray(next.log) && next.log.length > JOB_LOG_MAX) next.log = next.log.slice(-JOB_LOG_MAX)
+    kp.set(JOB_KEY, next)
+    return next
+  }
+  function jobClear(ctx) { keepOf(ctx).del(JOB_KEY) }
+  function stamp() { return new Date().toTimeString().slice(0, 8) }
+  function logLine(s) { return '[' + stamp() + '] ' + s }
+
   /* ---------------- 卷库（ctx.data 持久化 + 体积闸） ----------------
    * 题卷整卷（含数据 URL 配图）会随 Store 持久化并参与云同步。这里做两件事：
    *   ① 最多留 BANK_MAX 卷（多的按时间淘汰）；
@@ -1468,21 +1528,73 @@
     $('[data-preset]').value = cfg.preset
     $('[data-autobank]').value = cfg.autoBank ? '1' : '0'
 
+    /* ── 状态 → UI 的唯一投影：恢复、订阅、实时跑，全都只走 paint() ──
+     * 这样「后台跑」和「前台看」不会各画一套（旧版是回调里直接摸 DOM，
+     * 页面一离开 DOM 就没了，状态也就跟着"消失"了）。 */
+    let alive = true
+    let kp = keepOf(ctx)
+    let restoring = false
+    let lastDrawnRid = ''
+
+    function paint(job) {
+      if (!alive || !job) return
+      let p = clamp(job.pct || 0, 0, 100)
+      let box = barEl.parentNode
+      let hasMsg = !!job.msg
+      if (box && box.classList) box.classList.toggle('on', hasMsg || p > 0)
+      barEl.style.width = p + '%'
+      msgEl.textContent = job.msg || ''
+      let steps = $('[data-steps]')
+      if (steps) steps.innerHTML = stepsHtml(stageOf(p), job.state === 'done' || p >= 100)
+      if (logEl) {
+        logEl.textContent = (job.log || []).join('\n')
+        logEl.scrollTop = logEl.scrollHeight
+      }
+      let runBtn = $('[data-run]'), cancelBtn = $('[data-cancel]')
+      let running = job.state === 'running'
+      if (runBtn) runBtn.disabled = running
+      if (cancelBtn) cancelBtn.disabled = !running
+      if (job.state === 'done' && job.rid !== lastDrawnRid) {
+        lastDrawnRid = job.rid || ''
+        let exam = job.exam || null
+        if (!exam && job.examId) {
+          /* 卷太大没随状态存 → 从卷库里回读（卷库是另一份持久化，天然兜底） */
+          let hit = bankGet(ctx).filter(function (x) { return x.id === job.examId })[0]
+          if (hit) exam = hit
+        }
+        if (exam) renderResult(exam, { scroll: !restoring })
+        else if (job.examId) {
+          $('[data-rtitle]').textContent = '✅ ' + (job.title || '提取完成')
+          $('[data-chips]').innerHTML = '<span class="px-chip">卷太大，未随状态保存</span>'
+          $('[data-warns]').innerHTML = '<div class="px-warnbox">这次的结果已经存进「卷库」（' + esc(job.title || '') + '），'
+            + '这里只显示摘要 —— 去卷库可以完整回看、导出、送去做题。</div>'
+          $('[data-result]').style.display = ''
+        }
+      }
+    }
+
+    /** 写状态（唯一入口）：订阅者会把它画出来；不在页面上时它就是纯数据 */
+    function jobWrite(patch) {
+      let next = jobPatch(ctx, patch)
+      if (alive) paint(next)
+      return next
+    }
     function log(s) {
-      let t = new Date().toTimeString().slice(0, 8)
-      logEl.textContent += (logEl.textContent ? '\n' : '') + '[' + t + '] ' + s
-      logEl.scrollTop = logEl.scrollHeight
+      let cur = jobGet(ctx) || {}
+      let list = Array.isArray(cur.log) ? cur.log.slice() : []
+      list.push(logLine(s))
+      if (list.length > JOB_LOG_MAX) list = list.slice(-JOB_LOG_MAX)
+      jobWrite({ log: list })
     }
     function progress(pct, msg) {
       let p = clamp(pct, 0, 100)
-      /* 进度条只在真开始之后出现：0% 的空条在浅色/夜间主题下都像一条多余的分割线 */
-      let barBox = barEl.parentNode
-      if (barBox && barBox.classList) barBox.classList.toggle('on', msg ? true : p > 0)
-      barEl.style.width = p + '%'
-      msgEl.textContent = msg || ''
-      $('[data-steps]').innerHTML = stepsHtml(stageOf(p), p >= 100)
-      if (msg) log(msg)
+      let cur = jobGet(ctx) || {}
+      let list = Array.isArray(cur.log) ? cur.log.slice() : []
+      if (msg) list.push(logLine(msg))
+      if (list.length > JOB_LOG_MAX) list = list.slice(-JOB_LOG_MAX)
+      jobWrite({ pct: p, msg: msg || '', log: list })
     }
+    /* 旧版这两处是直接改 DOM；现在统一改状态（paint 负责画），保留同名是为了少动下游 60 处调用 */
 
     /* 文件选择 + 拖拽 */
     let drop = $('[data-drop]'), fileInput = $('[data-file]')
@@ -1543,12 +1655,19 @@
       state.cancelled = false
       state.result = null
       state.abort = typeof AbortController !== 'undefined' ? new AbortController() : null
+      let rid = 'r' + Date.now().toString(36)
+      LIVE_RID = rid
       let runBtn = $('[data-run]')
       runBtn.disabled = true; $('[data-cancel]').disabled = false
       $('[data-result]').style.display = 'none'
       $('[data-warns]').innerHTML = ''
-      logEl.textContent = ''
       let t0 = Date.now()
+      /* 新任务从零开始写状态：log 清空、pct 归零、rid 换新 —— 恢复时靠 rid 认出"这是哪一次" */
+      jobWrite({
+        rid: rid, state: 'running', pct: 0, msg: '准备中…', log: [],
+        startedAt: t0, endedAt: 0, exam: null, examId: '', title: '',
+        fileName: state.file.name
+      })
       try {
         let buf = await state.file.arrayBuffer()
         let doc = await openPdf(buf)
@@ -1568,10 +1687,8 @@
         try { if (doc && typeof doc.destroy === 'function') await doc.destroy() } catch (e) { }
         exam.meta.elapsedSec = Math.round((Date.now() - t0) / 100) / 10
         state.result = exam
-        renderResult(exam)
-        progress(100, '完成：' + exam.questions.length + ' 题（图片 ' + exam.meta.images + ' 张）')
-        ctx.Toast.show('提取完成：' + exam.questions.length + ' 题', 'success', 2200)
-        if ($('[data-autobank]').value === '1') {
+        let autoBank = $('[data-autobank]').value === '1'
+        if (autoBank) {
           let r = bankSave(ctx, exam)
           log('已存入卷库（保留 ' + r.kept + ' 卷 / 约 ' + fmtSize(r.chars)
             + (r.dropped ? '；' + r.dropped + ' 卷因超出容量未存' : '')
@@ -1580,17 +1697,49 @@
             ctx.Toast.show('卷库空间有限：较早的卷已' + (r.trimmed ? '移除配图' : '') + (r.dropped ? '清理' : '') + '，文字都还在', 'warn', 4000)
           }
         }
+        /* 卷本体只在没超体积上限时随状态存（配图是数据 URL）；超了靠卷库的 examId 回读 */
+        let examCharsLen = examChars(exam)
+        let stash = examCharsLen <= JOB_EXAM_MAX ? exam : null
+        progress(100, '完成：' + exam.questions.length + ' 题（图片 ' + exam.meta.images + ' 张）')
+        jobWrite({
+          state: 'done', rid: rid, endedAt: Date.now(), title: exam.title,
+          examId: exam.id, exam: stash, pct: 100,
+          questions: exam.questions.length, images: exam.meta.images || 0
+        })
+        finishNotify(ctx, exam, 'done')
       } catch (e) {
         let m = (e && e.message) || String(e)
-        log('失败：' + m)
-        progress(0, '失败：' + m)
-        ctx.Toast.show('提取失败：' + m, 'warn', 4200)
+        let canceled = !!state.cancelled
+        log((canceled ? '已取消：' : '失败：') + m)
+        jobWrite({ state: canceled ? 'canceled' : 'failed', pct: 0, msg: (canceled ? '已取消：' : '失败：') + m, endedAt: Date.now() })
+        if (!canceled) finishNotify(ctx, null, 'failed', m)
       } finally {
         runBtn.disabled = false; $('[data-cancel]').disabled = true
       }
     }
 
-    function renderResult(exam) {
+    /* 跑完/失败时人已经不在提取台 → 用宿主的通知卡片留个痕（否则"切走了就再也想不起来它跑完没"）。
+     * 页面上就只弹 toast，不重复打扰。 */
+    function finishNotify(ctx, exam, kind, err) {
+      let away = !alive || !el.isConnected
+      if (!away) {
+        if (exam) ctx.Toast.show('提取完成：' + exam.questions.length + ' 题', 'success', 2200)
+        return
+      }
+      try {
+        if (!ctx.notify) return
+        let h = kind === 'done' && exam
+          ? { title: '📄 试卷提取完成：' + exam.title, body: exam.questions.length + ' 题（带图 ' + (exam.meta.images || 0) + ' 张）· 已存入卷库', level: 'success' }
+          : { title: '📄 试卷提取中断', body: err || '任务没有跑完，回来可以重试', level: 'warn' }
+        ctx.notify({
+          title: h.title, body: h.body, level: h.level, timeout: 0,
+          actions: [{ label: '回提取台', kind: 'primary', onClick: function (close) { try { close() } catch (e) { } ctx.api.goTool(T_MAIN) } }]
+        })
+      } catch (e) { /* 通知失败不影响结果落盘 */ }
+    }
+
+    function renderResult(exam, opts) {
+      let scroll = !opts || opts.scroll !== false
       let figs = exam.questions.filter(function (q) { return q.diagramImg }).length
       let low = exam.questions.filter(function (q) { return q.lowConfidence }).length
       let noans = exam.questions.filter(function (q) { return q.noAnswer }).length
@@ -1612,7 +1761,9 @@
       $('[data-result]').style.display = ''
       view.set(exam)
       /* 参数块挪到主操作下面之后，结果卡离首屏更远了 —— 提取完成后自己滚过去，
-       * 否则用户看着"完成"的 toast 却不知道结果在下面。 */
+       * 否则用户看着"完成"的 toast 却不知道结果在下面。
+       * 【恢复时不滚】重挂页面那一刻就跳到底部，用户会以为页面抽风。 */
+      if (!scroll) return
       try {
         let box = $('[data-result]')
         if (box && box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -1629,9 +1780,43 @@
      * 先绑后拼就永远点不动（这是个只看代码看不出来的空点击）。 */
     bindNav(el, ctx, T_MAIN)
 
+    /* ── 恢复上次的任务 ──
+     * 三种情况要和用户说清楚，别让人以为"页面回到初始了 = 活白干了"：
+     *   running 且 rid === LIVE_RID → 真的还在后台跑，接上实时进度
+     *   running 但 rid ≠ LIVE_RID   → 上次跑到一半页面被刷新/重开过，那次已经死了，标成中断
+     *   done / failed / canceled    → 结果卡或失败原因直接画回来 */
+    restoring = true
+    try {
+      let job = jobGet(ctx)
+      if (job && job.state === 'running' && job.rid !== LIVE_RID) {
+        jobWrite({
+          state: 'failed', endedAt: Date.now(),
+          msg: '上次提取被中断（页面刷新或重开过）',
+          log: (job.log || []).concat([logLine('上次提取被中断（页面刷新或重开过）—— 重新跑一次即可，卷库里已有的结果不受影响')])
+        })
+      } else if (job && job.state === 'running') {
+        /* rid 与当前上下文一致 → 就是这次页面会话里还在跑的那一次，进度会随订阅继续推上来 */
+        msgEl.textContent = job.msg || '后台提取中…'
+      }
+      let cur = jobGet(ctx)
+      if (cur) paint(cur)
+    } catch (e) { /* 恢复失败就当首次进入，不影响新任务 */ }
+    restoring = false
+    /* 订阅：后台任务每次改状态都会推到这里（页面重挂也能接上，因为状态是唯一事实源） */
+    let offJob = kp.on(JOB_KEY, function (j) { try { paint(j) } catch (e) { } })
+
     return function destroy() {
-      state.cancelled = true
-      try { if (state.abort) state.abort.abort() } catch (e) { }
+      /* 【别再掐任务】旧版这里 `state.cancelled = true` + abort ——
+       * 用户切去别的模块看两眼，回来半天的活就没了。destroy 只负责断开 UI：
+       * 任务自己继续跑，状态继续写 ctx.keep，跑完用通知卡告诉用户。 */
+      alive = false
+      try { offJob() } catch (e) { }
+      try {
+        let j = jobGet(ctx)
+        if (j && j.state === 'running') {
+          jobPatch(ctx, { log: (j.log || []).concat([logLine('已离开提取台：任务在后台继续，完成后会通知你')]) })
+        }
+      } catch (e) { }
       closeLb()
       LB.root = null
     }
@@ -1942,7 +2127,19 @@
       BANK_CHAR_BUDGET: BANK_CHAR_BUDGET,
       T_MAIN: T_MAIN,
       T_LIB: T_LIB,
-      T_SETUP: T_SETUP
+      T_SETUP: T_SETUP,
+      /* 任务状态读/写钩子（测试用）：live() 读当前上下文的 runId，live('r1') 把它设成某次运行 ——
+       * "切模块回来能接上"与"刷新过就该标中断"就是靠这个 rid 区分的，不开放它这两种情况测不出来。 */
+      live: function (rid) {
+        if (rid === undefined) return LIVE_RID
+        LIVE_RID = String(rid || '')
+        return LIVE_RID
+      },
+      jobGet: jobGet,
+      jobPatch: jobPatch,
+      jobClear: jobClear,
+      JOB_EXAM_MAX: JOB_EXAM_MAX,
+      JOB_LOG_MAX: JOB_LOG_MAX
     }
   }
 
