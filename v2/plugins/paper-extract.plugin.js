@@ -48,27 +48,48 @@
     + '"topicName":"考点","score":数字或null,"star":1-5,"sourcePages":[1],"confidence":0.95,'
     + '"hasFigure":false,"figureKind":"","figureDesc":""}'
 
+  /* 【2026-10-20 第 26 期】三段提示词统一补一条「什么不是题目」的负例清单。
+   * 用户实测的坏结果：卷首的学校名、考试全称、「科目名称：……」这类卷头字段
+   * 被当成三道题（还都标成纯图题/低置信）。
+   * 光靠正面要求「丢弃页眉页脚」模型守不住 —— 它不知道学校名和考试名也算页眉，
+   * 所以这里把负例按**类别**逐个点名（不举任何具体机构名，避免把某家校名写死进提示词），
+   * 并给出「宁可少一道题」的取舍方向（漏的能补，错的会污染题库）。 */
+  let NOT_QUESTION = '【什么不算题目 · 严格遵守】下列内容**一条都不要**输出：'
+    + '① 卷首/卷尾的学校名、学院名、校徽文字（如「XX 大学」「XX 学院」）；'
+    + '② 考试名称与年份卷号（如「2026 年攻读硕士学位研究生入学考试」「XX 大学 2026 年硕士研究生招生考试」「模拟卷（四）」）；'
+    + '③ 卷头字段：科目名称/科目代码/考试科目/考试时间/答题时间/试卷满分/考生姓名/准考证号/考号/报考单位/专业名称/命题人；'
+    + '④ 大题标题与分值说明（「一、选择题（每题 5 分）」「第二部分 填空题」）；'
+    + '⑤ 考生须知、注意事项、答题说明、答题卡填涂说明、装订线文字；'
+    + '⑥ 页码（第 1 页 共 4 页）、水印、二维码、公众号/B站/QQ 群、机构广告。'
+    + '判断题目的唯一标准：**它有没有要求考生作答**（有题号且要你算/选/填/证/写/说明）。'
+    + '没有作答要求的文字，一律不输出。宁可少输出一条（用户能手动补），也不要把卷头当题（会污染整卷）。'
+
   let SYS_TEXT = '你是考研试卷数字化工程师。用户给你一份试卷其中几页的文字层提取（可能含页眉页脚、双栏错序、公式残缺、题目跨页）。'
     + '任务：把每一道题完整还原成结构化 JSON。'
     + '【铁律】①只做搬运，严禁增删题意、严禁编造卷面没有的答案或解析；卷面没给答案就 answer:"" 且 noAnswer:true。'
     + '②题目跨页时合并为一题（sourcePages 给全部页码）。'
     + '③公式保留 LaTeX（$...$），拿不准就降低 confidence，不要猜。'
-    + '④题号 no 用卷面原题号；页眉页脚/注意事项/封面文字一律丢弃。'
+    + '④题号 no 用卷面原题号。'
     + '⑤star 为难度粗评（1=送分，5=压轴）。'
+    + NOT_QUESTION
     + '只输出 JSON：{"questions":[' + Q_SCHEMA + ']}'
 
   let SYS_VISION = '你是考研试卷数字化工程师。用户给你一页试卷的高清图片（扫描/拍照/图文混排）。'
     + '任务：逐题识别并还原成结构化 JSON。'
     + '【铁律】①忠实转录，不补题、不编答案；看不清用 □ 占位并降低 confidence。'
     + '②卷面没答案就 answer:"" + noAnswer:true，严禁用你的知识顺手解题冒充卷面答案。'
-    + '③公式用 LaTeX（$...$）。④题号 no 用卷面原题号；页眉页脚/水印/广告丢弃。'
+    + '③公式用 LaTeX（$...$）。④题号 no 用卷面原题号。'
     + '⑤题干含函数图像/几何图/表格/流程图时 hasFigure=true，figureKind 填类别，figureDesc 用 ≤80 字描述图中信息。'
+    + NOT_QUESTION
     + '只输出 JSON：{"questions":[' + Q_SCHEMA + ']}'
 
   let SYS_LOCATE = '你是试卷版面分析器。给你一整页试卷图片，请找出每一道题在外层页面中的位置。'
     + '要求：①按从上到下顺序，每题一条；②box 为 [x0,y0,x1,y1]，相对整页宽高的归一化坐标，取值 0-1000；'
     + '③box 必须完整包住该题题干、选项与配图/表格，左边界包含题号前缀（如“一、”“1.”），右边界包含整行公式，不侵入相邻题；'
-    + '④带图时 hasFigure=true，并在 figureBox 给出配图本身的框；⑤不要输出页眉页脚、水印、二维码、页码。'
+    + '④带图时 hasFigure=true，并在 figureBox 给出配图本身的框；'
+    + '⑤**只框真正要求作答的题目**：卷首学校名/考试名称/科目名称、页眉横条、页脚页码水印、'
+    + '大题标题（一、选择题）、考生须知都不是题目，一个框都不要给；'
+    + '⑥一道题的高度通常不小于整页的 8% —— 你框出来的东西如果只是页面顶部一条又矮又宽的横条，那就是页眉，别框。'
     + '只输出 JSON：{"questions":[{"no":1,"box":[0,0,1000,1000],"hasFigure":false,"figureBox":[0,0,0,0],"confidence":0.9}]}'
 
   /* ---------------- 小工具 ---------------- */
@@ -110,11 +131,14 @@
   }
 
   /* ---------------- 噪声 / 题号 / 题干 ---------------- */
-  let NOISE_RE = /(公众号|B站|抖音|小红书|专注[^。]{0,8}考研|控制考研咨询|vx\s*[:：]|QQ群|扫码|二维码|水印|第\s*\d+\s*页|共\s*\d+\s*页|机密|启用前|考生注意事项|科目代码|科目名称|报考单位|准考证|答题纸|考试时间|满分\s*\d+|姓名\s*[:：]?|得分\s*[:：])/
+  /* 【不写任何具体机构名】这里只认**广告结构**：平台名 + 关注语、机构 + 咨询/辅导/押题、
+   * 微信/QQ 号、扫码词。「某家校名」永远不该进代码 —— 换一份卷就失效，
+   * 而且把用户卷面上的专有名词写死进仓库是隐患。具体机构名交给用户在设置页自己加噪声词。 */
+  let NOISE_RE = /(公众号|B站|抖音|小红书|专注[^。]{0,8}考研|(?:考研|专升本|四六级|雅思|托福)\s*(?:咨询|辅导|培训|网课|押题|资料)|vx\s*[:：]|QQ群|扫码|二维码|水印|第\s*\d+\s*页|共\s*\d+\s*页|机密|启用前|考生注意事项|科目代码|科目名称|报考单位|准考证|答题纸|考试时间|满分\s*\d+|姓名\s*[:：]?|得分\s*[:：])/
   let NOISE_STRIP = [
-    /【[^】]{0,40}(?:公众号|考研|控制|B站|抖音|小红书)[^】]{0,40}】/g,
+    /【[^】]{0,40}(?:公众号|考研|专升本|B站|抖音|小红书)[^】]{0,40}】/g,
     /(?:公众号|B站|抖音|小红书)\s*[/、，,：:]?\s*[^\s，。；;]{0,40}/g,
-    /(?:控制考研咨询|专注[^。\s]{0,12}考研)\s*[^\s，。；;]{0,40}/g,
+    /(?:专注[^。\s]{0,12}考研|(?:考研|专升本|四六级)\s*(?:咨询|辅导|培训|网课|押题))\s*[^\s，。；;]{0,40}/g,
     /\bvx\s*[:：]\s*[A-Za-z0-9_\-]+/g,
     /(?:QQ群|扫码|二维码|水印)[^\s，。；;]{0,40}/g
   ]
@@ -137,15 +161,42 @@
     EXTRA_NOISE.forEach(function (w) { out = out.split(w).join(' ') })
     return out.replace(/\s{2,}/g, ' ').trim()
   }
+  /* 【2026-10-20 第 26 期】「卷头类文字」单独一层判据 —— 旧版把它们混在 NOISE_RE 里，
+   * 结果「只含学校名、不含『考试』二字」的行全部漏网（用户实测就是它被当成了题目）。
+   * 这里三条各自带守护，核心是 ASK_WORDS：只要句子里有「求/计算/证明/下列/若/设…」这类
+   * 作答指令词，就绝不判成卷头 —— 宁可放过一条卷头（用户手动删一次），也不吞一道真题。
+   * 判据只认**结构特征**（机构名后缀 / 考试名称词 / 卷头字段），不认任何具体机构的名字。 */
+  let RE_INST = /(大学|学院|学校|研究院|研究所|中学|职业技术学院|附属)/
+  let RE_EXAM_TITLE = /(攻读硕士|研究生入学|研究生招生|招生考试|入学考试|统一考试|模拟考试|模拟卷|模考|真题|期末|期中|学业水平|结业考试)/
+  let RE_PAPER_HEAD = /(科目名称|科目代码|考试科目|考试形式|闭卷|开卷|答题时间|考试时间|试卷满分|满分\s*[:：]?\s*\d|考生须知|注意事项|考生姓名|姓名\s*[:：]|准考证|考号|报考单位|专业名称|命题单位|命题人|审题人|复核人|第\s*[一二三四五六七八九十\d]+\s*页|共\s*\d+\s*页)/
+  let ASK_WORDS = /(求|计算|证明|化简|比较|讨论|判断|说明|写出|画出|列出|推导|选择|填空|解答|分析|下列|以下|若|设|已知|解得|当\s*[a-zA-Z]*\s*[=＝]|试\s*[求证解])/
+
+  function looksLikeHeaderText(t) {
+    t = flat(t)
+    if (!t) return false
+    if (t.length > 44) return false                 // 长句多半是题干/解析正文
+    if (ASK_WORDS.test(t)) return false             // 有作答指令 → 是题目
+    if (/^[（(]?\d{1,3}\s*[.．、)）]/.test(t)) return false // 有题号 → 是题目
+    if (RE_PAPER_HEAD.test(t)) return true
+    if (RE_INST.test(t) && t.length <= 22 && !/[，。；;]/.test(t)) return true
+    if (RE_EXAM_TITLE.test(t) && t.indexOf('题') < 0 && t.length <= 44) return true
+    if (RE_EXAM_TITLE.test(t) && /考试|试卷|卷/.test(t) && t.length <= 30 && !/[？?]/.test(t)) return true
+    return false
+  }
+
   function isNoise(s) {
     let raw = flat(s)
-    if (!raw) return false
+    /* 【2026-10-20】空文字**就是**噪声。旧版这里 return false，导致「题干为空 + 有图」
+     * 的空壳永远不算噪声，页眉横条被裁成图后稳稳定成一道「纯图题」——
+     * 用户在截图里看到的那几道「纯图题 / 低置信 / 卷面无答案」全是这么来的。 */
+    if (!raw) return true
     let t = flat(stripNoise(s))
     if (!t) return true
     /* 用户自定义噪声词：整行基本只剩水印 → 丢弃；长篇正文里夹一处水印不算（别误杀题干） */
     if (hitExtraNoise(raw) && t.length < 6) return true
     if (t.length > 160) return false
     if (NOISE_RE.test(t)) return true
+    if (looksLikeHeaderText(t)) return true
     if ((/大学|学院|攻读硕士|研究生入学考试|研究生招生/.test(t)) && /考试|模考/.test(t) && t.indexOf('题') < 0 && t.length < 90) return true
     if (/^[一二三四五六七八九十]{1,3}\s*[、.．]\s*(选择|填空|解答|计算|证明|综合|判断|简答|论述)题/.test(t) && t.length < 60) return true
     if ((/模拟卷|模考卷|模拟考试|考研真题/.test(t)) && t.indexOf('题') < 0 && t.length < 60) return true
@@ -156,6 +207,30 @@
     s = String(s || '').trim()
     return !!s && s.length > 18 && '。！？；：)）]】.”"\''
       .indexOf(s.charAt(s.length - 1)) < 0
+  }
+
+  /* ---------------- 卷头/非题目闸 · 几何层 ----------------
+   * 借 paper-extract-lab（早期 demo）的确定性做法：页眉/页脚/大标题在几何上是
+   * 「又矮又宽的横条」，或者落在页面上下边带里。
+   * 真实题目即使整题在图片里（题干没识别出文字），也至少要占页面一成多的高度 ——
+   * 题干 + 选项 + 配图塞不进一条 3% 高的横条。
+   * 【只在「无题干且无选项」的块上生效】有文字的块哪怕很短也不能丢：
+   * 真题常把一道短选择题排在页首，那正好落在上下边带里。 */
+  let PARKED_MAX = 40
+  function blankBlockIsHeader(b, pinfos) {
+    let segs = (b && b.segments) || []
+    if (segs.length !== 1) return false          // 跨页题（拼接多段）一定不是横条
+    let pi = pinfos[segs[0].page - 1]
+    if (!pi || !pi.H || !pi.W) return false
+    let r = segs[0].rect || {}
+    let h = Math.max(0, num(r.bottom, 0) - num(r.top, 0))
+    let w = Math.max(0, num(r.x1, 0) - num(r.x0, 0))
+    if (!h || !w) return false
+    let hr = h / pi.H, wr = w / pi.W
+    if (hr < 0.03) return true                                          // 一行字 / 一条分割线
+    if (hr < 0.06 && wr > 0.4) return true                              // 矮横条：页眉 / 卷头 / 页脚
+    if (hr < 0.13 && (r.top < pi.H * 0.075 || r.bottom > pi.H * 0.93)) return true // 上下边带
+    return false
   }
   function inferType(q) {
     let t = String(q && q.type || '')
@@ -739,8 +814,40 @@
 
     // 合并
     let merged = mergeBlocks(blocks, aiQs, pinfos)
-    merged = merged.filter(function (q) { return !(isNoise(q.stem) && !q.hasFigure) })
-    if (!merged.length) throw new Error('未识别到有效题目（可能整页都是封面/页眉水印）')
+    /* 【第 26 期】非题目剔除。分两条路，判据各自独立：
+     *   · 有题干 → 只看文字：题干本身是卷头/页眉/卷头字段 → 不是题（有选项的不丢，选项能证明是题）。
+     *   · 没题干 → 只能看几何：真实纯图题占页面高度够；页眉横条又矮又宽 → 不是题。
+     * 被剔除的不静默消失：记进 parked，界面如实列出（可回看、可解释），
+     * 因为「莫名少了三题」比「多了三题」更难排查。 */
+    let parked = []
+    function park(q, why) {
+      if (parked.length >= PARKED_MAX) return
+      parked.push({
+        no: q.no == null ? null : q.no,
+        why: why,
+        stem: trunc(flat(q.stem || ''), 40),
+        pages: (q.sourcePages || []).slice(0, 4)
+      })
+    }
+    merged = merged.filter(function (q) {
+      let stem = String(q.stem || '').trim()
+      let hasOpts = Array.isArray(q.options) && q.options.some(function (x) { return String(x || '').trim() })
+      if (stem) {
+        if (isNoise(stem) && !hasOpts) { park(q, looksLikeHeaderText(stem) ? '卷头/非题目文字' : '噪声文字'); return false }
+        return true
+      }
+      if (hasOpts) return true                 // 有选项就能证明是题（题干可能是公式没提出文字）
+      /* ai-only = AI 说有这道题、但版面里找不到对应块，_segments 是拼出来的整页框。
+       * 这种「空题干 + 没有真几何」如果留下来，裁出来的图就是整页，
+       * 界面上就是用户看到的那张「题干就在配图里」的空卡片 —— 宁可剔掉并如实登记。 */
+      if (q.geometry === 'ai-only') { park(q, 'AI 报了空题干，版面里没有对应块'); return false }
+      if (blankBlockIsHeader(q, pinfos)) { park(q, '页眉/页脚横条（整块又矮又宽）'); return false }
+      if (!q.hasFigure) { park(q, '既无题干也无配图'); return false }
+      return true
+    })
+    if (!merged.length) {
+      throw new Error('未识别到有效题目（剔除了 ' + parked.length + ' 条卷头/非题目文字，可换一份卷或检查扫描清晰度）')
+    }
     merged.sort(function (a, b) { return (a.sourcePages[0] || 999) - (b.sourcePages[0] || 999) || (a._order || 0) - (b._order || 0) })
     let nos = merged.map(function (q) { return q.no })
     let needRen = nos.some(function (n) { return n == null })
@@ -840,7 +947,10 @@
         imageMode: opts.imageMode,
         embedded: true,
         engine: 'paper-extract-plugin',
-        version: VERSION
+        version: VERSION,
+        /* 被剔除的非题目清单（只有摘要，不带图 —— 不占体积）。界面据此告诉用户
+         * «剔掉了什么、为什么剔»，而不是让题目数莫名变少。 */
+        parked: parked
       }
     }
   }
@@ -1996,7 +2106,7 @@
       + '<div class="px-h">🏷 噪声词 <em>可选</em></div>'
       + '<div class="px-sub">每家机构的水印/公众号名都不一样。把你卷面上反复出现的广告词、公众号名、机构名写进来（一行一个），'
       + '切题时会从题干里剔除、整行只剩水印的直接丢弃。<b>写长的正文不会误伤</b>：只有整行基本只剩它才算噪声。</div>'
-      + '<textarea class="px-ta" data-noise="1" placeholder="例如：&#10;真橙控制考研&#10;XX 考研咨询&#10;扫码关注">' + esc(noise) + '</textarea>'
+      + '<textarea class="px-ta" data-noise="1" placeholder="一行一个，例如：&#10;XX考研机构&#10;XX教育&#10;扫码关注">' + esc(noise) + '</textarea>'
       + '<div class="px-actions" style="margin-top:10px"><button class="px-btn" data-savenoise="1">保存噪声词</button>'
       + '<span class="px-msg" data-noisetip="1">当前 ' + extraNoiseCount(noise) + ' 个词</span></div>'
       + '</div>'
