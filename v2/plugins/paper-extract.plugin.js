@@ -1,5 +1,5 @@
 /* ============================================================
- * paper-extract.plugin.js — 试卷提取（单文件插件）· v1.2
+ * paper-extract.plugin.js — 试卷提取（单文件插件）· v1.3
  * ------------------------------------------------------------
  * 设计边界（重要）：
  *   · 不引 pdf.js / 不接预览 / 不用 Python；PDF 解析全部走站点注入的 window.PdfKit。
@@ -9,6 +9,16 @@
  *       window.PaperKit = { parseJson(text) → {ok,papers,warnings,stats},
  *                           addDrafts(drafts) → {ids,skipped}, open(id,qi), brief(), remove(id) }
  *     （PaperKit 缺失时自动降级为"只导出 JSON，手动去题卷模块导入"，不假装能入库。）
+ *
+ * ── v1.3 做了什么（相对 1.2.0）────────────────────────────────
+ *   ① **不再把卷头当题目**：三段提示词各加一份「什么不算题目」负例清单（按类别点名，
+ *      不写任何具体机构名），本地再加两层确定性闸——
+ *      · 文字层：题干的机构名/考试名/卷头字段一律判为非题目（带作答指令词的绝不误杀）；
+ *      · 几何层：没题干的块只能看版面 —— 又矮又宽的页眉横条不是题（借 paper-extract-lab 的做法）。
+ *      剔掉的东西不静默消失：`meta.parked` 记着「为什么剔、原来写的什么、第几页」，结果卡可展开核对。
+ *   ② **成果可编辑**：结果/卷库里每题可勾选删除、批量删、撤销、上下移、重新编号；
+ *      带「疑似非题目」筛选一次找出残留；删完直接送进「我的题卷」或导出。
+ *   ③ 卷名题数、总分、建议时长随删题自动重算（导出/入库不会再带旧数字）。
  *
  * ── v1.2 做了什么（相对 1.1.0）────────────────────────────────
  *   ① **提取过程可持久化**：任务状态（阶段/进度/日志/结果）落宿主新的 ctx.keep（本机状态槽），
@@ -28,7 +38,7 @@
 ;(function () {
   'use strict'
 
-  let VERSION = '1.2.0'
+  let VERSION = '1.3.0'
   let AI_CTX = 'plugin.paper'
   let MAX_PAGES_DEFAULT = 40
   let TEXT_MIN = 80
@@ -90,6 +100,10 @@
     + '⑤**只框真正要求作答的题目**：卷首学校名/考试名称/科目名称、页眉横条、页脚页码水印、'
     + '大题标题（一、选择题）、考生须知都不是题目，一个框都不要给；'
     + '⑥一道题的高度通常不小于整页的 8% —— 你框出来的东西如果只是页面顶部一条又矮又宽的横条，那就是页眉，别框。'
+    /* 三段提示词（文字 / 视觉 / 定位）共用同一份负例清单：
+     * 「什么不算题目」的类别只在一处维护，避免某一段漏掉时（定位段最容易被漏）
+     * 卷头又被框回来 —— 那正是"AI 把标题当题目"的直接入口。 */
+    + NOT_QUESTION
     + '只输出 JSON：{"questions":[{"no":1,"box":[0,0,1000,1000],"hasFigure":false,"figureBox":[0,0,0,0],"confidence":0.9}]}'
 
   /* ---------------- 小工具 ---------------- */
@@ -165,8 +179,10 @@
    * 结果「只含学校名、不含『考试』二字」的行全部漏网（用户实测就是它被当成了题目）。
    * 这里三条各自带守护，核心是 ASK_WORDS：只要句子里有「求/计算/证明/下列/若/设…」这类
    * 作答指令词，就绝不判成卷头 —— 宁可放过一条卷头（用户手动删一次），也不吞一道真题。
-   * 判据只认**结构特征**（机构名后缀 / 考试名称词 / 卷头字段），不认任何具体机构的名字。 */
-  let RE_INST = /(大学|学院|学校|研究院|研究所|中学|职业技术学院|附属)/
+   * 判据只认**结构特征**（机构名后缀 / 考试名称词 / 卷头字段），不认任何具体机构的名字。
+   * 后缀表只列「结构后缀」——像「职业技术学院」这种能被打散成「学院」的复合词不单独列，
+   * 因为多写一遍就等于在代码里留下一串具体办学层级的字样，而它对召回毫无贡献。 */
+  let RE_INST = /(大学|学院|学校|研究院|研究所|中学|附属)/
   let RE_EXAM_TITLE = /(攻读硕士|研究生入学|研究生招生|招生考试|入学考试|统一考试|模拟考试|模拟卷|模考|真题|期末|期中|学业水平|结业考试)/
   let RE_PAPER_HEAD = /(科目名称|科目代码|考试科目|考试形式|闭卷|开卷|答题时间|考试时间|试卷满分|满分\s*[:：]?\s*\d|考生须知|注意事项|考生姓名|姓名\s*[:：]|准考证|考号|报考单位|专业名称|命题单位|命题人|审题人|复核人|第\s*[一二三四五六七八九十\d]+\s*页|共\s*\d+\s*页)/
   let ASK_WORDS = /(求|计算|证明|化简|比较|讨论|判断|说明|写出|画出|列出|推导|选择|填空|解答|分析|下列|以下|若|设|已知|解得|当\s*[a-zA-Z]*\s*[=＝]|试\s*[求证解])/
@@ -218,7 +234,9 @@
    * 真题常把一道短选择题排在页首，那正好落在上下边带里。 */
   let PARKED_MAX = 40
   function blankBlockIsHeader(b, pinfos) {
-    let segs = (b && b.segments) || []
+    /* 两种形状都要认：版面块用 `segments`，合并后的题目条目用 `_segments`
+     * （同一份几何在两个阶段各有一个名字，这里统一读，别让判据只对其中一阶段生效）。 */
+    let segs = (b && (b.segments || b._segments)) || []
     if (segs.length !== 1) return false          // 跨页题（拼接多段）一定不是横条
     let pi = pinfos[segs[0].page - 1]
     if (!pi || !pi.H || !pi.W) return false
@@ -231,6 +249,44 @@
     if (hr < 0.06 && wr > 0.4) return true                              // 矮横条：页眉 / 卷头 / 页脚
     if (hr < 0.13 && (r.top < pi.H * 0.075 || r.bottom > pi.H * 0.93)) return true // 上下边带
     return false
+  }
+
+  /** 非题目剔除：返回 {kept, parked}。parked 是给界面看的「剔了什么、为什么」。
+   *
+   * 两条路分开判，因为证据不同：
+   *   · 有题干（文字证据）→ 只看文字。题干是卷头/页眉/卷头字段 → 不是题；
+   *     但有选项的一律留下（选项能证明这是题，题干可能只是脏了）。
+   *   · 没题干（只能看几何）→ 真实纯图题占页面高度够；页眉横条又矮又宽 → 不是题。
+   *     例外：ai-only（AI 说有题、版面里找不到块）的几何是拼出来的整页框，等于没证据 → 剔掉。
+   */
+  function dropNonQuestions(list, pinfos) {
+    let parked = []
+    function park(q, why) {
+      if (parked.length >= PARKED_MAX) return
+      parked.push({
+        no: q.no == null ? null : q.no,
+        why: why,
+        stem: trunc(flat(q.stem || ''), 40),
+        pages: (q.sourcePages || []).slice(0, 4)
+      })
+    }
+    let kept = (list || []).filter(function (q) {
+      let stem = String(q.stem || '').trim()
+      let hasOpts = Array.isArray(q.options) && q.options.some(function (x) { return String(x || '').trim() })
+      if (stem) {
+        if (isNoise(stem) && !hasOpts) {
+          park(q, looksLikeHeaderText(stem) ? '卷头/非题目文字' : '噪声文字')
+          return false
+        }
+        return true
+      }
+      if (hasOpts) return true
+      if (q.geometry === 'ai-only') { park(q, 'AI 报了空题干，版面里没有对应块'); return false }
+      if (blankBlockIsHeader(q, pinfos)) { park(q, '页眉/页脚横条（整块又矮又宽）'); return false }
+      if (!q.hasFigure) { park(q, '既无题干也无配图'); return false }
+      return true
+    })
+    return { kept: kept, parked: parked }
   }
   function inferType(q) {
     let t = String(q && q.type || '')
@@ -814,37 +870,12 @@
 
     // 合并
     let merged = mergeBlocks(blocks, aiQs, pinfos)
-    /* 【第 26 期】非题目剔除。分两条路，判据各自独立：
-     *   · 有题干 → 只看文字：题干本身是卷头/页眉/卷头字段 → 不是题（有选项的不丢，选项能证明是题）。
-     *   · 没题干 → 只能看几何：真实纯图题占页面高度够；页眉横条又矮又宽 → 不是题。
-     * 被剔除的不静默消失：记进 parked，界面如实列出（可回看、可解释），
-     * 因为「莫名少了三题」比「多了三题」更难排查。 */
-    let parked = []
-    function park(q, why) {
-      if (parked.length >= PARKED_MAX) return
-      parked.push({
-        no: q.no == null ? null : q.no,
-        why: why,
-        stem: trunc(flat(q.stem || ''), 40),
-        pages: (q.sourcePages || []).slice(0, 4)
-      })
-    }
-    merged = merged.filter(function (q) {
-      let stem = String(q.stem || '').trim()
-      let hasOpts = Array.isArray(q.options) && q.options.some(function (x) { return String(x || '').trim() })
-      if (stem) {
-        if (isNoise(stem) && !hasOpts) { park(q, looksLikeHeaderText(stem) ? '卷头/非题目文字' : '噪声文字'); return false }
-        return true
-      }
-      if (hasOpts) return true                 // 有选项就能证明是题（题干可能是公式没提出文字）
-      /* ai-only = AI 说有这道题、但版面里找不到对应块，_segments 是拼出来的整页框。
-       * 这种「空题干 + 没有真几何」如果留下来，裁出来的图就是整页，
-       * 界面上就是用户看到的那张「题干就在配图里」的空卡片 —— 宁可剔掉并如实登记。 */
-      if (q.geometry === 'ai-only') { park(q, 'AI 报了空题干，版面里没有对应块'); return false }
-      if (blankBlockIsHeader(q, pinfos)) { park(q, '页眉/页脚横条（整块又矮又宽）'); return false }
-      if (!q.hasFigure) { park(q, '既无题干也无配图'); return false }
-      return true
-    })
+    /* 【第 26 期】非题目剔除：判据抽成 dropNonQuestions（一条规则只写一处，测试直接打它）。
+     * 被剔除的不静默消失：parked 里有「为什么剔、原来的文字摘要、页码」，
+     * 界面如实列出 —— 因为「莫名少了三题」比「多了三题」更难排查。 */
+    let cut = dropNonQuestions(merged, pinfos)
+    merged = cut.kept
+    let parked = cut.parked
     if (!merged.length) {
       throw new Error('未识别到有效题目（剔除了 ' + parked.length + ' 条卷头/非题目文字，可换一份卷或检查扫描清晰度）')
     }
@@ -1092,6 +1123,20 @@
     ;((exam && exam.questions) || []).forEach(function (q) { if (q && q.diagramImg) n++ })
     return n
   }
+  /* 删题之后卷名里的「（9 题）」、总分、建议时长都得跟着变 ——
+   * 否则导出去的 JSON 头里还写着旧题数，入库后又是一个说不清的数。
+   * 纯函数（只改 exam、不碰 DOM）：结果卡与卷库两条链路共用这一份口径，
+   * 也能被单测直接盯住。幂等 —— 重复调用不会把「（9 题）」再套一层。 */
+  function recalcExamMeta(exam) {
+    if (!exam) return exam
+    let qs = exam.questions || []
+    let t = String(exam.title || '提取结果')
+    let t2 = t.replace(/（\s*\d+\s*题\s*）\s*$/, '（' + qs.length + ' 题）')
+    if (t2 !== t) exam.title = t2
+    exam.totalScore = qs.reduce(function (a, q) { return a + (Number(q.score) || 0) }, 0) || qs.length * 5
+    exam.timeLimit = qs.length * 6
+    return exam
+  }
 
   /* ---------------- 提取任务状态（ctx.keep 持久化 · 切模块/刷新都不丢） ----------------
    * 【2026-10-20 用户报「插件的提取工作不能持久化，切换模块会刷新状态」】
@@ -1167,6 +1212,9 @@
     return c
   }
   function bankSave(ctx, exam) {
+    /* 唯一写入口 → 在这里统一重算统计：不管是「提取完成」还是「卷库里删了题」，
+     * 落盘的卷名题数/总分/时长都跟 questions 对齐（否则导出的 JSON 头还写着旧题数）。 */
+    recalcExamMeta(exam)
     let list = bankGet(ctx).filter(function (x) { return x.id !== exam.id })
     list.unshift(exam)
     let keep = [], total = 0, dropped = 0, trimmed = 0
@@ -1229,8 +1277,18 @@
     { k: 'fig', label: '带图' },
     { k: 'imgonly', label: '纯图' },
     { k: 'low', label: '低置信' },
-    { k: 'noans', label: '无答案' }
+    { k: 'noans', label: '无答案' },
+    /* 【第 26 期】给「清理」用的入口：AI 仍可能留下卷头/空题干，
+     * 这一档把它们一次找出来，用户点几下就能清干净（而不是逐题翻）。 */
+    { k: 'suspect', label: '疑似非题目' }
   ]
+  function isSuspectQuestion(q) {
+    if (!q) return false
+    let stem = String(q.stem || '').trim()
+    /* 没题干的也照列（纯图题要用户点开看一眼才放心）：宁可多筛一次，别让空壳藏在「全部」里 */
+    if (!stem) return true
+    return looksLikeHeaderText(stem) || isNoise(stem)
+  }
   function qtPass(q, filter, kw) {
     if (!q) return false
     let stem = String(q.stem || '')
@@ -1238,13 +1296,14 @@
     if (filter === 'imgonly' && !(q.diagramImg && !stem.trim())) return false
     if (filter === 'low' && !q.lowConfidence) return false
     if (filter === 'noans' && !q.noAnswer) return false
+    if (filter === 'suspect' && !isSuspectQuestion(q)) return false
     if (kw) {
       let hay = (stem + ' ' + String(q.topicName || '') + ' ' + String(q.figureKind || '')).toLowerCase()
       if (hay.indexOf(kw) < 0) return false
     }
     return true
   }
-  function qCardHtml(q, i) {
+  function qCardHtml(q, i, sel) {
     let img = q.diagramImg || ''
     let stem = String(q.stem || '')
     let isImgOnly = !!img && !stem.trim()
@@ -1254,6 +1313,7 @@
     if (q.lowConfidence) tags += '<span class="px-tag low">低置信</span>'
     if (q.noAnswer) tags += '<span class="px-tag noans">卷面无答案</span>'
     if (q.imgDropped) tags += '<span class="px-tag low">图已清理</span>'
+    if (isSuspectQuestion(q)) tags += '<span class="px-tag low">疑似非题目</span>'
     let opts = (q.options || []).map(function (o) { return '<div class="px-opt">' + esc(o) + '</div>' }).join('')
     let meta = []
     if (q.score) meta.push('分值 ' + q.score)
@@ -1261,22 +1321,32 @@
     if (q.topicName) meta.push('考点 ' + esc(q.topicName))
     if (q.confidence != null) meta.push('置信 ' + q.confidence)
     if ((q.sourcePages || []).length) meta.push('P' + q.sourcePages.join('、'))
-    return '<div class="px-q ' + (img ? '' : 'noimg') + '" data-q="' + i + '">'
+    return '<div class="px-q ' + (img ? '' : 'noimg') + (sel ? ' picked' : '') + '" data-q="' + i + '">'
       + (img ? '<div class="px-q-img"><img src="' + img + '" data-zoom="' + i + '" loading="lazy" alt="第 ' + (q.no || i + 1) + ' 题配图">'
         + '<span class="px-q-z">点击放大</span></div>' : '')
       + '<div class="px-q-body">'
-      + '<div class="px-q-hd"><span class="px-no">第 ' + (q.no || i + 1) + ' 题</span>' + tags + '</div>'
+      + '<div class="px-q-hd">'
+      + '<label class="px-pick" title="勾选后可批量删除"><input type="checkbox" data-pick="' + i + '"'
+      + (sel ? ' checked' : '') + '></label>'
+      + '<span class="px-no">第 ' + (q.no || i + 1) + ' 题</span>' + tags + '</div>'
       + (stem ? '<div class="px-stem">' + esc(stem) + '</div>'
         : (img ? '<div class="px-stem px-stem-img">题干就在上面这张配图里（未提取到文字）</div>' : '<div class="px-stem px-stem-img">（题干为空）</div>'))
       + (opts ? '<div class="px-opts">' + opts + '</div>' : '')
       + (q.figureDesc ? '<div class="px-fig-note">图：' + esc(q.figureDesc) + '</div>' : '')
       + '<div class="px-meta">' + meta.map(function (m) { return '<span>' + m + '</span>' }).join('') + '</div>'
-      + '<div class="px-q-ft"><button class="px-mini" data-copy="' + i + '">复制本题 JSON</button></div>'
+      + '<div class="px-q-ft">'
+      + '<button class="px-mini" data-copy="' + i + '">复制本题 JSON</button>'
+      + '<button class="px-mini" data-up="' + i + '" title="与上一题交换">↑ 上移</button>'
+      + '<button class="px-mini" data-down="' + i + '" title="与下一题交换">↓ 下移</button>'
+      + '<button class="px-mini danger" data-del="' + i + '" title="从这一卷里删掉这道题">删除本题</button>'
+      + '</div>'
       + '</div></div>'
   }
 
-  function mountQView(host, ctx) {
-    let S = { exam: null, filter: 'all', kw: '' }
+  function mountQView(host, ctx, opts) {
+    opts = opts || {}
+    let S = { exam: null, filter: 'all', kw: '', sel: {}, undo: [] }
+    let gidSeq = 0   /* 删除批次号：撤销以「批」为单位，不是以「条」为单位 */
     let box = document.createElement('div')
     box.className = 'px-view'
     box.innerHTML = '<div class="px-tools">'
@@ -1285,29 +1355,142 @@
       }).join('') + '</div>'
       + '<input class="px-search" data-kw="1" placeholder="搜题干 / 考点 / 图形">'
       + '<span class="px-count" data-count="1"></span>'
-      + '</div><div data-list="1"></div>'
+      + '</div>'
+      /* 整理条：勾选 → 批量删除；删错了能撤销。空选时只留「全选」，
+       * 有选时才出现删除按钮 —— 不给一堆永远点不动的按钮。 */
+      + '<div class="px-editbar" data-editbar="1">'
+      + '<label class="px-pickall"><input type="checkbox" data-pickall="1">全选本页</label>'
+      + '<button class="px-mini" data-act="delSel" disabled>删除所选 <b data-seln="1">0</b></button>'
+      + '<button class="px-mini" data-act="undo" disabled>撤销删除</button>'
+      + '<button class="px-mini" data-act="renum" title="按当前顺序重排题号 1..N">重新编号</button>'
+      + '<span class="px-edit-tip" data-edittip="1">勾选题目可批量删除；删掉的能撤销</span>'
+      + '</div>'
+      + '<div data-list="1"></div>'
     host.innerHTML = ''
     host.appendChild(box)
     let listEl = box.querySelector('[data-list]')
+    let pickAllEl = box.querySelector('[data-pickall]')
+    let delSelEl = box.querySelector('[data-act="delSel"]')
+    let undoEl = box.querySelector('[data-act="undo"]')
+    let selNEl = box.querySelector('[data-seln]')
+    let tipEl = box.querySelector('[data-edittip]')
 
+    function qs() { return (S.exam && S.exam.questions) || [] }
     function shown() {
-      let qs = (S.exam && S.exam.questions) || []
       let kw = String(S.kw || '').trim().toLowerCase()
       let out = []
-      qs.forEach(function (q, i) { if (qtPass(q, S.filter, kw)) out.push({ q: q, i: i }) })
+      qs().forEach(function (q, i) { if (qtPass(q, S.filter, kw)) out.push({ q: q, i: i }) })
       return out
+    }
+    function selIdxs() {
+      let out = []
+      qs().forEach(function (q, i) { if (S.sel[i]) out.push(i) })
+      return out
+    }
+    function syncBar() {
+      let items = shown()
+      let n = selIdxs().length
+      selNEl.textContent = String(n)
+      delSelEl.disabled = n === 0
+      undoEl.disabled = S.undo.length === 0
+      let pageAll = items.length > 0 && items.every(function (it) { return !!S.sel[it.i] })
+      pickAllEl.checked = pageAll
+      if (S.undo.length) {
+        let last = lastBatch()
+        let lastQ = last[0] && last[0].q
+        tipEl.textContent = '刚删了 ' + last.length + ' 题（最近一题：第 ' + ((lastQ && lastQ.no) || '?') + ' 题）—— 可撤销'
+        tipEl.classList.add('warn')
+      } else {
+        tipEl.textContent = '勾选题目可批量删除；删掉的能撤销'
+        tipEl.classList.remove('warn')
+      }
     }
     function paint() {
       let items = shown()
-      let total = (S.exam && S.exam.questions || []).length
+      let total = qs().length
       box.querySelector('[data-count]').textContent = items.length === total
         ? ('共 ' + total + ' 题') : ('筛出 ' + items.length + ' / ' + total + ' 题')
       if (!items.length) {
-        listEl.innerHTML = '<div class="px-empty">这个筛选下没有题目 —— 换一个条件看看</div>'
+        listEl.innerHTML = total
+          ? '<div class="px-empty">这个筛选下没有题目 —— 换一个条件看看</div>'
+          : '<div class="px-empty"><b>这一卷已经没有题目了</b>可以撤销删除，或者重新提取一份</div>'
+        syncBar()
         return
       }
-      listEl.innerHTML = items.map(function (it) { return qCardHtml(it.q, it.i) }).join('')
+      listEl.innerHTML = items.map(function (it) { return qCardHtml(it.q, it.i, !!S.sel[it.i]) }).join('')
+      syncBar()
     }
+    /** 任何改动都走这里：改数据 → 重画 → 通知宿主（卷库要回写，结果卡要刷新统计） */
+    function commit() {
+      paint()
+      if (typeof opts.onChange === 'function') {
+        try { opts.onChange(S.exam) } catch (e) { }
+      }
+    }
+    function dropIdx(list) {
+      let arr = qs()
+      let pick = list.slice().sort(function (a, b) { return a - b })
+      let bin = []
+      pick.forEach(function (i) {
+        if (i >= 0 && i < arr.length) { bin.push({ at: i, q: arr[i] }); arr[i] = null }
+      })
+      S.exam.questions = arr.filter(function (x) { return !!x })
+      /* 撤销按「原下标升序」记录；同一批（含单删）共用一个 gid，
+       * 因为撤销必须一次把整批还回来 —— 否则「全选删 3 条」要点三次，
+       * 且逐条插回时下标会互相踩，用户看到的是题序乱了（真机抓到过）。 */
+      bin.sort(function (a, b) { return a.at - b.at })
+      let gid = ++gidSeq
+      bin.forEach(function (b) { S.undo.push({ at: b.at, q: b.q, gid: gid }) })
+      S.sel = {}
+      if (S.exam.meta && S.exam.meta.images != null) {
+        S.exam.meta.images = S.exam.questions.filter(function (q) { return !!q.diagramImg }).length
+      }
+      return bin.length
+    }
+    /** 最近一批删掉的条目（单删时就是一条） */
+    function lastBatch() {
+      if (!S.undo.length) return []
+      let gid = S.undo[S.undo.length - 1].gid
+      let out = []
+      for (let i = S.undo.length - 1; i >= 0 && S.undo[i].gid === gid; i--) out.push(S.undo[i])
+      return out
+    }
+    function undoLast() {
+      let group = lastBatch()
+      if (!group.length) return 0
+      S.undo.length = S.undo.length - group.length
+      /* 批内按原下标**升序**插回：先落前面的位置，后面那些下标才对得上 */
+      group.sort(function (a, b) { return a.at - b.at })
+      let arr = qs()
+      group.forEach(function (b) {
+        let at = Math.min(b.at, arr.length)
+        arr.splice(at, 0, b.q)
+      })
+      S.exam.questions = arr
+      if (S.exam.meta && S.exam.meta.images != null) {
+        S.exam.meta.images = arr.filter(function (q) { return !!q.diagramImg }).length
+      }
+      return group.length
+    }
+
+    box.addEventListener('change', function (e) {
+      let t = e.target
+      if (t && t.hasAttribute && t.hasAttribute('data-pickall')) {
+        let items = shown()
+        if (t.checked) items.forEach(function (it) { S.sel[it.i] = 1 })
+        else S.sel = {}
+        paint()
+        return
+      }
+      if (t && t.hasAttribute && t.hasAttribute('data-pick')) {
+        let i = +t.getAttribute('data-pick')
+        if (t.checked) S.sel[i] = 1; else delete S.sel[i]
+        /* 只切 class 不整块重画：重画会让点击/焦点丢失，连续勾选很难受 */
+        let card = t.closest && t.closest('.px-q')
+        if (card) card.classList.toggle('picked', !!t.checked)
+        syncBar()
+      }
+    })
     box.addEventListener('click', function (e) {
       let t = e.target
       let seg = t.closest && t.closest('.px-seg button')
@@ -1315,6 +1498,7 @@
         box.querySelectorAll('.px-seg button').forEach(function (b) { b.classList.remove('on') })
         seg.classList.add('on')
         S.filter = seg.getAttribute('data-f')
+        S.sel = {}
         paint()
         return
       }
@@ -1331,10 +1515,57 @@
       }
       let cp = t.closest && t.closest('[data-copy]')
       if (cp) {
-        let q = (S.exam.questions || [])[+cp.getAttribute('data-copy')]
+        let q = qs()[+cp.getAttribute('data-copy')]
         if (q) copyText(ctx, JSON.stringify(q, null, 2), '本题 JSON 已复制')
+        return
+      }
+      let del = t.closest && t.closest('[data-del]')
+      if (del) {
+        let i = +del.getAttribute('data-del')
+        let q = qs()[i]
+        if (!q) return
+        let n = dropIdx([i])
+        commit()
+        ctx.Toast.show('已删除第 ' + (q.no || i + 1) + ' 题' + (n ? '（可撤销）' : ''), 'success', 2000)
+        return
+      }
+      let up = t.closest && t.closest('[data-up]')
+      if (up) {
+        let i = +up.getAttribute('data-up')
+        if (i > 0) { swap(i, i - 1); commit() }
+        return
+      }
+      let dn = t.closest && t.closest('[data-down]')
+      if (dn) {
+        let i = +dn.getAttribute('data-down')
+        if (i < qs().length - 1) { swap(i, i + 1); commit() }
+        return
+      }
+      let act = t.closest && t.closest('[data-act]')
+      if (act) {
+        let k = act.getAttribute('data-act')
+        if (k === 'delSel') {
+          let pick = selIdxs()
+          if (!pick.length) return
+          dropIdx(pick)
+          commit()
+          ctx.Toast.show('已删除 ' + pick.length + ' 题（可撤销）', 'success', 2200)
+        } else if (k === 'undo') {
+          let n = undoLast()
+          commit()
+          if (n) ctx.Toast.show('已撤销：' + n + ' 题回来了', 'success', 1800)
+        } else if (k === 'renum') {
+          qs().forEach(function (q, i) { q.no = i + 1 })
+          commit()
+          ctx.Toast.show('题号已按当前顺序重排', 'success', 1800)
+        }
       }
     })
+    function swap(a, b) {
+      let arr = qs()
+      let tmp = arr[a]; arr[a] = arr[b]; arr[b] = tmp
+      S.exam.questions = arr
+    }
     box.addEventListener('input', function (e) {
       if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-kw')) {
         S.kw = e.target.value
@@ -1342,8 +1573,13 @@
       }
     })
     return {
-      set: function (exam) { S.exam = exam; S.filter = 'all'; S.kw = ''; paint() },
-      clear: function () { S.exam = null; box.querySelector('[data-list]').innerHTML = '' }
+      set: function (exam) {
+        S.exam = exam; S.filter = 'all'; S.kw = ''; S.sel = {}; S.undo = []
+        let f = box.querySelector('.px-seg button[data-f="all"]')
+        if (f) { box.querySelectorAll('.px-seg button').forEach(function (b) { b.classList.remove('on') }); f.classList.add('on') }
+        paint()
+      },
+      clear: function () { S.exam = null; listEl.innerHTML = '' }
     }
   }
 
@@ -1496,8 +1732,11 @@
     '.px-chip b{color:var(--px-ink);font-size:13px;margin:0 2px}',
     /* 筛选 */
     '.px-tools{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:12px}',
-    '.px-seg{display:inline-flex;background:var(--px-soft);border:1px solid var(--px-line);border-radius:11px;padding:3px;gap:2px}',
-    '.px-seg button{border:0;background:none;font:600 12px/1 inherit;padding:7px 12px;border-radius:8px;cursor:pointer;color:var(--px-sub);font-family:inherit}',
+    '.px-seg{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none;background:var(--px-soft);border:1px solid var(--px-line);border-radius:11px;padding:3px;gap:2px}',
+    '.px-seg::-webkit-scrollbar{display:none}',
+    /* 窄屏不换行、不压缩：flex 默认会把按钮压到比文字还窄，「低置信」当场被挤成竖排单字。
+     * 挤压时改为横向滚动 —— 一排选项始终读得出来。 */
+    '.px-seg button{border:0;background:none;font:600 12px/1 inherit;padding:7px 12px;border-radius:8px;cursor:pointer;color:var(--px-sub);font-family:inherit;flex:none;white-space:nowrap}',
     '.px-seg button.on{background:var(--px-bg);color:var(--px-ink);box-shadow:0 1px 4px rgba(16,30,60,.12)}',
     '.px-search{width:220px;max-width:46vw}',
     '.px-count{font-size:12px;color:var(--px-sub);margin-left:auto}',
@@ -1525,6 +1764,23 @@
     '.px-q-ft{margin-top:8px}',
     '.px-mini{border:1px solid var(--px-line);background:none;border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer;color:var(--px-sub);font-family:inherit}',
     '.px-mini:hover{border-color:var(--px-acc);color:var(--px-acc)}',
+    '.px-mini.danger:hover{border-color:var(--danger,#dc2626);color:var(--danger,#dc2626)}',
+    '.px-mini:disabled{opacity:.42;cursor:not-allowed}',
+    '.px-mini:disabled:hover{border-color:var(--px-line);color:var(--px-sub)}',
+    /* 整理条：勾选/批量删/撤销/重编号 */
+    '.px-editbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:11px;padding:9px 11px;border:1px dashed var(--px-line);border-radius:11px;background:var(--px-soft)}',
+    '.px-pickall{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--px-sub);cursor:pointer;user-select:none}',
+    '.px-pickall input,.px-pick input{width:15px;height:15px;cursor:pointer;accent-color:var(--px-acc,#2563eb);margin:0}',
+    '.px-edit-tip{font-size:11.5px;color:var(--px-sub);margin-left:auto}',
+    '.px-edit-tip.warn{color:#92400e;font-weight:600}',
+    /* 窄屏：分段器收窄内距；整理条改成「全选独占一行 → 三个动作等分一行 → 提示独占一行」，
+     * 否则按钮东一个西一个地换行，看着像布局坏了。 */
+    '@media (max-width:560px){.px-seg button{padding:7px 9px;font-size:11.5px}.px-edit-tip{margin-left:0;flex-basis:100%}'
+      + '.px-editbar .px-pickall{flex-basis:100%}.px-editbar .px-mini{flex:1 1 0;min-width:0;text-align:center}}',
+    '.px-q.picked{border-color:var(--px-acc);box-shadow:0 0 0 2px rgba(37,99,235,.14)}',
+    /* 勾选框放在题头行里（不做绝对定位的角标）：首屏就能点，也不会盖住配图内容 */
+    '.px-pick{display:inline-flex;align-items:center;padding:1px 3px;border-radius:7px;cursor:pointer}',
+    '.px-pick:hover{background:var(--px-soft)}',
     /* 卷库 */
     '.px-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px}',
     '.px-stat{border:1px solid var(--px-line);border-radius:13px;padding:12px 14px;background:var(--px-bg)}',
@@ -1543,6 +1799,20 @@
     '.px-note{font-size:12px;color:var(--px-sub);line-height:1.8;margin-top:8px}',
     '.px-note code{background:var(--px-soft);border:1px solid var(--px-line);border-radius:5px;padding:1px 5px;font-family:var(--font-mono,monospace)}',
     '.px-warnbox{border-radius:11px;padding:9px 12px;font-size:12.5px;line-height:1.7;margin:10px 0;background:rgba(217,119,6,.08);border:1px solid rgba(217,119,6,.25);color:#92400e}',
+    /* 剔除清单（非题目文字） */
+    '.px-parked{margin:10px 0;border:1px solid var(--px-line);border-radius:11px;background:var(--px-soft);padding:9px 12px}',
+    '.px-parked>summary{cursor:pointer;font-size:12.5px;color:var(--px-sub);font-weight:600}',
+    '.px-parked>summary b{color:var(--px-ink)}',
+    '.px-parked-list{margin-top:9px;display:flex;flex-direction:column;gap:6px;max-height:210px;overflow:auto}',
+    /* 【真机踩到的坑】`.px-parked-list` 写了 display:flex，就把浏览器对
+     * `details:not([open]) > *` 的 display:none 顶掉了 —— 收起时清单照样占 100px。
+     * 折叠面板里的内容只要自带 display，就必须自己补一条「收起时隐藏」。 */
+    '.px-parked:not([open])>.px-parked-list{display:none}',
+    '.px-parked-row{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;font-size:11.5px;padding:5px 8px;border-radius:8px;background:var(--px-bg);border:1px solid var(--px-line)}',
+    '.px-parked-why{color:#9a2f1b;font-weight:700;white-space:nowrap}',
+    '.px-parked-no{color:var(--px-sub);white-space:nowrap}',
+    '.px-parked-t{color:var(--text-secondary,#41536e);word-break:break-all}',
+    '.px-parked-t.muted{font-style:italic;opacity:.75}',
     /* 灯箱 */
     '.px-lb{position:fixed;inset:0;background:rgba(8,14,26,.86);display:none;place-items:center;z-index:99999;padding:24px;backdrop-filter:blur(2px)}',
     '.px-lb.on{display:grid}',
@@ -1631,7 +1901,14 @@
     let $ = function (sel) { return el.querySelector(sel) }
     let logEl = $('[data-log]'), barEl = $('[data-bar]'), msgEl = $('[data-msg]')
     bindLb(el)
-    let view = mountQView($('[data-view]'), ctx)
+    /* 删除/整理会改 exam.questions —— 结果卡的统计 chips 必须跟着变，
+     * 否则「删了三题」但头上还写着 9 题，用户会以为没删掉。 */
+    let view = mountQView($('[data-view]'), ctx, {
+      onChange: function (exam) {
+        try { paintSummary(exam) } catch (e) { }
+        try { if (state.result === exam) state.result = exam } catch (e2) { }
+      }
+    })
 
     $('[data-subj]').value = cfg.subject
     $('[data-mode]').value = cfg.imageMode
@@ -1848,14 +2125,17 @@
       } catch (e) { /* 通知失败不影响结果落盘 */ }
     }
 
-    function renderResult(exam, opts) {
-      let scroll = !opts || opts.scroll !== false
-      let figs = exam.questions.filter(function (q) { return q.diagramImg }).length
-      let low = exam.questions.filter(function (q) { return q.lowConfidence }).length
-      let noans = exam.questions.filter(function (q) { return q.noAnswer }).length
+    /* 只重画「头上的统计 + 提示」，不动下面那份题目视图 ——
+     * 用户在题目视图里删题时，视图自己是主，不能再被 set() 重挂（会丢滚动位置）。 */
+    function paintSummary(exam) {
+      recalcExamMeta(exam)
+      let qs = exam.questions || []
+      let figs = qs.filter(function (q) { return q.diagramImg }).length
+      let low = qs.filter(function (q) { return q.lowConfidence }).length
+      let noans = qs.filter(function (q) { return q.noAnswer }).length
       $('[data-rtitle]').textContent = '✅ ' + exam.title
       $('[data-chips]').innerHTML =
-        '<span class="px-chip"><b>' + exam.questions.length + '</b>题</span>'
+        '<span class="px-chip"><b>' + qs.length + '</b>题</span>'
         + '<span class="px-chip">带图 <b>' + figs + '</b></span>'
         + '<span class="px-chip">低置信 <b>' + low + '</b></span>'
         + '<span class="px-chip">无答案 <b>' + noans + '</b></span>'
@@ -1866,8 +2146,30 @@
       if (low) warns.push('有 ' + low + ' 道题被判为低置信（扫描页/题干截断/选项缺失）—— 建议逐题核对，图已经替你裁好了。')
       if (noans) warns.push('有 ' + noans + ' 道题卷面没给答案：做题时判分只能靠 AI 或你自评，不是数据丢失。')
       if (figs) warns.push('带图题已裁成图片附在题后：做题时点图可放大，问教练也会随消息带上这张图。')
-      $('[data-warns]').innerHTML = warns.length
-        ? '<div class="px-warnbox">' + warns.map(esc).join('<br>') + '</div>' : ''
+      /* 【第 26 期】剔除清单：不说清楚「为什么少了三题」，用户只会以为提取失败。
+       * 只列摘要（题号/页码/原因/前 40 字），不把图塞回来（体积）。 */
+      let parked = (exam.meta && exam.meta.parked) || []
+      let parkedHtml = ''
+      if (parked.length) {
+        parkedHtml = '<details class="px-parked"><summary>已自动剔除 <b>' + parked.length + '</b> 条非题目文字'
+          + '（卷头/页眉/空块）—— 点开看看剔得对不对</summary><div class="px-parked-list">'
+          + parked.map(function (p) {
+            return '<div class="px-parked-row"><span class="px-parked-why">' + esc(p.why) + '</span>'
+              + '<span class="px-parked-no">' + (p.no != null ? '第 ' + p.no + ' 题' : '无题号')
+              + (p.pages && p.pages.length ? ' · P' + p.pages.join('、') : '') + '</span>'
+              + (p.stem ? '<span class="px-parked-t">' + esc(p.stem) + '</span>' : '<span class="px-parked-t muted">（图上没有可识别文字）</span>')
+              + '</div>'
+          }).join('')
+          + '</div><div class="px-note">判据：有题干的先看文字（学校名/考试名/科目名称/注意事项等一律不算题），'
+          + '没题干的看版面几何（又矮又宽的页眉横条不算题）。要是误删了真题，去卷库里回看并手动补回。</div></details>'
+      }
+      $('[data-warns]').innerHTML = (warns.length
+        ? '<div class="px-warnbox">' + warns.map(esc).join('<br>') + '</div>' : '') + parkedHtml
+    }
+
+    function renderResult(exam, opts) {
+      let scroll = !opts || opts.scroll !== false
+      paintSummary(exam)
       $('[data-result]').style.display = ''
       view.set(exam)
       /* 参数块挪到主操作下面之后，结果卡离首屏更远了 —— 提取完成后自己滚过去，
@@ -1981,6 +2283,20 @@
         + '<div class="px-stat"><b>' + fmtSize(chars) + '</b><span>占用空间</span></div>'
     }
 
+    /* 卷卡副行（题数/配图/科目/时间/耗时…）：单独抽出来，
+     * 因为「删题之后这张卡也得跟着变」—— 但它不能靠重画整列实现（会把刚挂上的题目视图卸载）。 */
+    function libMetaHtml(e) {
+      let qs = e.questions || []
+      let low = qs.filter(function (q) { return q.lowConfidence }).length
+      return '<span>' + (qs.length) + ' 题</span>'
+        + '<span>' + examFigures(e) + ' 张图</span>'
+        + '<span>' + subjLabel(e.subject) + '</span>'
+        + '<span>' + fmtWhen(e.generatedAt) + '</span>'
+        + (e.meta && e.meta.elapsedSec ? '<span>耗时 ' + e.meta.elapsedSec + 's</span>' : '')
+        + (low ? '<span style="color:var(--warn,#d97706)">低置信 ' + low + '</span>' : '')
+        + (e.meta && e.meta.imgDropped ? '<span style="color:var(--danger,#dc2626)">配图已清理</span>' : '')
+    }
+
     function paint() {
       let arr = list()
       el.querySelector('[data-stats]').innerHTML = statsHtml()
@@ -1989,19 +2305,10 @@
         return
       }
       listEl.innerHTML = arr.map(function (e) {
-        let qs = e.questions || []
-        let low = qs.filter(function (q) { return q.lowConfidence }).length
-        let meta = '<span>' + (qs.length) + ' 题</span>'
-          + '<span>' + examFigures(e) + ' 张图</span>'
-          + '<span>' + subjLabel(e.subject) + '</span>'
-          + '<span>' + fmtWhen(e.generatedAt) + '</span>'
-          + (e.meta && e.meta.elapsedSec ? '<span>耗时 ' + e.meta.elapsedSec + 's</span>' : '')
-          + (low ? '<span style="color:var(--warn,#d97706)">低置信 ' + low + '</span>' : '')
-          + (e.meta && e.meta.imgDropped ? '<span style="color:var(--danger,#dc2626)">配图已清理</span>' : '')
         return '<div class="px-lib" data-id="' + esc(e.id) + '">'
           + '<div class="px-lib-hd"><div style="flex:1;min-width:180px">'
           + '<div class="px-lib-t">' + esc(e.title || '未命名卷') + '</div>'
-          + '<div class="px-lib-m">' + meta + '</div></div>'
+          + '<div class="px-lib-m">' + libMetaHtml(e) + '</div></div>'
           + '<div class="px-lib-act">'
           + '<button class="px-btn sm" data-act="view">' + (S.openId === e.id ? '收起' : '查看') + '</button>'
           + '<button class="px-btn sm" data-act="import">送题卷</button>'
@@ -2015,7 +2322,31 @@
         let cur = arr.filter(function (e) { return e.id === S.openId })[0]
         let body = listEl.querySelector('.px-lib-body')
         if (cur && body) {
-          let v = mountQView(body, ctx)
+          /* 卷库里也允许删题/整理：改完立刻回写卷库（bankSave 是唯一写入口，
+           * 体积闸/淘汰也在它里面），再重绘一次让统计跟上。 */
+          let v = mountQView(body, ctx, {
+            onChange: function (exam) {
+              try { bankSave(ctx, exam) } catch (e) { }
+              try {
+                let st = el.querySelector('[data-stats]')
+                if (st) st.innerHTML = statsHtml()
+              } catch (e2) { }
+              /* 卷卡头也得分秒跟着变：旧版只重画了顶部统计，卡片上还写着「（7 题）」，
+               * 用户当场就会怀疑"到底删没删掉"。这里只改这一卡的标题与副行 ——
+               * 重画整列会把刚挂上的题目视图卸载（滚动位置、勾选态全丢）。 */
+              try {
+                let rows = listEl.querySelectorAll('.px-lib')
+                for (let i = 0; i < rows.length; i++) {
+                  if (rows[i].getAttribute('data-id') !== exam.id) continue
+                  let t = rows[i].querySelector('.px-lib-t')
+                  if (t) t.textContent = exam.title || '未命名卷'
+                  let m = rows[i].querySelector('.px-lib-m')
+                  if (m) m.innerHTML = libMetaHtml(exam)
+                  break
+                }
+              } catch (e3) { }
+            }
+          })
           v.set(cur)
         }
       }
@@ -2224,8 +2555,16 @@
       buildTextBlocks: buildTextBlocks,
       isNoise: isNoise,
       stripNoise: stripNoise,
+      looksLikeHeaderText: looksLikeHeaderText,
+      blankBlockIsHeader: blankBlockIsHeader,
+      dropNonQuestions: dropNonQuestions,
       looksTruncated: looksTruncated,
       normQuestion: normQuestion,
+      /* 【第 26 期】成果整理：删题视图与统计重算也都是纯入口，
+       * 「删了题统计得跟着变」「撤销要回原位」这类承诺只能在 DOM 上验，所以一并挂出来。 */
+      mountQView: mountQView,
+      recalcExamMeta: recalcExamMeta,
+      isSuspectQuestion: isSuspectQuestion,
       setExtraNoise: setExtraNoise,
       hitExtraNoise: hitExtraNoise,
       bankGet: bankGet,
