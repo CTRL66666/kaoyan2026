@@ -44,7 +44,9 @@
 ;(function () {
   'use strict'
 
-  let VERSION = '1.1'
+  /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
+   * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
+  let VERSION = '1.2'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -770,7 +772,13 @@
         let due = dueList(S.points, todayKey())
         p = due[0] || S.points[0] || null
       }
-      if (!p) { S.selId = ''; go('train'); return }
+      /* 【2026-10-23 空库点「开始复述」】原先是 `S.selId=''; go('train'); return` —— 静默退回。
+       * 真机上就是"点了没反应"。空库时最该给的是**去哪儿建第一个知识点**，不是空白。 */
+      if (!p) {
+        S.selId = ''; go('train')
+        toast(ctx, '还没有知识点 —— 先点「新建知识点」建一个，复述一次它就会亮起来', 'warn', 3200)
+        return
+      }
       S.selId = p.id
       S.run = {
         pid: p.id,
@@ -1089,8 +1097,10 @@
     } catch (e) { /* 忽略 */ }
     return ''
   }
-  function toast(ctx, msg, type) {
-    try { ctx.Toast.show(msg, type || 'info', 2000) } catch (e) { /* 忽略 */ }
+  /* ms 默认 2000（短提示够用）；长文案/带"下一步怎么做"的提示由调用方显式给更长的时长 ——
+   * 2000ms 读不完一句 25 字的话，等于没提示。 */
+  function toast(ctx, msg, type, ms) {
+    try { ctx.Toast.show(msg, type || 'info', ms || 2000) } catch (e) { /* 忽略 */ }
   }
   /* 品牌字形：晶体五边形轮廓 + 内部辐条。
    * 抽成常量是为了**页眉徽标与模块图标共用一份 d** —— 分开抄两份，改一处忘另一处，
@@ -2357,6 +2367,12 @@
     '.fx-subjbar{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--fx-line);padding-bottom:10px}',
     '.fx-schip{height:22px;padding:0;border:0;border-bottom:1px solid transparent;border-radius:0;background:none;font-size:12px;color:var(--fx-sub);cursor:pointer;transition:color .16s,border-color .16s}',
     '.fx-schip:hover{color:var(--fx-ink)}',
+    /* 【2026-10-23 触控命中区】`.fx-btn.sm` 24px / `.fx-schip` 22px 的命中框在手机上按不准
+     * ——真机实测 72×24 / 24×22。不直接加高的理由：这两类是「线压字」风格，高度一动下划线
+     * 就离字更远、整行行高也跟着变。改用透明伪元素外扩命中区（绝对定位不参与布局）：
+     * 视觉零变化，可点范围 36~38px。 */
+    '.fx-btn.sm,.fx-schip{position:relative}',
+    '.fx-btn.sm::after,.fx-schip::after{content:"";position:absolute;left:-4px;right:-4px;top:-7px;bottom:-7px}',
     '.fx-schip.on{color:var(--c,var(--fx-acc));border-bottom-color:currentColor;font-weight:700}',
     '.fx-crystal-wrap{border-top:1px solid var(--fx-line);border-bottom:1px solid var(--fx-line);background:linear-gradient(180deg,color-mix(in srgb,var(--fx-acc) 4%,transparent),transparent 70%);padding:6px 0}',
     '.fx-crystal{width:100%;height:auto;display:block}',

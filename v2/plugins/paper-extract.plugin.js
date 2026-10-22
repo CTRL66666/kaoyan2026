@@ -49,7 +49,9 @@
 ;(function () {
   'use strict'
 
-  let VERSION = '1.5.0'
+  /* 【2026-10-23】1.5.1：灯箱关闭键从字符 `✕` 换宿主线性图标（字形跨平台不稳）。
+   * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
+  let VERSION = '1.5.1'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
@@ -1691,8 +1693,12 @@
   /* ---------------- 灯箱（可左右翻，Esc 关） ---------------- */
   let LB = { list: [], at: 0, root: null }
   function lbHtml() {
+    /* 【2026-10-23 字符转图标】关闭键原来是字符 `✕`（U+2715）：字形随系统字体走动，
+     * 在白色圆钮里粗细/大小都不受控。改走宿主线性图标 `cpClose`；宿主图标层缺席时
+     * 仍落回 `×`（乘法号，比 ✕ 稳），绝不留空按钮。 */
+    let closeIc = I('cpClose') || '×'
     return '<div class="px-lb" data-lb-root="1">'
-      + '<button class="px-lb-x" data-lb="close" aria-label="关闭">✕</button>'
+      + '<button class="px-lb-x" data-lb="close" aria-label="关闭" title="关闭（Esc）">' + closeIc + '</button>'
       + '<button class="px-lb-nav prev" data-lb="prev" aria-label="上一张">‹</button>'
       + '<img data-lb-img="1" alt="题图">'
       + '<button class="px-lb-nav next" data-lb="next" aria-label="下一张">›</button>'
@@ -1945,7 +1951,8 @@
     '.px-lb.on{display:grid}',
     '.px-lb img{max-width:94vw;max-height:86vh;background:#fff;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.45)}',
     '.px-lb-cap{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);color:#e6eefc;font-size:12.5px;background:rgba(13,21,36,.7);padding:5px 13px;border-radius:999px}',
-    '.px-lb-x{position:absolute;top:16px;right:18px;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:17px;cursor:pointer}',
+    '.px-lb-x{position:absolute;top:16px;right:18px;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:17px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}',
+    '.px-lb-x svg{width:17px;height:17px;display:block}',
     '.px-lb-x:hover{background:rgba(255,255,255,.26)}',
     '.px-lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;border:0;border-radius:12px;background:rgba(255,255,255,.12);color:#fff;font-size:28px;line-height:1;cursor:pointer}',
     '.px-lb-nav:hover{background:rgba(255,255,255,.24)}',

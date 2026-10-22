@@ -35,7 +35,10 @@
 ;(function () {
   'use strict'
 
-  let VERSION = '1.1'
+  /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
+   * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
+   * 不涨版本市场不会提示更新，修了也发不出去。 */
+  let VERSION = '1.2'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -656,6 +659,26 @@
   /* 品牌字形：「点」字的笔画。抽成常量是为了**页眉印章与模块图标共用一份 d**
    * —— 两处各抄一份的话，改一处忘另一处，两枚标就会慢慢画歪。 */
   let MARK_CHAR = 'M14 17h16M22 12v9M15 26c2.4 3 5 4.4 7 4.4s4.6-1.4 7-4.4M13 33h18'
+  /* 【2026-10-23 判定按钮去字符】原来三个按钮用字符画 `✓` `~` `✗`：`✓`/`✗` 是装饰符号（U+2713/2717），
+   * 字形随系统字体走动 —— 安卓上偏粗、Windows 上偏细、基线还各自不同，三个按钮并排时高矮不齐。
+   * 改成三枚同规格线性 SVG（24 格、currentColor、圆头），颜色仍由 `.sf-pmark` 的 CSS 管。
+   * 「沾边」在站内图标表里没有对应键（只有 cpCheck/cpCross），所以这组**自带**，
+   * 不混用「宿主 SVG + ASCII `~`」那种半吊子写法。 */
+  let MARK_PATHS = {
+    hit: 'M4.5 12.6l4.8 4.8L19.5 7.2',
+    miss: 'M6.6 6.6l10.8 10.8M17.4 6.6L6.6 17.4',
+    /* 半满圆：**右半填实**，半径比外圈小 2 格 —— 两个半径贴近时（先前的 7.5 / 8.5）
+     * 13px 缩放下填色和外圈会糊成一个黑饼，看不出"一半"。 */
+    half: 'M12 5.6a6.4 6.4 0 0 1 0 12.8z'
+  }
+  function markSvg(mode) {
+    let p = MARK_PATHS[mode] || MARK_PATHS.miss
+    /* 只有「沾边」画外圈：半满圆要有个容器才读得出"一半"；✓/✗ 加上圈在小尺寸下会糊成一团。 */
+    let ring = mode === 'half' ? '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.5"/>' : ''
+    return '<svg viewBox="0 0 24 24" aria-hidden="true">' + ring
+      + '<path d="' + p + '" fill="' + (mode === 'half' ? 'currentColor' : 'none') + '" stroke="currentColor"'
+      + ' stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+  }
   function sealSvg() {
     /* 朱砂印章：方形印面 + 内框 + 中间"点"字，呼应"采分点" */
     return '<svg viewBox="0 0 44 44" aria-hidden="true">'
@@ -833,7 +856,14 @@
         let due = dueList(S.qs, todayKey())
         target = due[0] || S.qs[0] || null
       }
-      if (!target) { S.view = 'forge'; paint(); return }
+      /* 【2026-10-23 空库点「开始练」】原先是 `S.view='forge'; paint(); return` —— 一声不响。
+       * 真机上表现成"点了没反应"（探针也是这么报的）：用户在题库空的时候最想练，
+       * 却拿不到任何回执。给一句话告诉他**下一步点哪儿**，别只报"没有题"。 */
+      if (!target) {
+        S.view = 'forge'; paint()
+        toast(ctx, '题库还是空的 —— 先「从错题本导入」或点「+ 新建题」放一道进来', 'warn', 3200)
+        return
+      }
       S.selId = target.id
       S.run = {
         qid: target.id, phase: 'answer', busy: false,
@@ -1229,9 +1259,9 @@
           + '<div class="sf-pmain"><b>' + esc(pt.text) + '</b>'
           + '<span>' + pt.weight + ' 分' + (why ? ' · ' + esc(why) : '') + '</span></div>'
           + '<div class="sf-pmarks">'
-          + '<button class="sf-pmark' + (state === 'hit' ? ' on' : '') + '" data-act="mark" data-id="' + esc(pt.id) + '" data-mode="hit" title="踩到">✓</button>'
-          + '<button class="sf-pmark' + (state === 'half' ? ' on' : '') + '" data-act="mark" data-id="' + esc(pt.id) + '" data-mode="half" title="沾边">~</button>'
-          + '<button class="sf-pmark' + (state === 'miss' ? ' on' : '') + '" data-act="mark" data-id="' + esc(pt.id) + '" data-mode="miss" title="没踩">✗</button>'
+          + '<button class="sf-pmark' + (state === 'hit' ? ' on' : '') + '" data-act="mark" data-id="' + esc(pt.id) + '" data-mode="hit" title="踩到" aria-label="踩到">' + markSvg('hit') + '</button>'
+          + '<button class="sf-pmark' + (state === 'half' ? ' on' : '') + '" data-act="mark" data-id="' + esc(pt.id) + '" data-mode="half" title="沾边" aria-label="沾边">' + markSvg('half') + '</button>'
+          + '<button class="sf-pmark' + (state === 'miss' ? ' on' : '') + '" data-act="mark" data-id="' + esc(pt.id) + '" data-mode="miss" title="没踩" aria-label="没踩">' + markSvg('miss') + '</button>'
           + '</div></div>')
       }
       out.push('</div>')
@@ -1988,7 +2018,8 @@
     '.sf-pmain b{font-size:12.5px;font-weight:700;line-height:1.6}',
     '.sf-pmain span{font-size:10.5px;color:var(--sf-sub)}',
     '.sf-pmarks{display:flex;gap:4px;flex:0 0 auto}',
-    '.sf-pmark{width:28px;height:26px;border:1px solid var(--sf-line2);border-radius:0;background:none;color:var(--sf-sub);font-size:12px;cursor:pointer;transition:all .16s}',
+    '.sf-pmark{width:28px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--sf-line2);border-radius:0;background:none;color:var(--sf-sub);font-size:12px;cursor:pointer;transition:all .16s}',
+    '.sf-pmark svg{width:13px;height:13px;display:block}',
     '.sf-pmark:hover{border-color:var(--sf-acc);color:var(--sf-acc)}',
     '.sf-pmark.on{background:var(--sf-acc);border-color:var(--sf-acc);color:#fff}',
     '.sf-pmark[data-mode="half"].on{background:#b45309;border-color:#b45309}',
@@ -2032,6 +2063,12 @@
     '.sf-leakn{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--sf-sub);min-width:74px;text-align:right}',
     '.sf-subjbar{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--sf-line);padding-bottom:10px}',
     '.sf-schip{height:22px;padding:0;border:0;border-bottom:1px solid transparent;border-radius:0;background:none;font-size:12px;color:var(--sf-sub);cursor:pointer;transition:color .16s,border-color .16s}',
+    /* 【2026-10-23 触控命中区】文字风格的小按钮（`.sf-btn.sm` 24px、`.sf-schip` 22px）在手机上按不准
+     * —— 真机实测命中框就是 48×24 / 24×22，远低于 44px 的可点下限。但直接加高会挪动下划线与行高，
+     * 把「线压字」的排版改坏。改用**透明伪元素向外扩命中区**：绝对定位不参与布局，
+     * 视觉一字不动，手指能按到的范围变成 36~38px。 */
+    '.sf-btn.sm,.sf-schip{position:relative}',
+    '.sf-btn.sm::after,.sf-schip::after{content:"";position:absolute;left:-4px;right:-4px;top:-7px;bottom:-7px}',
     '.sf-schip:hover{color:var(--sf-ink)}',
     '.sf-schip.on{color:var(--c,var(--sf-acc));border-bottom-color:currentColor;font-weight:700}',
     '.sf-subjrow{display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid var(--sf-line)}',
