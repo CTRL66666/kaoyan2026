@@ -2372,7 +2372,7 @@
      * 就离字更远、整行行高也跟着变。改用透明伪元素外扩命中区（绝对定位不参与布局）：
      * 视觉零变化，可点范围 36~38px。 */
     '.fx-btn.sm,.fx-schip{position:relative}',
-    '.fx-btn.sm::after,.fx-schip::after{content:"";position:absolute;left:-4px;right:-4px;top:-7px;bottom:-7px}',
+    '.fx-btn.sm::after,.fx-schip::after{content:"";position:absolute;left:-2px;right:-2px;top:-7px;bottom:-7px}',
     '.fx-schip.on{color:var(--c,var(--fx-acc));border-bottom-color:currentColor;font-weight:700}',
     '.fx-crystal-wrap{border-top:1px solid var(--fx-line);border-bottom:1px solid var(--fx-line);background:linear-gradient(180deg,color-mix(in srgb,var(--fx-acc) 4%,transparent),transparent 70%);padding:6px 0}',
     '.fx-crystal{width:100%;height:auto;display:block}',

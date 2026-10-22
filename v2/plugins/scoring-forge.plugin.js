@@ -2068,7 +2068,7 @@
      * 把「线压字」的排版改坏。改用**透明伪元素向外扩命中区**：绝对定位不参与布局，
      * 视觉一字不动，手指能按到的范围变成 36~38px。 */
     '.sf-btn.sm,.sf-schip{position:relative}',
-    '.sf-btn.sm::after,.sf-schip::after{content:"";position:absolute;left:-4px;right:-4px;top:-7px;bottom:-7px}',
+    '.sf-btn.sm::after,.sf-schip::after{content:"";position:absolute;left:-2px;right:-2px;top:-7px;bottom:-7px}',
     '.sf-schip:hover{color:var(--sf-ink)}',
     '.sf-schip.on{color:var(--c,var(--sf-acc));border-bottom-color:currentColor;font-weight:700}',
     '.sf-subjrow{display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid var(--sf-line)}',
