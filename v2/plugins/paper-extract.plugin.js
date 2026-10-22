@@ -1,5 +1,5 @@
 /* ============================================================
- * paper-extract.plugin.js — 试卷提取（单文件插件）· v1.3
+ * paper-extract.plugin.js — 试卷提取（单文件插件）· v1.4
  * ------------------------------------------------------------
  * 设计边界（重要）：
  *   · 不引 pdf.js / 不接预览 / 不用 Python；PDF 解析全部走站点注入的 window.PdfKit。
@@ -9,6 +9,17 @@
  *       window.PaperKit = { parseJson(text) → {ok,papers,warnings,stats},
  *                           addDrafts(drafts) → {ids,skipped}, open(id,qi), brief(), remove(id) }
  *     （PaperKit 缺失时自动降级为"只导出 JSON，手动去题卷模块导入"，不假装能入库。）
+ *
+ * ── v1.4 做了什么（相对 1.3）────────────────────────────────
+ *   ① **三合一**：上一版把三个子页各注册成一条工具路由（/tool/paper-extract、
+ *      /tool/paper-extract-lib、/tool/paper-extract-setup）——工具抽屉里一个插件占三行，
+ *      而且这三个入口在抽屉/侧栏里长得像三个不相干的工具。现在只注册**一个**工具页，
+ *      三个子页改成页内切换；导航条吸顶（滚到卷库中段也能切子页）。
+ *      代价说清楚：子页不再各占一条 URL。补偿是 `ctx.data('sub')` 记住落点
+ *      （与费曼晶体同款做法）——切模块回来、甚至刷新后仍停在刚才那页。
+ *   ② 所有「去卷库 / 回提取台」的跳转收成**一个入口** jumpSub()：以前散在
+ *      导航、结果卡、通知卡三处各自 goTool(某条路由)，三合一后那三条路由没了，
+ *      漏改一处就是「点了弹 工具 xxx 不存在」——现在只有一条路可走，不会漏。
  *
  * ── v1.3 做了什么（相对 1.2.0）────────────────────────────────
  *   ① **不再把卷头当题目**：三段提示词各加一份「什么不算题目」负例清单（按类别点名，
@@ -38,8 +49,13 @@
 ;(function () {
   'use strict'
 
-  let VERSION = '1.3.0'
-  let AI_CTX = 'plugin.paper'
+  let VERSION = '1.5.0'
+  /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
+   * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
+   * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
+   * 用量全落进 `__none` 桶。现在改成三段，并在 init 里真注册。
+   * 场景名取 `parse`（一次 AI 调用 = 一页版面识别切题）。 */
+  let AI_CTX = 'plugin.paper-extract.parse'
   let MAX_PAGES_DEFAULT = 40
   let TEXT_MIN = 80
   let LOW_CONF_DEFAULT = 0.7
@@ -48,15 +64,45 @@
   let BANK_MAX = 8
   let BANK_CHAR_BUDGET = 2000000
 
+  /* ── 【v1.4 三合一】三个子页 id 仍然保留（导航/记忆/测试都靠它），
+   * 但它们**不再是三条工具路由** —— 只有 T_MAIN 注册成工具页，另两个是页内子页。
+   * 别被名字骗了：`T_LIB` 现在传给 goTool 是无效 id（会弹"工具不存在"），
+   * 要切子页一律走 jumpSub()。 */
   let T_MAIN = 'paper-extract'
   let T_LIB = 'paper-extract-lib'
   let T_SETUP = 'paper-extract-setup'
+  /* 子页落点记忆（与费曼晶体的 S.view 同款：写 ctx.data，刷新/切模块回来还在原页） */
+  let SUB_KEY = 'sub'
+  /* 挂载中的页内切换器；没挂载时是 null。jumpSub 靠它判断"能不能就地切"。 */
+  let SUB_GO = null
+  /* 还没挂载就要去某个子页（如通知卡点「回提取台」、卷库直达）→ 先记下，
+   * mountAll 起来时直接落在这一页，用户不会先看到提取台再"闪"一下跳走。 */
+  let SUB_PENDING = ''
 
   /* ---------------- 提示词（与本地 Python 版同义，按浏览器场景收敛） ---------------- */
   let Q_SCHEMA = '{"no":1,"stem":"题干","type":"choice|fill|solve|essay",'
     + '"options":["A. .."],"answer":"卷面答案","solution":"卷面解析","noAnswer":true,'
     + '"topicName":"考点","score":数字或null,"star":1-5,"sourcePages":[1],"confidence":0.95,'
     + '"hasFigure":false,"figureKind":"","figureDesc":""}'
+
+  /* ---------------- 品牌字形 / 品牌砖 ----------------
+   * 【2026-10-22】模块图标从「站内 fileText」换成**自己的一枚品牌砖**：四角取景框 + 卷面文字行，
+   * 语义是「把纸上的卷子取出来」（三合一：拍照/PDF/OCR 全都是"取"）。
+   * 字形只写一份 MARK_PATHS：页眉导航条与模块图标共用 —— 分开抄两份，改一处忘另一处就会画歪。
+   * 砖要自己画成一段 SVG：导航栏只吃一段 SVG 串（没有 CSS 可依附），底色与白描边都得写进 svg。
+   * 24 格 → 48 格：translate(9.6 9.6) scale(1.2) 缩进内边距；描边 2.4（22px 槽里约 1.3px，
+   * 与邻居线性图标同字重，细了会糊）。渐变 id 带插件前缀（pxMarkG）：多插件同名 id 会互相抢填充。 */
+  let MARK_PATHS = '<path d="M4 8.5V5a1 1 0 0 1 1-1h3.5"/>'
+    + '<path d="M15.5 4H19a1 1 0 0 1 1 1v3.5"/>'
+    + '<path d="M20 15.5V19a1 1 0 0 1-1 1h-3.5"/>'
+    + '<path d="M8.5 20H5a1 1 0 0 1-1-1v-3.5"/>'
+    + '<path d="M8.5 9.5h7M8.5 12.5h7M8.5 15.5h4"/>'
+  let MARK_TILE = '<svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">'
+    + '<defs><linearGradient id="pxMarkG" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#1D4ED8"/></linearGradient></defs>'
+    + '<rect width="48" height="48" rx="13" fill="url(#pxMarkG)"/>'
+    + '<g transform="translate(9.6 9.6) scale(1.2)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">'
+    + MARK_PATHS + '</g></svg>'
 
   /* 【2026-10-20 第 26 期】三段提示词统一补一条「什么不是题目」的负例清单。
    * 用户实测的坏结果：卷首的学校名、考试全称、「科目名称：……」这类卷头字段
@@ -116,6 +162,37 @@
   function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
+
+  /* ════════════════════════ 站内图标（2026-10-22 用户要求：摆脱原生 emoji） ════════════════════════
+   * 为什么不留 emoji：emoji 是**字体渲染**的，同一个字符在 Win/Android/iOS 上是三套画风，
+   * 尺寸、基线、颜色都不受控 —— 混在用线性 SVG 做的站内 UI 里就像贴纸；夜间主题下更明显
+   * （emoji 自带彩色，卡片暗下去它还是亮的）。
+   *
+   * 取值顺序（都是站内公开层，不碰 Store/AI/App 这些内部单例）：
+   *   ① ctx.U.icon(key) —— 与站内视觉逐像素一致、随主题换色、带 .ci 基线样式；
+   *   ② window.ICONS[key] —— globals 注册的同一张图标表。**必须有这一级**：
+   *      manifest 的 icon 在 register() 时就求值（比 init(ctx) 早），那时还没有 ctx；
+   *   ③ 都取不到 → 返回空串。调用方对「纯图标按钮」都要写 `I(k) || '文字'` 兜底，
+   *      否则图标缺了按钮会变成空白方块（点了没反馈的那种"坏按钮"）。
+   *
+   * 铁律：key 必须是 site icons.ts SPEC 里真实存在的语义名（传错静默得空串，不报错）。
+   * 本文件用到的每一个 key 都已对照 SPEC 核过。 */
+  let HOST_CTX = null
+  function I(key, cls) {
+    try {
+      if (HOST_CTX && HOST_CTX.U && typeof HOST_CTX.U.icon === 'function') {
+        let s = HOST_CTX.U.icon(key, cls)
+        if (s) return s
+      }
+    } catch (e) { /* 宿主图标层异常 → 走下一级 */ }
+    try {
+      if (typeof window !== 'undefined' && window.ICONS && window.ICONS[key]) {
+        return String(window.ICONS[key]).replace('<svg', '<svg class="ci ' + (cls || '') + '"')
+      }
+    } catch (e) { /* 无 window 环境（单测 teardown）*/ }
+    return ''
+  }
+
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
 
   function pool(items, conc, worker, onDone) {
@@ -1095,9 +1172,9 @@
   }
 
   let PAGES = [
-    { id: T_MAIN, label: '提取台', icon: '📄' },
-    { id: T_LIB, label: '卷库', icon: '🗂' },
-    { id: T_SETUP, label: '设置体检', icon: '⚙️' }
+    { id: T_MAIN, label: '提取台', icon: 'fileText' },
+    { id: T_LIB, label: '卷库', icon: 'archive' },
+    { id: T_SETUP, label: '设置体检', icon: 'cpGear' }
   ]
 
   function fmtSize(chars) {
@@ -1235,18 +1312,38 @@
 
   /* ---------------- 子页导航 ---------------- */
   function navHtml(active) {
-    return '<nav class="px-nav">' + PAGES.map(function (p) {
+    /* 【v1.4 三合一】图标必须过 I() 变成 SVG —— PAGES 里存的是**图标 key**（'fileText'）。
+     * v1.1~v1.3 这里直接把 key 拼进 DOM，于是导航条上一直明晃晃写着
+     * 「fileText 提取台」「archive 卷库」「cpGear 设置体检」——以前它是页内小 tab，
+     * 三合一之后它是**唯一的换页入口**，还露着 key 就太显眼了。 */
+    return '<nav class="px-nav" data-nav="1">'
+      + '<span class="px-mark" aria-hidden="true">' + MARK_TILE + '</span>' + PAGES.map(function (p) {
       return '<a data-goto="' + p.id + '" class="' + (p.id === active ? 'on' : '') + '">'
-        + '<b>' + p.icon + '</b>' + p.label + '</a>'
+        + '<b>' + I(p.icon) + '</b>' + p.label + '</a>'
     }).join('') + '<span class="px-nav-v">v' + VERSION + '</span></nav>'
   }
-  function bindNav(el, ctx, active) {
+  /* 【v1.4】绑定的是**页内切换器** go（由 mountAll 注入），不再是 ctx.api.goTool 跳路由。
+   * 收口成 jumpSub 之前的坑：nav 里的 tab、结果卡的「在卷库里看」、通知卡「回提取台」
+   * 三处各自 goTool —— 三合一后那三条路由都不存在，任何一个漏改都会变成
+   * 「点了弹 工具 paper-extract-lib 不存在或已禁用」。现在第二个参数只有一个来源。 */
+  function bindNav(el, ctx, active, go) {
     el.querySelectorAll('[data-goto]').forEach(function (a) {
       a.onclick = function () {
         let id = a.getAttribute('data-goto')
-        if (id && id !== active) ctx.api.goTool(id)
+        if (!id || id === active) return
+        if (typeof go === 'function') go(id)
+        else jumpSub(id, ctx)
       }
     })
+  }
+
+  /* 去某个子页的唯一入口：挂着就地切，没挂就记着落点再跳工具页。
+   * ctx 可省（用最近一次 mount 记下的 HOST_CTX）—— 通知卡在别的页面里触发时没有 ctx。 */
+  function jumpSub(id, ctx) {
+    let target = (id === T_LIB || id === T_SETUP) ? id : T_MAIN
+    if (typeof SUB_GO === 'function') { SUB_GO(target); return }
+    SUB_PENDING = target
+    try { (ctx || HOST_CTX).api.goTool(T_MAIN) } catch (e) { /* 宿主没有 goTool 就只记落点 */ }
   }
 
   /* ---------------- 引擎体检（三个子页都要说同一句话） ---------------- */
@@ -1654,6 +1751,18 @@
     }
     let extra = (r.warnings && r.warnings.length) ? '（有 ' + r.warnings.length + ' 条提醒）' : ''
     ctx.Toast.show('已送入「我的题卷」：' + r.stats.questions + ' 题' + extra, 'success', 2600)
+    /* 【2026-10-22】部分整卷被拒原先一声不响：addDrafts 逐卷返回 skipped，
+     * 旧代码只在**全部**被拒（ids 空）时才拿 skipped[0] 当错误说 ——
+     * 多卷场景下"送 10 题进 8 题、界面照样报已送入 10 题"，用户到题卷里数才发现少了。
+     * 现在逐条说清哪一卷没进去、为什么（体积超限是最常见的那条）。 */
+    let sk = (add.skipped || []).filter(Boolean)
+    if (sk.length) {
+      ctx.Toast.show('另有 ' + sk.length + ' 卷没入库：' + sk.slice(0, 2).join('；') + (sk.length > 2 ? ' 等' : ''), 'warn', 5200)
+    }
+    let ws = (r.warnings || []).filter(Boolean)
+    if (ws.length) {
+      ctx.Toast.show('入库提醒：' + String(ws[0]).slice(0, 80) + (ws.length > 1 ? ' （共 ' + ws.length + ' 条）' : ''), 'info', 5200)
+    }
     if (openAfter) pk.open(add.ids[0])
     return { ids: add.ids, stats: r.stats, warnings: r.warnings || [], skipped: add.skipped || [] }
   }
@@ -1664,12 +1773,28 @@
   let CSS = [
     '.px-wrap{--px-acc:var(--blue,#2563eb);--px-ink:var(--text-primary,#1b2430);--px-sub:var(--text-muted,#6b7788);--px-line:var(--line,#e3e8f0);--px-bg:var(--surface,#fff);--px-soft:var(--surface-muted,#f6f8fb);color:var(--px-ink);font:14px/1.6 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;max-width:1180px;margin:0 auto}',
     /* 导航 */
-    '.px-nav{display:flex;align-items:center;gap:6px;padding:6px;border:1px solid var(--px-line);border-radius:14px;background:var(--px-bg);margin-bottom:16px;flex-wrap:wrap;box-shadow:0 1px 2px rgba(16,30,60,.04)}',
+    /* 【v1.4 三合一 · 吸顶】三条子页收进同一个工具页后，导航条就是唯一的换页入口，
+     * 卷库滚到第 6 卷还得滚回顶上才能切 → 吸顶。
+     *
+     * 三条硬约束（前两条是心荔岛屿页眉踩过的坑，别重犯）：
+     *  ① top 必须是**量出来的状态栏高**（--px-sb，由 mountAll 运行时写），不能写死 59px：
+     *     手机与工作台两套状态栏 padding 不同，硬编码要么露缝要么多一条白边；
+     *  ② 这条 bar 只有 ~46px，**盖不住** 59px 的状态栏（盖上去会露出下沿一截带字的缝），
+     *     所以吸在状态栏**下方**（top:var(--px-sb)）而不是 top:0 —— 与页眉那套"整条盖住"不同场景；
+     *  ③ z-index 必须 ≥30 才压得住状态栏的 z-20，否则吸住后被状态栏盖掉半条（静默失效：
+     *     页面照常渲染、控制台零报错）。 */
+    '.px-nav{position:sticky;top:var(--px-sb,0px);z-index:30;display:flex;align-items:center;gap:6px;padding:6px;border:1px solid var(--px-line);border-radius:14px;background:var(--px-bg);margin-bottom:16px;flex-wrap:wrap;box-shadow:0 1px 2px rgba(16,30,60,.04);transition:box-shadow .24s ease,border-color .24s ease,background-color .24s ease}',
+    /* 吸住时加一层"浮起来"的投影；底色顺手提亮/压深一点点靠 --px-bg 已经跟随主题，不另配颜色 */
+    '.px-nav.is-stuck{box-shadow:0 14px 28px -20px rgba(16,30,60,.6);border-color:color-mix(in srgb,var(--px-acc) 26%,var(--px-line))}',
     '.px-nav a{display:inline-flex;align-items:center;gap:7px;padding:8px 15px;border-radius:10px;font-size:13px;font-weight:600;color:var(--text-secondary,#4a5670);cursor:pointer;transition:background .16s,color .16s,transform .16s;user-select:none}',
-    '.px-nav a b{font-size:15px;font-weight:400}',
+    '.px-nav a b{display:inline-flex;align-items:center;font-size:15px;font-weight:400}',
+    '.px-nav a b svg{width:15px;height:15px;display:block}',
     '.px-nav a:hover{background:var(--px-soft);color:var(--px-ink)}',
     '.px-nav a.on{background:var(--px-acc);color:#fff;box-shadow:0 4px 12px rgba(37,99,235,.28)}',
     '.px-nav-v{margin-left:auto;font-size:11px;color:var(--px-sub);letter-spacing:.4px;padding-right:6px}',
+    /* 品牌砖：导航条左侧的 24px 方砖（窗口 svg 的 width=1em 会被这条撑满） */
+    '.px-mark{width:24px;height:24px;flex:0 0 24px;display:grid;place-items:center;font-size:24px;margin-right:2px}',
+    '.px-mark svg{width:24px;height:24px;display:block}',
     /* 卡片 */
     '.px-card{background:var(--px-bg);border:1px solid var(--px-line);border-radius:16px;padding:18px 18px 16px;margin-bottom:14px;box-shadow:0 8px 24px rgba(20,35,70,.05)}',
     '.px-h{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:800;margin:0 0 5px}',
@@ -1775,6 +1900,8 @@
     '.px-edit-tip.warn{color:#92400e;font-weight:600}',
     /* 窄屏：分段器收窄内距；整理条改成「全选独占一行 → 三个动作等分一行 → 提示独占一行」，
      * 否则按钮东一个西一个地换行，看着像布局坏了。 */
+'.px-h svg.ci{margin-right:0}',
+    '.px-drop .ico svg.ci{width:26px;height:26px;display:block;margin:0 auto}',
     '@media (max-width:560px){.px-seg button{padding:7px 9px;font-size:11.5px}.px-edit-tip{margin-left:0;flex-basis:100%}'
       + '.px-editbar .px-pickall{flex-basis:100%}.px-editbar .px-mini{flex:1 1 0;min-width:0;text-align:center}}',
     '.px-q.picked{border-color:var(--px-acc);box-shadow:0 0 0 2px rgba(37,99,235,.14)}',
@@ -1844,7 +1971,8 @@
     }).join('') + '</div>'
   }
 
-  function mountExtract(el, ctx) {
+  function mountExtract(el, ctx, go) {
+    HOST_CTX = ctx
     let cfg = {
       subject: String(ctx.config('subject') || 'math'),
       imageMode: String(ctx.config('imageMode') || 'auto'),
@@ -1856,10 +1984,10 @@
     let state = { cancelled: false, abort: null, result: null, file: null }
     el.innerHTML = '<div class="px-wrap">' + navHtml(T_MAIN)
       + '<div class="px-card">'
-      + '<div class="px-h">📄 提取台 <em>PDF → 结构化题卷</em></div>'
+      + '<div class="px-h">' + I('fileText') + '提取台 <em>PDF → 结构化题卷</em></div>'
       + '<div class="px-sub">PDF 的文字层与页面渲染由站点本地引擎完成（<b>不上传任何服务器</b>）；扫描页会走视觉模型定位。<br>提取结果可一键送入「我的题卷」直接做题。</div>'
       + '<div data-health="1">' + healthHtml(ctx) + '</div>'
-      + '<div class="px-drop" data-drop="1"><span class="ico">📥</span><b>点击选择 PDF，或把文件拖到这里</b>'
+      + '<div class="px-drop" data-drop="1"><span class="ico">' + I('cpDownload') + '</span><b>点击选择 PDF，或把文件拖到这里</b>'
       + '<small>单次 ≤ 60 页；扫描版会自动切到视觉识别（更慢，也更容易出错）</small>'
       + '<input type="file" accept="application/pdf" data-file="1" hidden></div>'
       /* 【首屏法则】主操作紧跟上传区：390 宽的窄屏上原先把参数摆在前面，
@@ -1887,7 +2015,7 @@
       + '</div></details>'
       + '</div>'
       + '<div class="px-card" data-result="1" style="display:none">'
-      + '<div class="px-h" data-rtitle="1">✅ 提取完成</div>'
+      + '<div class="px-h" data-rtitle="1">' + I('check') + '提取完成</div>'
       + '<div class="px-chips" data-chips="1"></div>'
       + '<div class="px-actions" style="margin-bottom:13px">'
       + '<button class="px-btn primary" data-import="1">送入「我的题卷」去做题</button>'
@@ -1951,7 +2079,7 @@
         }
         if (exam) renderResult(exam, { scroll: !restoring })
         else if (job.examId) {
-          $('[data-rtitle]').textContent = '✅ ' + (job.title || '提取完成')
+          $('[data-rtitle]').innerHTML = I('check') + (job.title || '提取完成')
           $('[data-chips]').innerHTML = '<span class="px-chip">卷太大，未随状态保存</span>'
           $('[data-warns]').innerHTML = '<div class="px-warnbox">这次的结果已经存进「卷库」（' + esc(job.title || '') + '），'
             + '这里只显示摘要 —— 去卷库可以完整回看、导出、送去做题。</div>'
@@ -2002,7 +2130,7 @@
     function takeFile(f) {
       state.file = f
       drop.classList.add('has')
-      drop.querySelector('.ico').textContent = '📄'
+      drop.querySelector('.ico').innerHTML = I('fileText')
       drop.querySelector('b').textContent = f.name
       drop.querySelector('small').textContent = (f.size / 1048576).toFixed(2) + ' MB　·　点此可重新选择'
       if (!$('[data-title]').value) $('[data-title]').value = f.name.replace(/\.pdf$/i, '')
@@ -2014,7 +2142,8 @@
       try { if (state.abort) state.abort.abort() } catch (e) { }
       log('正在取消…（已完成的题会保留在结果里）')
     }
-    $('[data-openlib]').onclick = function () { ctx.api.goTool(T_LIB) }
+    /* 结果卡的「在卷库里看」：走 jumpSub 就地切子页（v1.4 前是 goTool 跳另一条路由） */
+    $('[data-openlib]').onclick = function () { jumpSub(T_LIB, ctx) }
     $('[data-import]').onclick = function () {
       if (!state.result) return
       importToPapers(ctx, state.result, true)
@@ -2116,11 +2245,11 @@
       try {
         if (!ctx.notify) return
         let h = kind === 'done' && exam
-          ? { title: '📄 试卷提取完成：' + exam.title, body: exam.questions.length + ' 题（带图 ' + (exam.meta.images || 0) + ' 张）· 已存入卷库', level: 'success' }
-          : { title: '📄 试卷提取中断', body: err || '任务没有跑完，回来可以重试', level: 'warn' }
+          ? { title: '试卷提取完成：' + exam.title, body: exam.questions.length + ' 题（带图 ' + (exam.meta.images || 0) + ' 张）· 已存入卷库', level: 'success' }
+          : { title: '试卷提取中断', body: err || '任务没有跑完，回来可以重试', level: 'warn' }
         ctx.notify({
           title: h.title, body: h.body, level: h.level, timeout: 0,
-          actions: [{ label: '回提取台', kind: 'primary', onClick: function (close) { try { close() } catch (e) { } ctx.api.goTool(T_MAIN) } }]
+          actions: [{ label: '回提取台', kind: 'primary', onClick: function (close) { try { close() } catch (e) { } jumpSub(T_MAIN, ctx) } }]
         })
       } catch (e) { /* 通知失败不影响结果落盘 */ }
     }
@@ -2133,7 +2262,7 @@
       let figs = qs.filter(function (q) { return q.diagramImg }).length
       let low = qs.filter(function (q) { return q.lowConfidence }).length
       let noans = qs.filter(function (q) { return q.noAnswer }).length
-      $('[data-rtitle]').textContent = '✅ ' + exam.title
+      $('[data-rtitle]').innerHTML = I('check') + exam.title
       $('[data-chips]').innerHTML =
         '<span class="px-chip"><b>' + qs.length + '</b>题</span>'
         + '<span class="px-chip">带图 <b>' + figs + '</b></span>'
@@ -2190,7 +2319,7 @@
     /* 导航绑定放在所有会动态塞进 [data-goto] 的 innerHTML 之后：
      * 顶部三个 tab 是静态的，但上面那句"去看看"是运行时才拼的，
      * 先绑后拼就永远点不动（这是个只看代码看不出来的空点击）。 */
-    bindNav(el, ctx, T_MAIN)
+    bindNav(el, ctx, T_MAIN, go)
 
     /* ── 恢复上次的任务 ──
      * 三种情况要和用户说清楚，别让人以为"页面回到初始了 = 活白干了"：
@@ -2237,11 +2366,12 @@
   /* ══════════════════════════════════════════════════════════════════
    * 子页 ②：卷库
    * ══════════════════════════════════════════════════════════════════ */
-  function mountLib(el, ctx) {
+  function mountLib(el, ctx, go) {
+    HOST_CTX = ctx
     let S = { kw: '', sort: 'time', openId: '' }
     el.innerHTML = '<div class="px-wrap">' + navHtml(T_LIB)
       + '<div class="px-card">'
-      + '<div class="px-h">🗂 卷库 <em>本机保存 · 最多 8 卷</em></div>'
+      + '<div class="px-h">' + I('archive') + '卷库 <em>本机保存 · 最多 8 卷</em></div>'
       + '<div class="px-sub">提取过的卷都在这儿。可以回看题目、导出 JSON、或直接送进「我的题卷」做题。<br>卷库存的是本机数据（随插件数据一起保存/同步），超容量时会优先清理较早卷的配图并如实标注。</div>'
       + '<div class="px-stats" data-stats="1"></div>'
       + '<div class="px-tools">'
@@ -2251,7 +2381,7 @@
       + lbHtml() + '</div>'
 
     let listEl = el.querySelector('[data-list]')
-    bindNav(el, ctx, T_LIB)
+    bindNav(el, ctx, T_LIB, go)
     bindLb(el)
 
     function list() {
@@ -2288,12 +2418,17 @@
     function libMetaHtml(e) {
       let qs = e.questions || []
       let low = qs.filter(function (q) { return q.lowConfidence }).length
+      /* 【2026-10-22】卷面无答案的题数与结果页 chip 用同一口径（q.noAnswer）。
+       * 原来只在展开的题目视图里才看得到「卷面无答案」标签，卷库列表上完全没信号 ——
+       * 一口气提了五六卷，哪卷能直接自测判分、哪卷得靠 AI 判，列表上看不出来。 */
+      let noans = qs.filter(function (q) { return q.noAnswer }).length
       return '<span>' + (qs.length) + ' 题</span>'
         + '<span>' + examFigures(e) + ' 张图</span>'
         + '<span>' + subjLabel(e.subject) + '</span>'
         + '<span>' + fmtWhen(e.generatedAt) + '</span>'
         + (e.meta && e.meta.elapsedSec ? '<span>耗时 ' + e.meta.elapsedSec + 's</span>' : '')
         + (low ? '<span style="color:var(--warn,#d97706)">低置信 ' + low + '</span>' : '')
+        + (noans ? '<span style="color:var(--warn,#d97706)">无答案 ' + noans + '</span>' : '')
         + (e.meta && e.meta.imgDropped ? '<span style="color:var(--danger,#dc2626)">配图已清理</span>' : '')
     }
 
@@ -2400,13 +2535,14 @@
   /* ══════════════════════════════════════════════════════════════════
    * 子页 ③：设置与体检
    * ══════════════════════════════════════════════════════════════════ */
-  function mountSetup(el, ctx) {
+  function mountSetup(el, ctx, go) {
+    HOST_CTX = ctx
     let h = healthOf(ctx)
     let bank = bankGet(ctx)
     let noise = String(ctx.config('extraNoise') || '')
     el.innerHTML = '<div class="px-wrap">' + navHtml(T_SETUP)
       + '<div class="px-card">'
-      + '<div class="px-h">🩺 引擎体检</div>'
+      + '<div class="px-h">' + I('flask') + '引擎体检</div>'
       + '<div class="px-sub">这三项缺一个，对应能力就会降级 —— 界面会一直显示真实状态，不假装能用。</div>'
       + '<div class="px-health">'
       + '<span class="px-hcell ' + (h.pdf ? 'ok' : 'no') + '"><i></i>PdfKit<em>' + (h.pdf ? '就绪' : '缺失 → 无法读 PDF') + '</em></span>'
@@ -2417,7 +2553,7 @@
       + 'AI 与视觉能力在「设置 → 云 AI 配置」里填写；扫描版试卷必须用支持读图的模型，否则只能识别文字层。</div>'
       + '</div>'
       + '<div class="px-card">'
-      + '<div class="px-h">⚙️ 默认参数</div>'
+      + '<div class="px-h">' + I('cpGear') + '默认参数</div>'
       + '<div class="px-sub">这里的值会成为「提取台」的默认值（每次仍可在页面上临时改）。</div>'
       + '<div class="px-grid">'
       + '<label class="px-f">默认科目<select data-cfg="subject">' + SUBJ.map(function (s) {
@@ -2434,7 +2570,7 @@
       + '<span class="px-msg" data-cfgtip="1"></span></div>'
       + '</div>'
       + '<div class="px-card">'
-      + '<div class="px-h">🏷 噪声词 <em>可选</em></div>'
+      + '<div class="px-h">' + I('list') + '噪声词 <em>可选</em></div>'
       + '<div class="px-sub">每家机构的水印/公众号名都不一样。把你卷面上反复出现的广告词、公众号名、机构名写进来（一行一个），'
       + '切题时会从题干里剔除、整行只剩水印的直接丢弃。<b>写长的正文不会误伤</b>：只有整行基本只剩它才算噪声。</div>'
       + '<textarea class="px-ta" data-noise="1" placeholder="一行一个，例如：&#10;XX考研机构&#10;XX教育&#10;扫码关注">' + esc(noise) + '</textarea>'
@@ -2442,7 +2578,7 @@
       + '<span class="px-msg" data-noisetip="1">当前 ' + extraNoiseCount(noise) + ' 个词</span></div>'
       + '</div>'
       + '<div class="px-card">'
-      + '<div class="px-h">🧹 数据</div>'
+      + '<div class="px-h">' + I('cpTrash') + '数据</div>'
       + '<div class="px-sub">卷库共 ' + bank.length + ' 套 / 约 ' + fmtSize(bank.reduce(function (a, e) { return a + examChars(e) }, 0)) + '。</div>'
       + '<div class="px-actions">'
       + '<button class="px-btn" data-expall="1">导出全部（单个 JSON）</button>'
@@ -2459,7 +2595,7 @@
       + '</div></details></div>'
       + '</div>'
 
-    bindNav(el, ctx, T_SETUP)
+    bindNav(el, ctx, T_SETUP, go)
 
     let cfgMap = {
       subject: el.querySelector('[data-cfg="subject"]'),
@@ -2501,7 +2637,7 @@
         + '已送进「我的题卷」的卷不受影响。<b>此操作不可撤销</b>，建议先「导出全部」。</div>', function () {
           ctx.data('bank', [])
           ctx.Toast.show('卷库已清空', 'success', 1600)
-          mountSetup(el, ctx)
+          mountSetup(el, ctx, go)
         }, true)
     }
     return function destroy() { }
@@ -2510,20 +2646,132 @@
     return String(txt || '').split(/\r?\n/).map(function (s) { return s.trim() }).filter(function (s) { return s.length >= 2 }).length
   }
 
+  /* ══════════════════════════════════════════════════════════════════
+   * 三合一入口：一个工具页 / 页内三个子页
+   * ══════════════════════════════════════════════════════════════════
+   * 为什么是"薄壳 + 子页各自照旧整体渲染"而不是把三页揉成一个大渲染函数：
+   * 三个子页的内部状态（提取台的 job 订阅、卷库的搜索词、设置的体检结果）
+   * 各自活在自己的闭包里，互不共享。硬揉会立刻出现"哪个变量归谁"的问题；
+   * 保留 mountExtract/mountLib/mountSetup 原样，只是在它们外面套一层
+   * "先销毁旧的、再挂新的" —— 语义跟之前切路由几乎一致，回归面最小。
+   *
+   * 与切路由唯一的真差异：destroy 现在也会在**页内切子页**时被调用。
+   * mountExtract 的 destroy 早就写明"只断 UI、不掐任务"（任务继续写 ctx.keep、
+   * 跑完发通知卡），所以切去卷库看一眼再回来，提取照样在后台跑 —— 这条不改。 */
+  function mountAll(el, ctx) {
+    HOST_CTX = ctx
+    el.innerHTML = '<div class="px-shell" data-shell="1"></div>'
+    let host = el.querySelector('[data-shell]')
+    let child = null      /* 当前子页的 destroy */
+    let cur = ''          /* 当前子页 id */
+
+    function norm(id) { return (id === T_LIB || id === T_SETUP) ? id : T_MAIN }
+
+    function render(id) {
+      let want = norm(id)
+      if (want === cur && child) return
+      if (child) { try { child() } catch (e) { } child = null }   /* 先解绑旧的，再建新的 */
+      cur = want
+      host.innerHTML = ''
+      let fn = want === T_LIB ? mountLib : (want === T_SETUP ? mountSetup : mountExtract)
+      child = fn(host, ctx, go) || null
+      checkStuck()   /* 新子页的导航条是新建的 DOM，两态要按当前滚动位置重算一次 */
+    }
+
+    /* 用户点导航切子页：记住落点 + 重挂 + 回到顶部。
+     * 不回到顶部的后果：在卷库滚到第 6 卷再切设置，新页会"从中间开始"，
+     * 看起来像没切成功（页面顶部内容被滚过去了）。 */
+    function go(id) {
+      let want = norm(id)
+      if (want === cur) return
+      try { ctx.data(SUB_KEY, want) } catch (e) { }
+      render(want)
+      try { window.scrollTo({ top: 0, behavior: 'smooth' }) } catch (e) { /* 旧内核忽略平滑 */ }
+    }
+
+    /* ── 导航条吸顶（两态） ──
+     * 判据：getBoundingClientRect().top <= 状态栏高 → 挂 .is-stuck
+     * （**不是**站内页眉那套 `top <= 1`，理由见 checkStuck 里的注释）。
+     * 这里只管"要不要浮起来"，位置由 CSS 的 sticky+top:var(--px-sb) 负责。
+     * 监听挂在 window 上并带 capture —— 站内某些页面是容器内滚动，
+     * 冒泡阶段收不到；capture 两个都能收到。
+     *
+     * 真机踩坑（这条最坑）：只在挂载那一帧量一次状态栏，量到的是**瞬态值**。
+     *   实测：进 /tool/paper-extract 时 `--px-sb` 被写成 447px，而状态栏稳定后是 194px
+     *   （甚至 59px —— 站内状态栏高度本来就是动态的，aitools.css 里记着"实测 59 → 93 → 142"）。
+     *   结果是吸顶位置整个错位：导航条粘在 447px 处，看着像"没吸住"。
+     *   → 改成 **ResizeObserver 跟随状态栏自身尺寸**（事件驱动、不用轮询、也不用猜时机），
+     *     外加挂载后一帧补量一次（首帧布局未就绪时的兜底）。 */
+    let bar = null
+    let ro = null
+    let barH = 0     /* 上次量到的状态栏高 —— 两态判据要用它（见 checkStuck） */
+    function measureBar() {
+      bar = bar && bar.isConnected ? bar : document.querySelector('.statusbar')
+      if (!bar) return
+      let h = Math.round(bar.getBoundingClientRect().height)
+      /* 0 = 还没布局好（或这页压根没有状态栏）→ 不写，等 ResizeObserver/下一帧 */
+      if (h > 0) { barH = h; el.style.setProperty('--px-sb', h + 'px') }
+    }
+    function watchBar() {
+      measureBar()
+      if (ro || !bar || typeof ResizeObserver !== 'function') return
+      /* 回调里必须**同时重算两态**：状态栏从"过渡态 194"落回"稳定 59"时，
+       * 只更新 --px-sb 的话，`.is-stuck` 还停在按旧高度算出来的结论上
+       * （真机现象：页面在顶部、导航也没吸住，却已经浮起来了）。 */
+      try { ro = new ResizeObserver(function () { measureBar(); checkStuck() }); ro.observe(bar) } catch (e) { ro = null }
+    }
+    let raf = 0
+    function checkStuck() {
+      raf = 0
+      let nav = host.querySelector('.px-nav')
+      if (!nav) return
+      /* 判据不是站内常见的 `top <= 1`：那条是给"top:0 整条盖住状态栏"的页眉写的。
+       * 这里的设计是**吸在状态栏下方**（top:var(--px-sb)），所以"吸住"的定义是
+       * `rect.top <= 状态栏高`。用 top<=1 判会永远不成立 —— 于是永远不浮起来
+       * （真机就这样：nav.top=59、状态栏 59，几何全对，`.is-stuck` 却没戴上）。 */
+      nav.classList.toggle('is-stuck', nav.getBoundingClientRect().top <= barH + 1)
+    }
+    function onScroll() { if (!raf) raf = requestAnimationFrame(checkStuck) }
+    function onResize() { measureBar(); onScroll() }
+    watchBar()
+    window.addEventListener('scroll', onScroll, { passive: true, capture: true })
+    window.addEventListener('resize', onResize)
+
+    /* 落点优先级：临时指定（jumpSub 从通知卡/教练跳进来）> 上次停留的子页 > 提取台 */
+    let saved = String(ctx.data(SUB_KEY) || '')
+    let first = SUB_PENDING || (saved === T_LIB || saved === T_SETUP ? saved : '')
+    SUB_PENDING = ''
+    SUB_GO = go
+    render(first || T_MAIN)
+    checkStuck()   /* 沙箱/深链直接落在页中段时（浏览器恢复滚动位置），首帧就要是吸住的 */
+    /* 挂载那一帧的布局还没稳（页面正在换），再补量一次：这一次才是真实高度 */
+    requestAnimationFrame(watchBar)
+
+    return function destroy() {
+      /* 离开工具页时把全局切换器摘掉：否则下次从通知卡进来时 jumpSub 以为
+       * "还挂着"，直接调一个已经没人看的 render —— 点了没反应。 */
+      SUB_GO = null
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+      if (ro) { try { ro.disconnect() } catch (e) { } ro = null }
+      if (raf) cancelAnimationFrame(raf)
+      if (child) { try { child() } catch (e) { } child = null }
+    }
+  }
+
   /* ---------------- 注册 ---------------- */
-  /* 三个工具页各自独立注册（而不是一个页里面包 tab）：
-   * 工具页 id 就是路由 /tool/<id>，互跳走 ctx.api.goTool —— 浏览器前进/后退、
-   * 刷新回原页、从教练/搜索直达「卷库」都能用，不需要插件自己维护一个假 tab 状态。 */
+  /* 【v1.4 三合一】只注册**一个**工具页（抽屉/侧栏里只占一行）。
+   * 上一版是三条独立工具路由，理由是"浏览器前进后退/刷新回原页都能用"；
+   * 现在用 ctx.data('sub') 记住落点把这条体验补回来，代价是前进/后退不再逐子页。 */
   let api = {
     id: 'paper-extract',
     name: '试卷提取',
     version: VERSION,
     author: 'kaoyan-v2',
-    desc: 'PDF → 题号切题 / 按需裁图 / 一键送入题卷；三子页（提取台 / 卷库 / 设置体检），复用站点 PDF 引擎与 AI。',
+    desc: 'PDF → 题号切题 / 按需裁图 / 一键送入题卷；一个入口三个子页（提取台 / 卷库 / 设置体检），复用站点 PDF 引擎与 AI。',
     tools: [
-      { id: T_MAIN, title: '试卷提取', icon: '📄', mount: mountExtract },
-      { id: T_LIB, title: '试卷卷库', icon: '🗂', mount: mountLib },
-      { id: T_SETUP, title: '试卷提取设置', icon: '🩺', mount: mountSetup }
+      /* 【v1.5】模块图标换品牌砖（蓝渐变 + 白取景框），与页眉导航条那枚同款字形 */
+      { id: T_MAIN, title: '试卷提取', icon: MARK_TILE, mount: mountAll }
     ],
     config: [
       { key: 'subject', label: '默认科目', type: 'select', default: 'math', options: ['math', 'major', 'eng', 'pol'] },
@@ -2537,8 +2785,30 @@
     /* 噪声词是"切题时才用到"的全局状态，必须在注册时装载一次：
      * 否则用户保存完配置、刷新页面后，要先去设置页点一下才生效。 */
     init: function (ctx) {
+      HOST_CTX = ctx
       setExtraNoise(String(ctx.config('extraNoise') || '').split(/\r?\n/))
+      /* 【2026-10-22】声明自己的 AI 场景，才有资格进「AI 参数配置中心」逐项配置。
+       * def 选 noThink：这是**搬运**任务（照抄卷面文字/选项），思考只会增加改写风险；
+       * latexNeed: true —— 卷面公式必须带回来，公式契约让模型输出成规范 LaTeX，
+       *   而不是 OCR 出来的一堆 Unicode 近似字符（站内 tex.js 才认）；
+       * tools: 'none' —— 提取不需要站内工具，给工具反而多一轮瞎折腾。 */
+      try {
+        if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {
+          ctx.ai.registerCtx({
+            ctx: AI_CTX,
+            name: '试卷提取 · 版面切题',
+            desc: '读 PDF 文字层/扫描页，把版面切成题目 JSON（只搬运卷面内容，不编答案）',
+            def: 'noThink',
+            latexNeed: true,
+            tools: 'none',
+            recall: false
+          })
+        }
+      } catch (e) { /* 注册失败 = 退回未注册路径（吃全局设置），不影响提取 */ }
     },
+    /* 站内注入有硬上限：pluginBus 取 `String(m.css).slice(0, 20000)`，超了会**从尾巴上截断**
+     * （断在半条规则中间，后面的选择器整片不生效，且不报错）。
+     * 本表现状 14653 字符、余量约 5.3k —— 加样式前先量一下，别默默越过。 */
     css: CSS
   }
 
@@ -2577,6 +2847,11 @@
       T_MAIN: T_MAIN,
       T_LIB: T_LIB,
       T_SETUP: T_SETUP,
+      /* 【v1.4 三合一】子页切换/落点记忆是"页内路由"，不暴露就测不出来：
+       * 「从通知卡进来直接落在卷库」「离开页面后 jumpSub 不许再调死掉的 render」
+       * 这两条都发生在 mount 之外，只能在外部驱动。 */
+      mountAll: mountAll,
+      jumpSub: jumpSub,
       /* 任务状态读/写钩子（测试用）：live() 读当前上下文的 runId，live('r1') 把它设成某次运行 ——
        * "切模块回来能接上"与"刷新过就该标中断"就是靠这个 rid 区分的，不开放它这两种情况测不出来。 */
       live: function (rid) {

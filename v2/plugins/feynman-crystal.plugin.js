@@ -1,5 +1,5 @@
 /* ============================================================
- * feynman-crystal.plugin.js — 费曼晶体（单文件插件）· v1.0
+ * feynman-crystal.plugin.js — 费曼晶体（单文件插件）· v1.1
  * ------------------------------------------------------------
  * 一句话：把「看懂」变成「讲得出来」——知识点 → 递进提问 → 你用自己的话讲 → 判定 →
  *        长成一张掌握度晶体图 → 按遗忘曲线回来复习。
@@ -44,8 +44,16 @@
 ;(function () {
   'use strict'
 
-  let VERSION = '1.0'
+  let VERSION = '1.1'
   let TOOL_ID = 'feynman-crystal'
+  /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
+   * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
+   * 于是「递进出题」和「三维判定」在参数中心里**共用一个开关**，用户没法把判定调成严谨、
+   * 把出题调成快出字；用量也全记在通用桶里，看不出是哪一步在烧 token。
+   * 现在拆成两条真场景并注册；体检探活改用伪 ctx `probe.connect`（它本来就是个连通测试，
+   * 不该冒充业务场景、也不该进配置中心占一行）。 */
+  let AI_CTX_QUIZ = 'plugin.feynman-crystal.quiz'
+  let AI_CTX_JUDGE = 'plugin.feynman-crystal.judge'
 
   /* ============================================================
    * 0. 小工具（纯函数，不碰 DOM / 不碰 ctx）
@@ -389,7 +397,7 @@
       + (point.mastery ? '\n当前掌握度：' + point.mastery + '/100（' + masteryLabel(point.mastery) + '）' : '')
       + '\n请出 ' + levels + ' 个递进问题。'
     if (!aiOk(ctx)) return Promise.resolve(localChain(point, levels))
-    return ctx.ai.json(sys, usr, { ctx: 'plugin.ai' }).then(function (r) {
+    return ctx.ai.json(sys, usr, { ctx: AI_CTX_QUIZ }).then(function (r) {
       let qs = r && Array.isArray(r.questions) ? r.questions : []
       let out = []
       for (let i = 0; i < qs.length; i++) {
@@ -435,7 +443,7 @@
     let sys = judgeSystem(strict)
     let usr = judgeUser(point, question, answer, prior)
     if (!aiOk(ctx)) return Promise.resolve(manualVerdict())
-    return ctx.ai.json(sys, usr, { ctx: 'plugin.ai' }).then(function (r) {
+    return ctx.ai.json(sys, usr, { ctx: AI_CTX_JUDGE }).then(function (r) {
       if (!r || typeof r !== 'object') return manualVerdict()
       /* 关键防线：AI 没给出任何维度时**不要**用 0 分伪装成"讲砸了"，
        * 那是把"判不了"说成"你不行"。改成 manual，让用户自评。 */
@@ -618,6 +626,7 @@
    * 所有视图共用一份 S；视图函数只读 S、通过 act() 改 S 再 paint()。
    */
   function mountShell(el, ctx) {
+    HOST_CTX = ctx
     let S = {
       view: 'train',
       points: loadPoints(ctx),
@@ -1083,16 +1092,36 @@
   function toast(ctx, msg, type) {
     try { ctx.Toast.show(msg, type || 'info', 2000) } catch (e) { /* 忽略 */ }
   }
+  /* 品牌字形：晶体五边形轮廓 + 内部辐条。
+   * 抽成常量是为了**页眉徽标与模块图标共用一份 d** —— 分开抄两份，改一处忘另一处，
+   * 两枚标就会慢慢画歪（这是真事：以前页眉与导航各画各的，用户一眼看出不是同一个标）。 */
+  let MARK_OUTLINE = 'M22 5 L36 14 L32 32 L12 32 L8 14 Z'
+  let MARK_SPOKES = 'M22 5 V32 M8 14 L32 32 M36 14 L12 32'
   function crystalMarkSvg() {
     return '<svg viewBox="0 0 44 44" aria-hidden="true">'
       + '<defs><linearGradient id="fxg" x1="0" y1="0" x2="1" y2="1">'
       + '<stop offset="0" stop-color="#0f766e"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>'
-      + '<path d="M22 5 L36 14 L32 32 L12 32 L8 14 Z" fill="url(#fxg)" opacity=".16"/>'
-      + '<path d="M22 5 L36 14 L32 32 L12 32 L8 14 Z" fill="none" stroke="url(#fxg)" stroke-width="1.6" stroke-linejoin="round"/>'
-      + '<path d="M22 5 L22 32 M8 14 L32 32 M36 14 L12 32" stroke="url(#fxg)" stroke-width=".8" opacity=".5"/>'
+      + '<path d="' + MARK_OUTLINE + '" fill="url(#fxg)" opacity=".16"/>'
+      + '<path d="' + MARK_OUTLINE + '" fill="none" stroke="url(#fxg)" stroke-width="1.6" stroke-linejoin="round"/>'
+      + '<path d="' + MARK_SPOKES + '" stroke="url(#fxg)" stroke-width=".8" opacity=".5"/>'
       + '<circle cx="22" cy="18" r="2.6" fill="#0f766e"/>'
       + '</svg>'
   }
+  /* 模块图标＝页眉同款晶体标，加一层**青→蓝渐变圆角砖**（白字形）。
+   * 砖必须自己画成一段 SVG：页眉那枚是「div 里塞 44 格 svg」，导航栏只吃一段 SVG 串。
+   * 44 格与页眉一致 → 字形直接复用上面的 d（translate+scale 0.8 把它缩进砖的内边距）。
+   * 描边比页眉粗（2.2/1.2）：48→22px 缩放后 1.6 只剩 ~0.9px，糊成一团。
+   * 渐变 id 必须带插件前缀（fxMarkG）：多插件同名 id 会让后注册的砖抢走前一个的填充。 */
+  let MARK_TILE = '<svg viewBox="0 0 44 44" width="1em" height="1em" aria-hidden="true">'
+    + '<defs><linearGradient id="fxMarkG" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0" stop-color="#0F766E"/><stop offset="1" stop-color="#2563EB"/></linearGradient></defs>'
+    + '<rect width="44" height="44" rx="12" fill="url(#fxMarkG)"/>'
+    + '<g transform="translate(4.4 4.4) scale(0.8)" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="' + MARK_OUTLINE + '" stroke-width="2.2"/>'
+    + '<path d="' + MARK_SPOKES + '" stroke-width="1.2" opacity=".8"/>'
+    + '</g>'
+    + '<circle cx="22" cy="18.8" r="1.9" fill="#fff"/>'
+    + '</svg>'
   /** 结晶庆祝（一次性 DOM，1.4s 后自清；不动 CSS 变量，避免污染宿主） */
   function confetti(root) {
     try {
@@ -1184,9 +1213,6 @@
     out.push('</section>')
 
     /* ---- 选中的知识点详情（点晶体节点 / 队列行后来到这里） ---- */
-    let sel = findPoint(S.points, S.selId)
-    if (sel) out.push(pointDetailHtml(S, sel))
-
     /* ---- 全部知识点：搜索 + 学科筛选（有 600 条上限，没有搜索等于没有库） ---- */
     let all = S.points.slice().sort(function (a, b) {
       let ta = a.nextAt || '9999', tb = b.nextAt || '9999'
@@ -1233,6 +1259,10 @@
       if (filtered.length > 30) out.push('<div class="fx-more">还有 ' + (filtered.length - 30) + ' 个，用搜索缩小范围。</div>')
     }
     out.push('</section>')
+
+    /* ---- 选中项详情：从列表/晶体点进来后看它（放在列表之后，先挑后看） ---- */
+    let sel = findPoint(S.points, S.selId)
+    if (sel) out.push(pointDetailHtml(S, sel))
 
     /* ---- 空态引导（只有真的一个知识点都没有时才出现） ---- */
     if (!S.points.length) {
@@ -2057,7 +2087,9 @@
   function aiSelfTest(ctx) {
     if (!aiOk(ctx)) { toast(ctx, '未配置 AI：设置页填好接口后就能自动判定', 'warn', 2600); return }
     toast(ctx, '正在测试…', 'info', 1200)
-    ctx.ai.json('只输出 JSON：{"ok":true}', '回一个 {"ok":true} 即可。', { ctx: 'plugin.ai' }).then(function () {
+    /* 探活走伪场景 probe.connect（全站「连通性测试」共用一桶），
+     * 不占用业务场景的 Token/温度配置，也不该在参数中心里多出一行。 */
+    ctx.ai.json('只输出 JSON：{"ok":true}', '回一个 {"ok":true} 即可。', { ctx: 'probe.connect' }).then(function () {
       toast(ctx, 'AI 可用：出题与判定都会自动跑', 'success', 2600)
     })['catch'](function (e) {
       toast(ctx, 'AI 调用失败：' + ((e && e.message) || '') + '（不影响本地模板模式）', 'warn', 3200)
@@ -2070,6 +2102,36 @@
    *   全页只有一处填充色块（主行动按钮）与一处玻璃（吸顶页眉 + dock）。
    * 为什么要有第二张表：宿主 normalize() 会把 css 截到 20000 字符，超了**静默截断**
    * （末尾规则直接消失、不报错）→ 只放"任何场景都要有"的规则。 */
+  /* ════════════════════════ 站内图标（2026-10-22 用户要求：摆脱原生 emoji） ════════════════════════
+   * 为什么不留 emoji：emoji 是**字体渲染**的，同一个字符在 Win/Android/iOS 上是三套画风，
+   * 尺寸、基线、颜色都不受控 —— 混在用线性 SVG 做的站内 UI 里就像贴纸；夜间主题下更明显
+   * （emoji 自带彩色，卡片暗下去它还是亮的）。
+   *
+   * 取值顺序（都是站内公开层，不碰 Store/AI/App 这些内部单例）：
+   *   ① ctx.U.icon(key) —— 与站内视觉逐像素一致、随主题换色、带 .ci 基线样式；
+   *   ② window.ICONS[key] —— globals 注册的同一张图标表。**必须有这一级**：
+   *      manifest 的 icon 在 register() 时就求值（比 init(ctx) 早），那时还没有 ctx；
+   *   ③ 都取不到 → 返回空串。调用方对「纯图标按钮」都要写 `I(k) || '文字'` 兜底，
+   *      否则图标缺了按钮会变成空白方块（点了没反馈的那种"坏按钮"）。
+   *
+   * 铁律：key 必须是 site icons.ts SPEC 里真实存在的语义名（传错静默得空串，不报错）。
+   * 本文件用到的每一个 key 都已对照 SPEC 核过。 */
+  let HOST_CTX = null
+  function I(key, cls) {
+    try {
+      if (HOST_CTX && HOST_CTX.U && typeof HOST_CTX.U.icon === 'function') {
+        let s = HOST_CTX.U.icon(key, cls)
+        if (s) return s
+      }
+    } catch (e) { /* 宿主图标层异常 → 走下一级 */ }
+    try {
+      if (typeof window !== 'undefined' && window.ICONS && window.ICONS[key]) {
+        return String(window.ICONS[key]).replace('<svg', '<svg class="ci ' + (cls || '') + '"')
+      }
+    } catch (e) { /* 无 window 环境（单测 teardown）*/ }
+    return ''
+  }
+
   let CSS = [
     '.fx-root{--fx-acc:#0f766e;--fx-acc2:#2563eb;--fx-ink:var(--text-primary,#1b2430);--fx-sub:var(--text-muted,#6b7788);--fx-line:var(--line,#e5e7eb);--fx-line2:color-mix(in srgb,var(--text-primary,#1b2430) 24%,transparent);--fx-bg:var(--surface,#fff);--fx-soft:var(--surface-muted,#f6f8fb);--fx-gut:var(--vp-x,16px);--fx-w:1180px;position:relative;color:var(--fx-ink);font:14px/1.65 "PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}',
     '.fx-root *,.fx-root *::before,.fx-root *::after{box-sizing:border-box}',
@@ -2111,7 +2173,9 @@
     '.fx-goalline.ok>b{color:var(--fx-acc)}',
     '.fx-goalbar{margin-left:auto;width:120px;height:2px;background:var(--fx-line2);overflow:hidden}',
     '.fx-goalbar b{display:block;height:100%;background:var(--fx-acc);transition:width .6s cubic-bezier(.22,1,.36,1)}',
-    '.fx-searchbar{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;margin-bottom:12px}',
+    '.fx-searchbar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:10px}',
+    /* 搜索框与学科 chips 排一行：chips 自带的分节线/外边距在搜索栏里要去掉，否则两行错位 */
+    '.fx-searchbar .fx-subjbar{margin:0;padding:0;border:0;flex:0 0 auto}',
     '.fx-search{flex:1;min-width:180px;max-width:320px}',
     '.fx-topacts{display:flex;align-items:center;gap:10px;margin-left:6px}',
     '.fx-btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 1px;border:0;border-bottom:1px solid transparent;border-radius:0;background:none;color:var(--fx-ink);font-size:13px;font-weight:600;cursor:pointer;transition:color .16s,border-color .16s,transform .16s}',
@@ -2226,6 +2290,11 @@
     '.fx-dock-item{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:62px;padding:8px 13px;border:0;border-radius:14px;background:none;color:var(--fx-sub);font-size:10.5px;font-weight:600;letter-spacing:.04em;cursor:pointer;transition:color .25s}',
     '.fx-dock-item svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;transition:transform .25s}',
     '.fx-dock-item em{font-style:normal}',
+    /* 【2026-10-22】图标换站内线性 SVG 后，站点全局给 .ci 留了 margin-right:5px 当「图标-文字」间距。
+     * 但本插件这三处的父级**自己就有间距**：.fx-btn 是 inline-flex+gap:6px、.fx-dock-item 是
+     * 竖排 flex+gap:3px、.fx-icobtn 是 grid 居中 —— 再吃 margin 就是双付：
+     * 前者白多 5px，后两者会让图标在中轴上偏左 2.5px（真机量过）。间距交给 gap/居中，图标清零。 */
+    '.fx-btn svg.ci,.fx-icobtn svg.ci,.fx-dock-item svg.ci{margin-right:0}',
     '.fx-dock-item:hover{color:var(--fx-ink)}',
     '.fx-dock-item:hover svg{transform:translateY(-2px) scale(1.06)}',
     '.fx-dock-item.on{color:#fff}',
@@ -2404,7 +2473,8 @@
     author: 'kaoyan-v2',
     desc: '把「看懂」变成「讲得出来」：三层递进提问 + 准确/自洽/通俗三维判定 + 掌握度晶体图 + 遗忘曲线复习。无 AI 时降级为本地提问链 + 自评。',
     tools: [
-      { id: TOOL_ID, title: '费曼晶体', icon: '🔮', mount: mountShell }
+      /* 【v1.1】模块图标换品牌砖（青→蓝渐变 + 白晶体），与页眉同款字形 */
+      { id: TOOL_ID, title: '费曼晶体', icon: MARK_TILE, mount: mountShell }
     ],
     /* 侧边小面板：不占页面，随时看"今天还有几个要讲"。
      * 面板只读（不做交互）—— 交互全部留在工具页，避免两套状态源。 */
@@ -2412,7 +2482,7 @@
       {
         id: 'fx-today',
         title: '费曼晶体 · 今日',
-        icon: '🔮',
+        icon: MARK_TILE,
         width: 300,
         height: 260,
         render: function (ctx) {
@@ -2469,6 +2539,28 @@
     /* init 只做一次"轻量自检"，不写数据、不拉网络：
      * 首次安装时给一条可读的日志，排查"插件到底装上没有"时不用翻控制台。 */
     init: function (ctx) {
+      HOST_CTX = ctx
+      /* 【2026-10-22 站内适配 · 补注册环节】把两条业务场景登记进 AI 注册表：
+       * 少了这一步，参数中心里根本没有它们 → 用户在「AI 参数」里配的思考档 / Token / 温度
+       * 永远不会作用到本插件（全部退化成默认值），用量也全记进 `__none` 桶。
+       * 出题要即时出字 → noThink；判定要严谨（三维打分 + 置信度）→ think。
+       * 两者都不需要内置工具（纯文本进、JSON 出），也不做长期记忆召回。 */
+      try {
+        if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {
+          ctx.ai.registerCtx({
+            ctx: AI_CTX_QUIZ,
+            name: '费曼晶体 · 递进出题',
+            desc: '按掌握度递进生成讲解题（一问一答、难度跟着 crystals 走，不编造教材外结论）',
+            def: 'noThink', latexNeed: false, tools: 'none', recall: false
+          })
+          ctx.ai.registerCtx({
+            ctx: AI_CTX_JUDGE,
+            name: '费曼晶体 · 三维判定',
+            desc: '按准确性/连贯性/通俗性三维打分的讲解评审（必须给置信度，拿不准就交回自评）',
+            def: 'think', latexNeed: false, tools: 'none', recall: false
+          })
+        }
+      } catch (e) { /* 注册失败不影响本地模板模式 */ }
       try {
         ctx.log('费曼晶体 v' + VERSION + ' 就绪（AI ' + (aiOk(ctx) ? '可用' : '未配置，走本地模板 + 自评') + '）')
       } catch (e) { /* 忽略 */ }

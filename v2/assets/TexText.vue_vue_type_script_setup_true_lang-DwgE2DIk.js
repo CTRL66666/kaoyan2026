@@ -1,1 +1,0 @@
-import{Tex as e}from"./tex-Db3PNH9q.js";import{n as s,t as n,k as r,A as t}from"./vendor-BJlqzsgB.js";const o=["innerHTML"],a=s({__name:"TexText",props:{source:{}},setup(s){const a=s,p=r(()=>e.renderInline(a.source||""));return(e,s)=>(t(),n("span",{class:"tex-text",innerHTML:p.value},null,8,o))}});export{a as _};

@@ -24,7 +24,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.2.0'
+  let VERSION = '1.4.0'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -117,6 +117,37 @@
   function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
+
+  /* ════════════════════════ 站内图标（2026-10-22 用户要求：摆脱原生 emoji） ════════════════════════
+   * 为什么不留 emoji：emoji 是**字体渲染**的，同一个字符在 Win/Android/iOS 上是三套画风，
+   * 尺寸、基线、颜色都不受控 —— 混在用线性 SVG 做的站内 UI 里就像贴纸；夜间主题下更明显
+   * （emoji 自带彩色，卡片暗下去它还是亮的）。
+   *
+   * 取值顺序（都是站内公开层，不碰 Store/AI/App 这些内部单例）：
+   *   ① ctx.U.icon(key) —— 与站内视觉逐像素一致、随主题换色、带 .ci 基线样式；
+   *   ② window.ICONS[key] —— globals 注册的同一张图标表。**必须有这一级**：
+   *      manifest 的 icon 在 register() 时就求值（比 init(ctx) 早），那时还没有 ctx；
+   *   ③ 都取不到 → 返回空串。调用方对「纯图标按钮」都要写 `I(k) || '文字'` 兜底，
+   *      否则图标缺了按钮会变成空白方块（点了没反馈的那种"坏按钮"）。
+   *
+   * 铁律：key 必须是 site icons.ts SPEC 里真实存在的语义名（传错静默得空串，不报错）。
+   * 本文件用到的每一个 key 都已对照 SPEC 核过。 */
+  let HOST_CTX = null
+  function I(key, cls) {
+    try {
+      if (HOST_CTX && HOST_CTX.U && typeof HOST_CTX.U.icon === 'function') {
+        let s = HOST_CTX.U.icon(key, cls)
+        if (s) return s
+      }
+    } catch (e) { /* 宿主图标层异常 → 走下一级 */ }
+    try {
+      if (typeof window !== 'undefined' && window.ICONS && window.ICONS[key]) {
+        return String(window.ICONS[key]).replace('<svg', '<svg class="ci ' + (cls || '') + '"')
+      }
+    } catch (e) { /* 无 window 环境（单测 teardown）*/ }
+    return ''
+  }
+
   function uid(p) { return (p || 's') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
   function dkey(t) {
     let d = t ? new Date(t) : new Date()
@@ -222,11 +253,14 @@
   /* ════════════════════════ 3. 样式（注入 <style>，单例） ════════════════════════ */
 
   let CSS = [
-    '.ivs-root{--iv-acc:var(--blue,#2563eb);--iv-acc2:var(--purple,#7c3aed);--iv-ink:var(--text-primary,#1e2a4a);'
+    /* 令牌块：必须同时声明在模态层上 —— 弹窗挂 document.body（`.ivs-modal`），在 `.ivs-root` 之外，
+     * 只写在 root 上时弹窗内 var(--iv-*) 全部悬空 → 背景/边框/文字色一起失效、整块半透明。
+     * 版式（出血负 margin / min-height / flex）只属于 root，不要带给模态层。 */
+    '.ivs-root,.ivs-modal{--iv-acc:var(--blue,#2563eb);--iv-acc2:var(--purple,#7c3aed);--iv-ink:var(--text-primary,#1e2a4a);'
       + '--iv-sub:var(--text-muted,#7c8aa8);--iv-ink2:var(--text-secondary,#4a5670);--iv-line:var(--line,#d8dde8);'
       + '--iv-bg:var(--surface,#fff);--iv-soft:var(--surface-muted,#f6f8fc);--iv-ok:var(--ok,#0f7c4a);'
-      + '--iv-warn:var(--warn,#c47615);--iv-danger:var(--danger,#d83b3b);--iv-ease:cubic-bezier(.22,.8,.26,1);'
-      + 'color:var(--iv-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
+      + '--iv-warn:var(--warn,#c47615);--iv-danger:var(--danger,#d83b3b);--iv-ease:cubic-bezier(.22,.8,.26,1)}',
+    '.ivs-root{color:var(--iv-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
       + 'margin:calc(var(--vp-t,16px)*-1) calc(var(--vp-x,16px)*-1) calc(var(--vp-b,24px)*-1);'
       + 'min-height:calc(100vh - 59px);display:flex;flex-direction:column;background:var(--iv-soft)}',
     /* 吸顶页眉（机制与原生模块逐条对齐：hero 直挂 root、祖先零 overflow、scroll 切压缩态） */
@@ -359,8 +393,9 @@
     '.ivs-hist .b{flex:1;min-width:0}',
     '.ivs-hist .t{font-weight:700;font-size:13.5px}',
     '.ivs-hist .m{font-size:11.5px;color:var(--iv-sub);margin-top:2px}',
-    /* 模态（回放用） */
+    /* 模态（回放用）：字体/文字色自带 —— 挂在 body 上，不继承 .ivs-root 的排版 */
     '.ivs-modal{position:fixed;inset:0;z-index:9000;display:none;place-items:center;padding:22px;'
+      + 'color:var(--iv-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
       + 'background:rgba(10,16,30,.5);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}',
     '.ivs-modal.on{display:grid;animation:ivs-fade .2s ease both}',
     '.ivs-modal-box{width:min(680px,94vw);max-height:86vh;overflow:auto;background:var(--iv-bg);border:1px solid var(--iv-line);'
@@ -374,6 +409,15 @@
     '.ivs-msg2 .r{font-weight:800;flex:0 0 auto;font-size:11px;padding:2px 8px;border-radius:999px;height:fit-content}',
     '.ivs-msg2.prof .r{background:var(--iv-soft);color:var(--iv-sub);border:1px solid var(--iv-line)}',
     '.ivs-msg2.user .r{background:color-mix(in oklab,var(--iv-acc) 12%,transparent);color:var(--iv-acc)}',
+/* 【2026-10-22】.ivs-h 是 display:flex + gap:8px —— 图标再留 margin-right:5px 就是
+ * 「gap + margin」双付 13px（真机量过）。间距交给 gap，图标自己清零。
+ * .ivs-f>span 里是纯文字（无图标），那条留着当兜底，不影响布局。 */
+'.ivs-h svg.ci{margin-right:0}', '.ivs-f>span svg.ci{margin-right:5px}',
+    '.ivs-btn svg.ci{margin-right:3px}',
+    '.ivs-hchip svg.ci{margin-right:0;vertical-align:-2px}',
+    '.ivs-ava svg.ci{margin-right:0}',
+    /* 计时 chip 是 12px 等宽数字，图标跟着缩并抬 2px 对齐数字基线 */
+    '.ivs-clock svg.ci{width:12px;height:12px;margin-right:3px;vertical-align:-2px}',
     '@media (max-width:560px){.ivs-room{height:calc(100vh - 260px)}.ivs-msg{max-width:96%}'
       + '.ivs-scorebig b{font-size:42px}.ivs-hchip:nth-child(n+4){display:none}}',
     '@media (prefers-reduced-motion:reduce){.ivs-root *{animation:none!important;transition:none!important}}'
@@ -388,18 +432,33 @@
     document.head.appendChild(st)
   }
 
-  /* 页眉图标：声波/对话气泡（面试 = 对话） */
-  let MARK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
-    + '<path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H8l-4 3V6a3 3 0 0 1 3-3h5z"/>'
+  /* 页眉图标：声波/对话气泡（面试 = 对话）。
+   * 字形抽成 MARK_PATHS：**页眉徽标与模块图标共用一份 path** —— 分开抄两份，
+   * 改一处忘另一处，两枚标就会慢慢画歪。 */
+  let MARK_PATHS = '<path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H8l-4 3V6a3 3 0 0 1 3-3h5z"/>'
     + '<path d="M16 8h1a3 3 0 0 1 3 3v4l2 1.5V11a5 5 0 0 0-5-5h-1"/>'
-    + '<path d="M9.5 8.5v3M12.5 8.5v3"/></svg>'
+    + '<path d="M9.5 8.5v3M12.5 8.5v3"/>'
+  let MARK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
+    + MARK_PATHS + '</svg>'
+  /* 模块图标＝页眉同款声波标，外面再包一层**蓝→紫渐变圆角砖**（白字形）。
+   * 为什么砖要自己画：页眉那枚是 `div.ivs-mark` 的 CSS 渐变 + 里层描边 svg，
+   * 导航栏只吃一段 SVG 串（没有 CSS 可依附），底色与白描边都得写进 svg。
+   * 24 格 → 48 格：translate(9.6 9.6) scale(1.2) 正好缩进砖的内边距。
+   * 描边 1.9 → 2.6：22px 槽里 1.9*1.2*22/48 ≈ 1.0px 会糊，2.6 才与邻居线性图标同字重。
+   * 渐变 id 带插件前缀（ivMarkG）：多插件同名 id 会让后注册的砖抢走前面的填充。 */
+  let MARK_TILE = '<svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">'
+    + '<defs><linearGradient id="ivMarkG" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#7C3AED"/></linearGradient></defs>'
+    + '<rect width="48" height="48" rx="13" fill="url(#ivMarkG)"/>'
+    + '<g transform="translate(9.6 9.6) scale(1.2)" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">'
+    + MARK_PATHS + '</g></svg>'
 
   function heroChips(ctx, live) {
     let st = statsOf(sessionsGet(ctx))
     return '<span class="ivs-hchip">面试 <b>' + st.n + '</b> 场</span>'
       + '<span class="ivs-hchip">平均 <b>' + (st.avg == null ? '—' : st.avg) + '</b> 分</span>'
       + '<span class="ivs-hchip">最佳 <b>' + (st.best ? st.best.total : '—') + '</b></span>'
-      + (live ? '<span class="ivs-hchip live">● 面试进行中</span>' : '')
+      + (live ? '<span class="ivs-hchip live">' + I('cpDot') + '面试进行中</span>' : '')
   }
 
   function bindStuck(root) {
@@ -430,6 +489,7 @@
   /* ════════════════════════ 4. 主挂载：console → room → report ════════════════════════ */
 
   function mountMain(el, ctx) {
+    HOST_CTX = ctx
     injectStyles()
     let sess = null   /* 当前面试：{subject,pressure,mode,rounds,transcript[],exchanges,startAt} */
     let busy = false  /* AI 正在生成时锁输入 */
@@ -452,10 +512,10 @@
       hero.innerHTML = '<div class="ivs-mark">' + MARK_SVG + '</div>'
         + '<div class="ivs-titles"><div class="ivs-title">复试模拟舱 <em>v' + VERSION + '</em></div>'
         + '<div class="ivs-sub2">' + (pitch
-          ? '🎤 自我介绍专项 · ' + (pitch.report ? '点评报告' : '60 秒陈述')
+          ? I('volume') + '自我介绍专项 · ' + (pitch.report ? '点评报告' : '60 秒陈述')
           : sess
             ? esc(sess.subject) + ' · ' + esc(sess.mode || '专业面') + ' · ' + esc(sess.pressure) + '考官'
-            + (sess.bookTitle ? ' · 📖 ' + esc(trunc(sess.bookTitle, 10)) : '')
+            + (sess.bookTitle ? ' · ' + I('bookOpen') + ' ' + esc(trunc(sess.bookTitle, 10)) : '')
             + ' · 第 ' + Math.min(sess.exchanges + 1, sess.rounds) + '/' + sess.rounds + ' 问'
             : '多轮压力面试 · 考官追问 · 四维成绩单') + '</div></div>'
         + '<div class="ivs-chips">' + heroChips(ctx, !!sess && !sess.report) + '</div>'
@@ -489,7 +549,7 @@
         return Array.isArray(l) && l.length ? l[0] : null
       })()
       return '<section class="ivs-card" style="--i:0">'
-        + '<div class="ivs-h">🎙️ 面试设置 <em>' + (aiReady(ctx) ? 'AI 已配置' : 'AI 未配置') + '</em></div>'
+        + '<div class="ivs-h">' + I('cpChat') + '面试设置 <em>' + (aiReady(ctx) ? 'AI 已配置' : 'AI 未配置') + '</em></div>'
         + '<div class="ivs-desc">考官会基于你的每轮回答<strong>层层追问</strong>（压力档会戳穿空话）。'
         + '回答可以口语化 —— 考官看的是你怎么想，不是背书。</div>'
         + '<div class="ivs-grid">'
@@ -508,26 +568,26 @@
         + (function () {
           /* 资料库材料包：选中后考官围绕该书讲义提问（英语面不适用 —— 避免中英文混杂） */
           let books = nativeBooks(ctx).slice(0, 10)
-          let h = '<div class="ivs-f" style="grid-column:1/-1"><span>📖 资料库材料包（可选 · 站内数据接入）'
+          let h = '<div class="ivs-f" style="grid-column:1/-1"><span>' + I('bookOpen') + '资料库材料包（可选 · 站内数据接入）'
             + (books.length ? '' : ' —— 资料库为空，去「资料库」导入讲义后可用') + '</span>'
             + '<div class="ivs-seg" data-f="book">'
             + '<button data-act="book" data-b="" class="' + (!bookId ? 'on' : '') + '">不使用</button>'
             + books.map(function (b) {
               return '<button data-act="book" data-b="' + esc(b.id || '') + '" class="' + (bookId === b.id ? 'on' : '') + '"'
-                + ' title="' + esc(b.title || '') + '">📖 ' + esc(trunc(b.title || '未命名', 12)) + '</button>'
+                + ' title="' + esc(b.title || '') + '">' + I('bookOpen') + ' ' + esc(trunc(b.title || '未命名', 12)) + '</button>'
             }).join('') + '</div></div>'
           return h
         })()
         + '</div>'
         + '<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">'
-        + '<button class="ivs-btn primary" data-act="start" style="height:42px;padding:0 26px;font-size:14.5px"' + (aiReady(ctx) ? '' : ' disabled') + '>▶ 进入面试间</button>'
-        + '<button class="ivs-btn" data-act="pitch"' + (aiReady(ctx) ? '' : ' disabled') + '>🎤 自我介绍专项</button>'
+        + '<button class="ivs-btn primary" data-act="start" style="height:42px;padding:0 26px;font-size:14.5px"' + (aiReady(ctx) ? '' : ' disabled') + '>' + I('cpPlay') + '进入面试间</button>'
+        + '<button class="ivs-btn" data-act="pitch"' + (aiReady(ctx) ? '' : ' disabled') + '>' + I('volume') + '自我介绍专项</button>'
         + '<span class="ivs-note" style="margin:0">' + (aiReady(ctx)
           ? (lastPitch ? '上次自介 ' + lastPitch.total + ' 分 · ' : '') + '开场白与追问全部由 AI 现场生成'
           : '先在设置里配置 AI 接口') + '</span>'
         + '</div></section>'
         + (st.n
-          ? '<section class="ivs-card" style="--i:1"><div class="ivs-h">📜 编年史 <em>' + st.n + ' 场 · 平均 ' + (st.avg == null ? '—' : st.avg) + ' 分</em></div>'
+          ? '<section class="ivs-card" style="--i:1"><div class="ivs-h">' + I('archive') + '编年史 <em>' + st.n + ' 场 · 平均 ' + (st.avg == null ? '—' : st.avg) + ' 分</em></div>'
           + trendSpark(list)
           + list.map(function (s, i) { return histHtml(s, i) }).join('') + '</section>'
           : '<section class="ivs-card" style="--i:1"><div class="ivs-empty"><b>还没有面试记录</b>完成第一场后，成绩单与回放会存在这里（随账号同步）。</div></section>')
@@ -538,7 +598,7 @@
         + '<div class="n">' + (s.total == null ? '—' : s.total) + '</div>'
         + '<div class="b"><div class="t">' + esc(s.subject) + ' · ' + esc(s.pressure) + '考官</div>'
         + '<div class="m">' + fmtTime(s.at) + ' · ' + s.transcript.filter(function (t) { return t.role === 'user' }).length + ' 轮作答'
-        + (s.bookTitle ? ' · 📖' : '')
+        + (s.bookTitle ? ' · ' + I('bookOpen') : '')
         + (s.summary ? ' · ' + esc(trunc(s.summary, 40)) : '') + '</div></div>'
         + '</div>'
     }
@@ -550,14 +610,14 @@
       return '<section class="ivs-card" style="--i:0;padding-bottom:12px">'
         + '<div class="ivs-roombar">'
         + '<span class="ivs-round">第 ' + Math.min(sess.exchanges + 1, sess.rounds) + ' / ' + sess.rounds + ' 问</span>'
-        + '<span class="ivs-clock">⏱ ' + mins + ':' + secs + '</span>'
+        + '<span class="ivs-clock">' + I('clock') + mins + ':' + secs + '</span>'
         + '<span style="flex:1"></span>'
         + '<button class="ivs-btn sm danger" data-act="finish">交卷评分</button>'
         + '</div>'
         + '<div class="ivs-msgs" data-f="msgs">' + sess.transcript.map(msgHtml).join('')
         + (busy ? typingHtml() : '') + '</div>'
         + (streamDead ? '<div style="display:flex;gap:9px;align-items:center;margin-top:9px">'
-          + '<button class="ivs-btn sm" data-act="retry">🔁 重试（考官掉线）</button>'
+          + '<button class="ivs-btn sm" data-act="retry">' + I('refresh') + '重试（考官掉线）</button>'
           + '<span class="ivs-note" style="margin:0">' + esc(streamDead) + '</span></div>' : '')
         + '<div class="ivs-compose">'
         + '<textarea class="ivs-ta" data-f="answer" placeholder="口述你的回答…（Enter 发送，Shift+Enter 换行）"'
@@ -568,11 +628,11 @@
 
     function msgHtml(t, i) {
       return '<div class="ivs-msg ' + t.role + '" style="--i:' + (i % 12) + '">'
-        + '<div class="ivs-ava">' + (t.role === 'prof' ? '👨‍🏫' : '🎓') + '</div>'
+        + '<div class="ivs-ava">' + (t.role === 'prof' ? I('cpChat') : I('graduation')) + '</div>'
         + '<div class="ivs-bubble">' + esc(t.text) + '</div></div>'
     }
     function typingHtml() {
-      return '<div class="ivs-msg prof"><div class="ivs-ava">👨‍🏫</div>'
+      return '<div class="ivs-msg prof"><div class="ivs-ava">' + I('cpChat') + '</div>'
         + '<div class="ivs-typing"><i></i><i></i><i></i></div></div>'
     }
 
@@ -582,7 +642,7 @@
       let prev = sess.prev
       let totalDelta = prev && prev.total != null ? r.total - prev.total : null
       return '<section class="ivs-card" style="--i:0">'
-        + '<div class="ivs-h">📋 面试成绩单 <em>' + esc(sess.subject) + ' · ' + esc(sess.mode || '专业面') + ' · ' + esc(sess.pressure) + '考官</em></div>'
+        + '<div class="ivs-h">' + I('fileText') + '面试成绩单 <em>' + esc(sess.subject) + ' · ' + esc(sess.mode || '专业面') + ' · ' + esc(sess.pressure) + '考官</em></div>'
         + '<div class="ivs-scorebig"><b data-count="' + r.total + '">0</b><span>/ 100 · ' + fmtTime(sess.at)
         + (totalDelta != null ? ' · 较上次 <b style="color:' + (totalDelta >= 0 ? 'var(--iv-ok)' : 'var(--iv-danger)') + '">' + (totalDelta >= 0 ? '+' : '') + totalDelta + '</b>' : '')
         + '</span></div>'
@@ -599,14 +659,14 @@
           ? '<div style="margin-top:10px">' + r.comments.map(function (c) { return '<div class="ivs-cmt">' + esc(c) + '</div>' }).join('') + '</div>'
           : '')
         + adviceFor(r).map(function (a, i) {
-          return '<div class="ivs-advice" style="animation-delay:' + (i * 90) + 'ms"><b>🎯 ' + esc(a.label) + ' <em>' + a.score + ' 分 · 薄弱</em></b>'
+          return '<div class="ivs-advice" style="animation-delay:' + (i * 90) + 'ms"><b>' + I('compass') + esc(a.label) + ' <em>' + a.score + ' 分 · 薄弱</em></b>'
             + '<p>' + esc(a.tip) + '</p></div>'
         }).join('')
         + '<div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:14px">'
-        + '<button class="ivs-btn primary" data-act="again">🔄 再来一场</button>'
-        + '<button class="ivs-btn" data-act="transcript">📜 回看本场对话</button>'
-        + '<button class="ivs-btn" data-act="export">📤 导出成绩单</button>'
-        + '<button class="ivs-btn" data-act="home">🏠 回控制台</button>'
+        + '<button class="ivs-btn primary" data-act="again">' + I('refresh') + '再来一场</button>'
+        + '<button class="ivs-btn" data-act="transcript">' + I('cpChat') + '回看本场对话</button>'
+        + '<button class="ivs-btn" data-act="export">' + I('shareOut') + '导出成绩单</button>'
+        + '<button class="ivs-btn" data-act="home">' + I('cpHome') + '回控制台</button>'
         + '</div></section>'
     }
 
@@ -631,7 +691,7 @@
       })
       let text = lines.join('\n')
       function fallback() {
-        let m = openModal('<div class="ivs-h">📤 成绩单 Markdown<button class="ivs-btn sm ivs-x" data-x="1">×</button></div>'
+        let m = openModal('<div class="ivs-h">' + I('shareOut') + '成绩单 Markdown<button class="ivs-btn sm ivs-x" data-x="1">×</button></div>'
           + '<textarea class="ivs-ta" style="width:100%;height:300px;margin-top:10px;font-size:12px">' + esc(text) + '</textarea>')
         m.box.addEventListener('click', function (ev) { if (ev.target && ev.target.dataset && ev.target.dataset.x) m.close() })
       }
@@ -674,7 +734,7 @@
     function pitchHtml() {
       let pct = Math.round(pitch.left / PITCH_SECS * 100)
       return '<section class="ivs-card" style="--i:0">'
-        + '<div class="ivs-h">🎤 自我介绍专项 <em>' + PITCH_SECS + ' 秒限时 · 读完自动提交</em></div>'
+        + '<div class="ivs-h">' + I('volume') + '自我介绍专项 <em>' + PITCH_SECS + ' 秒限时 · 读完自动提交</em></div>'
         + '<div class="ivs-desc">像真实复试那样<strong>掐表陈述</strong>：结构（开场-主体-收尾）、内容（亮点具体、扣方向）、'
         + '语言（简洁、无口头语）。提交后 AI 按三维打分并给一版改进稿。</div>'
         + '<div class="ivs-pitchbar"><div class="ivs-track"><div class="ivs-fill' + (pct < 34 ? ' low' : '') + '" data-w="' + pct + '" style="width:' + pct + '%"></div></div>'
@@ -682,7 +742,7 @@
         + '<textarea class="ivs-ta" data-f="pitch" placeholder="写下或粘贴你的自我介绍，掐着 60 秒默读一遍…"' + (busy ? ' disabled' : '') + '>'
         + esc(pitch.text || '') + '</textarea>'
         + '<div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:11px">'
-        + '<button class="ivs-btn primary" data-act="pitch-submit"' + (busy ? ' disabled' : '') + '>✔ 提交点评</button>'
+        + '<button class="ivs-btn primary" data-act="pitch-submit"' + (busy ? ' disabled' : '') + '>' + I('check') + '提交点评</button>'
         + '<button class="ivs-btn" data-act="pitch-back">返回控制台</button>'
         + (busy ? '<span class="ivs-note" style="margin:0">教练批改中…</span>' : '')
         + '</div></section>'
@@ -691,7 +751,7 @@
     function pitchResultHtml() {
       let r = pitch.report
       return '<section class="ivs-card" style="--i:0">'
-        + '<div class="ivs-h">📋 自介点评 <em>' + fmtTime(pitch.at) + '</em></div>'
+        + '<div class="ivs-h">' + I('fileText') + '自介点评 <em>' + fmtTime(pitch.at) + '</em></div>'
         + '<div class="ivs-scorebig"><b data-count="' + r.total + '">0</b><span>/ 100 · 自我介绍专项</span></div>'
         + PITCH_DIMS.map(function (d, i) {
           let v = clamp(num(r.scores && r.scores[d.key], 0), 0, 100)
@@ -701,10 +761,10 @@
         + (r.comments && r.comments.length
           ? '<div style="margin-top:10px">' + r.comments.map(function (c) { return '<div class="ivs-cmt">' + esc(c) + '</div>' }).join('') + '</div>'
           : '')
-        + (r.rewrite ? '<div class="ivs-advice"><b>✍️ AI 改进稿</b><p>' + esc(r.rewrite) + '</p></div>' : '')
+        + (r.rewrite ? '<div class="ivs-advice"><b>' + I('cpPencil') + 'AI 改进稿</b><p>' + esc(r.rewrite) + '</p></div>' : '')
         + '<div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:14px">'
-        + '<button class="ivs-btn primary" data-act="pitch-again">🔄 再练一次</button>'
-        + '<button class="ivs-btn" data-act="pitch-back">🏠 回控制台</button>'
+        + '<button class="ivs-btn primary" data-act="pitch-again">' + I('refresh') + '再练一次</button>'
+        + '<button class="ivs-btn" data-act="pitch-back">' + I('cpHome') + '回控制台</button>'
         + '</div></section>'
     }
 
@@ -783,7 +843,7 @@
       try { ctx.config('subject', subject); ctx.config('pressure', pressure); ctx.config('mode', mode); ctx.config('rounds', rounds); ctx.data('ivsBook', bookId) } catch (e) { }
       sess = { id: uid('iv'), subject: subject, pressure: pressure, mode: mode, rounds: rounds, transcript: [], exchanges: 0, startAt: Date.now(), at: Date.now(), report: null, bookId: book ? book.id : '', bookTitle: book ? flat(book.title || '') : '' }
       elapsed = 0
-      timer = setInterval(function () { elapsed++; let c = bodyEl.querySelector('[data-f=clock]'); if (c) c.textContent = '⏱ ' + String(Math.floor(elapsed / 60)).padStart(2, '0') + ':' + String(elapsed % 60).padStart(2, '0') }, 1000)
+      timer = setInterval(function () { elapsed++; let c = bodyEl.querySelector('[data-f=clock]'); if (c) c.innerHTML = I('clock') + String(Math.floor(elapsed / 60)).padStart(2, '0') + ':' + String(elapsed % 60).padStart(2, '0') }, 1000)
       paint()
       ask('面试开始。请向考生提出第一个复试问题（可从自我介绍或专业基础切入）。只输出你的发言。')
     }
@@ -931,7 +991,7 @@
       'pitch-again': function () { pitch = null; startPitch() },
       'pitch-back': function () { stopPitchTimer(); pitch = null; paint() },
       transcript: function () {
-        let m = openModal('<div class="ivs-h">📜 本场对话<button class="ivs-btn sm ivs-x" data-x="1">×</button></div>'
+        let m = openModal('<div class="ivs-h">' + I('cpChat') + '本场对话<button class="ivs-btn sm ivs-x" data-x="1">×</button></div>'
           + '<div style="margin-top:10px">' + sess.transcript.map(function (t) {
             return '<div class="ivs-msg2 ' + t.role + '"><span class="r">' + (t.role === 'prof' ? '考官' : '考生') + '</span><span>' + esc(t.text) + '</span></div>'
           }).join('') + '</div>')
@@ -940,7 +1000,7 @@
       replay: function (a) {
         let s = sessionsGet(ctx).filter(function (x) { return x.id === a.dataset.id })[0]
         if (!s) return
-        let m = openModal('<div class="ivs-h">📜 ' + esc(s.subject) + ' · ' + s.total + ' 分<button class="ivs-btn sm ivs-x" data-x="1">×</button></div>'
+        let m = openModal('<div class="ivs-h">' + I('fileText') + esc(s.subject) + ' · ' + s.total + ' 分<button class="ivs-btn sm ivs-x" data-x="1">×</button></div>'
           + '<div class="ivs-note" style="margin:0 0 10px">' + fmtTime(s.at) + ' · ' + esc(s.pressure) + '考官</div>'
           + s.transcript.map(function (t) {
             return '<div class="ivs-msg2 ' + t.role + '"><span class="r">' + (t.role === 'prof' ? '考官' : '考生') + '</span><span>' + esc(t.text) + '</span></div>'
@@ -987,7 +1047,8 @@
       + '编年史回放与平均分走势、薄弱维度建议、自我介绍专项（60 秒限时 + AI 改进稿）、成绩单导出；'
       + 'v1.2 接入站内资料库：可选一本讲义当「材料包」，考官围绕你的材料提问（专业课复试对口）。',
     tools: [
-      { id: T_MAIN, title: '复试模拟舱', icon: '🎙️', mount: mountMain }
+      /* 【v1.3】模块图标换品牌砖（蓝→紫渐变 + 白声波），与页眉同款字形 */
+      { id: T_MAIN, title: '复试模拟舱', icon: MARK_TILE, mount: mountMain }
     ],
     config: [
       { key: 'subject', label: '报考方向（如 计算机/金融/机械）', type: 'text', default: '计算机' },
@@ -1008,7 +1069,7 @@
           if (k === tk) return
           ctx.keep.set('lastQuizNudge', tk)
           if (typeof ctx.notify === 'function') {
-            ctx.notify({ title: '🎙️ 刚刷完题，趁热练一轮复试？', body: '面试间的追问会逼你把「会做题」讲成「讲得清」。', level: 'info', timeout: 12000, onClick: function () { ctx.api.goTool(T_MAIN) } })
+            ctx.notify({ title: '刚刷完题，趁热练一轮复试？', body: '面试间的追问会逼你把「会做题」讲成「讲得清」。', level: 'info', timeout: 12000, onClick: function () { ctx.api.goTool(T_MAIN) } })
           }
         } catch (e) { /* 钩子失败绝不影响主流程 */ }
       }
@@ -1016,6 +1077,7 @@
     memory: '用户装有「复试模拟舱」插件：可随时进行多轮 AI 压力面试（工具 → 复试模拟舱）。'
       + '用户提到「复试」「面试」「自我介绍」时，建议他去模拟舱练，并把成绩单拿出来复盘。',
     init: function (ctx) {
+      HOST_CTX = ctx
       /* 声明自己的 AI 场景：注册后才吃得到站内「设置 → AI 思考模式」的逐场景档位、
        * 公式契约（latexNeed）与用量分桶名。失败不阻断装载（老版本站点没有这个方法）。 */
       try {

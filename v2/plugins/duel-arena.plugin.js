@@ -4,6 +4,10 @@
  * 干什么：把刷题变成 PvE 决斗 —— AI 生成选择题，你和天梯上的 AI 对手竞速对答，
  *         ELO 天梯晋级，「心魔」Boss 在高分段等你。quizDone 钩子给护盾奖励。
  *
+ * v1.2.1（2026-10-22）：**模块图标换成页眉同款品牌砖**（橙→红渐变圆角砖 + 白色四向箭头）。
+ *   两件事只有在真机才暴露：① 导航栏只吃"一段 SVG 串"，砖没有外层 div 可挂 CSS 背景 → 砖得画进 SVG；
+ *   ② 站内 U.rawIcon 的白名单原来不认 `linearGradient/stop`，会被剥成"fill 指向不存在的定义"= 砖透明。
+ *
  * v1.2 站内数据接入（只读优先，写回单点）：
  *   · 出题来源四选一：AI 智能 / 站内题库（Store.quizBank 收藏题直接抽，零 AI）/
  *     题卷挑战（sprintData.mockExams 整卷选择题）/ 弱项突击（AI 读 mistakes 错题本
@@ -30,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.2.0'
+  let VERSION = '1.2.1'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -46,44 +50,44 @@
 
   /* 段位称号：按 ELO 取第一个命中的；弑魔者无视段位。起点 1000 = 见习斗士 */
   let TITLES = [
-    { min: 2300, icon: '🌑', name: '心魔共舞者' },
-    { min: 2150, icon: '🌅', name: '半步上岸' },
-    { min: 1950, icon: '👻', name: '图书馆传说' },
-    { min: 1750, icon: '🧤', name: '满分手套继承者' },
-    { min: 1550, icon: '⛏️', name: '真题大师' },
-    { min: 1350, icon: '🧩', name: '套路猎手' },
-    { min: 1200, icon: '📓', name: '解题熟手' },
-    { min: 1080, icon: '📚', name: '自习室新星' },
-    { min: 0, icon: '🐣', name: '见习斗士' }
+    { min: 2300, icon: 'moon', name: '心魔共舞者' },
+    { min: 2150, icon: 'sun', name: '半步上岸' },
+    { min: 1950, icon: 'books', name: '图书馆传说' },
+    { min: 1750, icon: 'cpStar4', name: '满分手套继承者' },
+    { min: 1550, icon: 'archive', name: '真题大师' },
+    { min: 1350, icon: 'puzzle', name: '套路猎手' },
+    { min: 1200, icon: 'ruler', name: '解题熟手' },
+    { min: 1080, icon: 'bookOpen', name: '自习室新星' },
+    { min: 0, icon: 'graduation', name: '见习斗士' }
   ]
 
   /* 成就徽章：cond(last, p) 判定；last 为上一场结算快照 */
   let BADGES = [
-    { id: 'first-blood', icon: '🩸', name: '首胜', desc: '赢第一场决斗', cond: function (l, p) { return p.wins >= 1 } },
-    { id: 'streak-3', icon: '🔥', name: '三连胜', desc: '连胜达到 3', cond: function (l, p) { return p.streak >= 3 } },
-    { id: 'streak-5', icon: '☄️', name: '五连胜', desc: '连胜达到 5', cond: function (l, p) { return p.streak >= 5 } },
-    { id: 'ko-win', icon: '💥', name: 'KO 取胜', desc: '把对手 HP 打空', cond: function (l) { return l.score === 1 && l.ko } },
-    { id: 'flawless', icon: '💎', name: '完胜', desc: '单场全部答对', cond: function (l) { return l.score === 1 && l.allCorrect } },
-    { id: 'swift', icon: '⚡', name: '快剑', desc: '单场 ≥5 题全对且平均 8 秒内', cond: function (l) { return l.score === 1 && l.allCorrect && l.answered >= 5 && l.avgUsed < 8 } },
-    { id: 'giant-killer', icon: '🎯', name: '以下克上', desc: '战胜 ELO 高你 300+ 的对手', cond: function (l) { return l.score === 1 && l.oppEloGap >= 300 } },
-    { id: 'boss-slayer', icon: '🗡️', name: '弑魔者', desc: '击败心魔', cond: function (l) { return l.score === 1 && l.oppBoss } },
-    { id: 'comeback', icon: '🛟', name: '绝地翻盘', desc: 'HP 低于 20 时获胜', cond: function (l) { return l.score === 1 && l.pHp > 0 && l.pHp < 20 } },
-    { id: 'veteran', icon: '🎖️', name: '身经百战', desc: '累计 10 场决斗', cond: function (l, p) { return p.wins + p.losses + p.draws >= 10 } }
+    { id: 'first-blood', icon: 'trophy', name: '首胜', desc: '赢第一场决斗', cond: function (l, p) { return p.wins >= 1 } },
+    { id: 'streak-3', icon: 'flame', name: '三连胜', desc: '连胜达到 3', cond: function (l, p) { return p.streak >= 3 } },
+    { id: 'streak-5', icon: 'rocket', name: '五连胜', desc: '连胜达到 5', cond: function (l, p) { return p.streak >= 5 } },
+    { id: 'ko-win', icon: 'cpBolt', name: 'KO 取胜', desc: '把对手 HP 打空', cond: function (l) { return l.score === 1 && l.ko } },
+    { id: 'flawless', icon: 'star', name: '完胜', desc: '单场全部答对', cond: function (l) { return l.score === 1 && l.allCorrect } },
+    { id: 'swift', icon: 'hourglass', name: '快剑', desc: '单场 ≥5 题全对且平均 8 秒内', cond: function (l) { return l.score === 1 && l.allCorrect && l.answered >= 5 && l.avgUsed < 8 } },
+    { id: 'giant-killer', icon: 'compass', name: '以下克上', desc: '战胜 ELO 高你 300+ 的对手', cond: function (l) { return l.score === 1 && l.oppEloGap >= 300 } },
+    { id: 'boss-slayer', icon: 'cpStar4', name: '弑魔者', desc: '击败心魔', cond: function (l) { return l.score === 1 && l.oppBoss } },
+    { id: 'comeback', icon: 'cpUndo', name: '绝地翻盘', desc: 'HP 低于 20 时获胜', cond: function (l) { return l.score === 1 && l.pHp > 0 && l.pHp < 20 } },
+    { id: 'veteran', icon: 'landmark', name: '身经百战', desc: '累计 10 场决斗', cond: function (l, p) { return p.wins + p.losses + p.draws >= 10 } }
   ]
 
   /* 天梯：命中率 acc 是「中等难度题的答对概率」，难度修正见 oppAnswersCorrect */
   let LADDER = [
-    { id: 'o1', name: '草稿纸学徒', icon: '🐣', elo: 800, acc: 0.55, tag: '刚翻开习题册的新手' },
-    { id: 'o2', name: '自习室常客', icon: '📚', elo: 950, acc: 0.62, tag: '闭馆音乐一响就走的那个' },
-    { id: 'o3', name: '错题本收藏家', icon: '📓', elo: 1100, acc: 0.68, tag: '本子很厚，分数很稳' },
-    { id: 'o4', name: '真题考古者', icon: '⛏️', elo: 1250, acc: 0.73, tag: '从 2003 年挖到去年的那种人' },
-    { id: 'o5', name: '倒计时信徒', icon: '⏳', elo: 1400, acc: 0.78, tag: '日历上全是红圈' },
-    { id: 'o6', name: '套路拆解师', icon: '🧩', elo: 1550, acc: 0.82, tag: '看见题干就拆骨架' },
-    { id: 'o7', name: '命题人影子', icon: '🎭', elo: 1700, acc: 0.86, tag: '出题思路比你还熟' },
-    { id: 'o8', name: '满分手套', icon: '🧤', elo: 1850, acc: 0.89, tag: '据说从没沾过墨水' },
-    { id: 'o9', name: '图书馆幽灵', icon: '👻', elo: 2000, acc: 0.92, tag: '座位固定，来去无声' },
-    { id: 'o10', name: '上岸者残影', icon: '🌅', elo: 2200, acc: 0.95, tag: '去年此时，他坐在这里' },
-    { id: 'boss', name: '心魔', icon: '🌑', elo: 2400, acc: 0.97, tag: '你所有「差一点」的总和', boss: true }
+    { id: 'o1', name: '草稿纸学徒', icon: 'cpPencil', elo: 800, acc: 0.55, tag: '刚翻开习题册的新手' },
+    { id: 'o2', name: '自习室常客', icon: 'bookOpen', elo: 950, acc: 0.62, tag: '闭馆音乐一响就走的那个' },
+    { id: 'o3', name: '错题本收藏家', icon: 'fileText', elo: 1100, acc: 0.68, tag: '本子很厚，分数很稳' },
+    { id: 'o4', name: '真题考古者', icon: 'archive', elo: 1250, acc: 0.73, tag: '从 2003 年挖到去年的那种人' },
+    { id: 'o5', name: '倒计时信徒', icon: 'hourglass', elo: 1400, acc: 0.78, tag: '日历上全是红圈' },
+    { id: 'o6', name: '套路拆解师', icon: 'puzzle', elo: 1550, acc: 0.82, tag: '看见题干就拆骨架' },
+    { id: 'o7', name: '命题人影子', icon: 'eye', elo: 1700, acc: 0.86, tag: '出题思路比你还熟' },
+    { id: 'o8', name: '满分手套', icon: 'cpStar4', elo: 1850, acc: 0.89, tag: '据说从没沾过墨水' },
+    { id: 'o9', name: '图书馆幽灵', icon: 'moon', elo: 2000, acc: 0.92, tag: '座位固定，来去无声' },
+    { id: 'o10', name: '上岸者残影', icon: 'sun', elo: 2200, acc: 0.95, tag: '去年此时，他坐在这里' },
+    { id: 'boss', name: '心魔', icon: 'cpBrain', elo: 2400, acc: 0.97, tag: '你所有「差一点」的总和', boss: true }
   ]
   let BOSS_UNLOCK_ELO = 1800    /* 心魔出现条件 */
   let UNLOCK_WINDOW = 250       /* 对手解锁窗口：elo ≥ 对手 elo - 250 可挑战 */
@@ -108,6 +112,46 @@
   function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
+
+  /* ════════════════════════ 站内图标（2026-10-22 用户要求：摆脱原生 emoji） ════════════════════════
+   * 为什么不留 emoji：emoji 是**字体渲染**的，同一个字符在 Win/Android/iOS 上是三套画风，
+   * 尺寸、基线、颜色都不受控 —— 混在用线性 SVG 做的站内 UI 里就像贴纸；夜间主题下更明显
+   * （emoji 自带彩色，卡片暗下去它还是亮的）。
+   *
+   * 取值顺序（都是站内公开层，不碰 Store/AI/App 这些内部单例）：
+   *   ① ctx.U.icon(key) —— 与站内视觉逐像素一致、随主题换色、带 .ci 基线样式；
+   *   ② window.ICONS[key] —— globals 注册的同一张图标表。**必须有这一级**：
+   *      manifest 的 icon 在 register() 时就求值（比 init(ctx) 早），那时还没有 ctx；
+   *   ③ 都取不到 → 返回空串。调用方对「纯图标按钮」都要写 `I(k) || '文字'` 兜底，
+   *      否则图标缺了按钮会变成空白方块（点了没反馈的那种"坏按钮"）。
+   *
+   * 铁律：key 必须是 site icons.ts SPEC 里真实存在的语义名（传错静默得空串，不报错）。
+   * 本文件用到的每一个 key 都已对照 SPEC 核过。 */
+  let HOST_CTX = null
+  function I(key, cls) {
+    try {
+      if (HOST_CTX && HOST_CTX.U && typeof HOST_CTX.U.icon === 'function') {
+        let s = HOST_CTX.U.icon(key, cls)
+        if (s) return s
+      }
+    } catch (e) { /* 宿主图标层异常 → 走下一级 */ }
+    try {
+      if (typeof window !== 'undefined' && window.ICONS && window.ICONS[key]) {
+        return String(window.ICONS[key]).replace('<svg', '<svg class="ci ' + (cls || '') + '"')
+      }
+    } catch (e) { /* 无 window 环境（单测 teardown）*/ }
+    return ''
+  }
+
+  /* 数据驱动图标口（见文件头说明）：三张图标表里存的是语义 key，不是成品标记 */
+  function ico(v) {
+    let s = String(v == null ? '' : v)
+    if (!s) return ''
+    if (s.charAt(0) === '<') return s
+    let svg = I(s)
+    return svg || esc(s)
+  }
+
   function uid(p) { return (p || 'm') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
   function dkey(t) {
     let d = t ? new Date(t) : new Date()
@@ -366,7 +410,7 @@
   }
 
   function titleOf(elo, badges) {
-    if (badges && badges.indexOf('boss-slayer') >= 0) return { icon: '🗡️', name: '弑魔者' }
+    if (badges && badges.indexOf('boss-slayer') >= 0) return { icon: 'cpStar4', name: '弑魔者' }
     for (let i = 0; i < TITLES.length; i++) if (elo >= TITLES[i].min) return TITLES[i]
     return TITLES[TITLES.length - 1]
   }
@@ -472,6 +516,16 @@
     '.du-rev.no summary .tag{color:var(--du-danger);background:color-mix(in oklab,var(--du-danger) 9%,transparent)}',
     '.du-rev .bd{border-top:1px dashed var(--du-line);padding:9px 13px;font-size:12.3px;line-height:1.75;color:var(--du-ink2);display:grid;gap:4px}',
     '.du-rev .bd .ex{color:var(--du-sub)}',
+    /* 【2026-10-22】上次回顾：折叠态只占一行，展开才出解析 —— 首屏不抢出题来源的位置 */
+    '.du-lastrev{border:1px solid var(--du-line);border-radius:14px;background:var(--du-card);margin-top:10px;overflow:hidden}',
+    '.du-lastrev>summary{display:flex;gap:9px;align-items:center;cursor:pointer;padding:11px 14px;list-style:none;font-size:12.8px}',
+    '.du-lastrev>summary::-webkit-details-marker{display:none}',
+    '.du-lastrev .t{font-weight:700;display:inline-flex;align-items:center;gap:5px;min-width:0}',
+    '.du-lastrev .m{margin-left:auto;color:var(--du-sub);font-size:11.5px;flex:0 0 auto}',
+    '.du-lastrev .drop{flex:0 0 auto;background:none;border:0;color:var(--du-sub);cursor:pointer;padding:2px 4px;border-radius:7px;display:inline-flex;align-items:center}',
+    '.du-lastrev .drop:hover{color:var(--du-danger);background:color-mix(in oklab,var(--du-danger) 10%,transparent)}',
+    '.du-lastrev .bd{border-top:1px dashed var(--du-line);padding:4px 14px 12px}',
+    '.du-lastrev .t svg.ci,.du-lastrev .drop svg.ci{width:14px;height:14px;margin-right:0}',
     '.du-title-tag{font-style:normal;font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px;'
       + 'background:linear-gradient(135deg,color-mix(in oklab,var(--du-gold) 18%,var(--du-bg)),var(--du-soft));'
       + 'border:1px solid color-mix(in oklab,var(--du-gold) 40%,var(--du-line));color:var(--du-gold)}',
@@ -594,6 +648,14 @@
     '.du-empty{border:1.6px dashed var(--du-line);border-radius:16px;padding:28px 18px;text-align:center;color:var(--du-sub);font-size:13px}',
     '.du-empty b{display:block;font-size:16px;color:var(--du-ink);margin-bottom:6px}',
     '.du-spark{width:100%;height:auto;display:block}',
+'.du-h svg.ci,.du-badge .t svg.ci,.du-hpname svg.ci,.du-opp .meta svg.ci{margin-right:0}',
+    '.du-hchip svg.ci{width:13px;height:13px;margin-right:4px;vertical-align:-2px}',
+    '.du-badge .t i svg.ci,.du-hpname .ic svg.ci{width:19px;height:19px;margin-right:0}',
+    '.du-opp .ic svg.ci,.du-daily .ic svg.ci{width:30px;height:30px;margin-right:0}',
+    '.du-btn svg.ci,.du-src b svg.ci{width:15px;height:15px;margin-right:4px}',
+    '.du-banner .big svg.ci{width:26px;height:26px;margin-right:8px;vertical-align:-4px}',
+    '.du-rev .tag svg.ci,.du-rev .bd .ex svg.ci{width:12px;height:12px;margin-right:3px;vertical-align:-2px}',
+    '.du-opp .lock svg.ci{width:12px;height:12px;margin-right:3px;vertical-align:-2px}',
     '@media (max-width:560px){.du-opts{grid-template-columns:1fr}.du-hchip:nth-child(n+4){display:none}'
       + '.du-hps{grid-template-columns:1fr}.du-vs{display:none}}',
     '@media (prefers-reduced-motion:reduce){.du-root *{animation:none!important;transition:none!important}}',
@@ -625,22 +687,38 @@
     document.head.appendChild(st)
   }
 
-  /* 页眉图标：交叉双剑 */
+  /* 品牌字形：四向箭头（上两枚斜出、下两枚折角）。
+   * 抽成 MARK_PATHS 是为了**页眉徽标与模块图标共用一份 path** —— 否则两处会慢慢画歪。 */
+  let MARK_PATHS = '<path d="M4 4l7 7M4 4v3M4 4h3"/><path d="M20 4l-7 7M20 4v3M20 4h-3"/>'
+    + '<path d="M6.5 13.5L4 20l6.5-2.5M17.5 13.5L20 20l-6.5-2.5"/>'
+  /* 页眉徽标：字形本身（颜色吃 currentColor，砖是 `.du-mark` 那个 div 的 CSS 渐变） */
   let MARK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
-    + '<path d="M4 4l7 7M4 4v3M4 4h3"/><path d="M20 4l-7 7M20 4v3M20 4h-3"/>'
-    + '<path d="M6.5 13.5L4 20l6.5-2.5M17.5 13.5L20 20l-6.5-2.5"/></svg>'
+    + MARK_PATHS + '</svg>'
+  /* 【2026-10-22 用户要求】模块图标（侧栏/抽屉/命令面板那枚）＝页眉同款商标：
+   * 橙→红渐变圆角砖 + 白色四向箭头。
+   * 为什么砖要自己画：页眉那枚是「div 背景渐变 + 里层 svg 字形」，而导航栏只吃**一段 SVG 串**
+   * （BottomNav 走 U.rawIcon 白名单净化后 v-html），没有外层 div 可以挂背景。
+   * 尺寸给 width/height="1em"：各宿主（导航 22~23px / 抽屉 30px / 命令面板 16px）都有
+   * `svg{width:…}` 规则覆盖属性值，em 只是"没有规则时"的兜底，别让它撑成默认 300px。
+   * 渐变 id 固定：同页多份实例都指向第一份定义，内容完全一样，视觉无差。 */
+  let MARK_TILE = '<svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">'
+    + '<defs><linearGradient id="duMarkG" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0" stop-color="#E06C18"/><stop offset="1" stop-color="#D93E2A"/></linearGradient></defs>'
+    + '<rect width="48" height="48" rx="13" fill="url(#duMarkG)"/>'
+    + '<g transform="translate(9.6 9.6) scale(1.2)" fill="none" stroke="#fff" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round">'
+    + MARK_PATHS + '</g></svg>'
 
   function heroChips(ctx, battle) {
     let p = profileGet(ctx)
     let t = titleOf(p.elo, p.badges)
-    return '<span class="du-hchip">' + t.icon + ' <b>' + t.name + '</b></span>'
+    return '<span class="du-hchip">' + ico(t.icon) + ' <b>' + t.name + '</b></span>'
       + '<span class="du-hchip">ELO <b>' + p.elo + '</b></span>'
       + '<span class="du-hchip">胜 <b>' + p.wins + '</b> / 负 ' + p.losses + (p.draws ? ' / 平 ' + p.draws : '') + '</span>'
       + '<span class="du-hchip">场次 <b>' + p.history.length + '</b></span>'
-      + (p.streak > 1 ? '<span class="du-hchip streak">🔥 连胜 <b>' + p.streak + '</b></span>' : '')
-      + (p.badges.length ? '<span class="du-hchip">🏅 <b>' + p.badges.length + '</b>/' + BADGES.length + '</span>' : '')
-      + (p.shield ? '<span class="du-hchip">🛡 quizDone 护盾已充能</span>' : '')
-      + (battle ? '<span class="du-hchip battle">● 决斗中</span>' : '')
+      + (p.streak > 1 ? '<span class="du-hchip streak">' + I('flame') + '连胜 <b>' + p.streak + '</b></span>' : '')
+      + (p.badges.length ? '<span class="du-hchip">' + I('trophy') + '<b>' + p.badges.length + '</b>/' + BADGES.length + '</span>' : '')
+      + (p.shield ? '<span class="du-hchip">' + I('cpCheck') + 'quizDone 护盾已充能</span>' : '')
+      + (battle ? '<span class="du-hchip battle">' + I('cpDot') + '决斗中</span>' : '')
   }
 
   function bindStuck(root) {
@@ -727,7 +805,7 @@
       let r = h.result === 'W' ? '<span class="r w">胜</span>' : h.result === 'L' ? '<span class="r l">负</span>'
         : h.result === 'F' ? '<span class="r l">降</span>' : '<span class="r d">平</span>'
       return '<div class="du-hist">' + r
-        + '<span class="m">' + (h.icon || '') + ' ' + esc(h.name) + ' · ' + esc(h.subj || '') + '</span>'
+        + '<span class="m">' + ico(h.icon) + ' ' + esc(h.name) + ' · ' + esc(h.subj || '') + '</span>'
         + '<span class="e">' + (h.delta > 0 ? '+' : '') + h.delta + ' → ' + h.elo + '</span>'
         + '<span class="e">' + fmtTime(h.ts) + '</span></div>'
     }).join('')
@@ -740,15 +818,39 @@
       let pickTxt = r.pick < 0 ? '超时未答' : ('你选 ' + letters[r.pick])
       return '<details class="du-rev ' + (r.ok ? 'ok' : 'no') + '">'
         + '<summary><span>' + (i + 1) + '. ' + esc(trunc(r.stem, 40)) + '</span>'
-        + '<span class="tag">' + (r.ok ? '✓ 对' : '✗ 错 · ' + esc(pickTxt)) + '</span></summary>'
+        + '<span class="tag">' + (r.ok ? I('check') + '对' : I('cpCross') + '错 · ' + esc(pickTxt)) + '</span></summary>'
         + '<div class="bd">'
         + r.options.map(function (o, j) {
-          let mark = j === r.answer ? ' ✅' : (j === r.pick ? ' ❌' : '')
+          let mark = j === r.answer ? ' ' + I('check') : (j === r.pick ? ' ' + I('cpCross') : '')
           return '<span>' + letters[j] + '. ' + esc(o) + mark + '</span>'
         }).join('')
-        + '<span class="ex">💡 ' + esc(r.explain) + '</span>'
+        + '<span class="ex">' + I('bulb') + esc(r.explain) + '</span>'
         + '</div></details>'
     }).join('')
+  }
+
+  /* 【2026-10-22 · 实用性】上一场的逐题解析存在 ctx.keep('lastReview')，
+   * 但原先**只有 set、全仓没有一处 get** —— 注释写着「解析不丢，随时回看」，
+   * 实际一刷新/切模块就再也找不回来，只有重打一场才能再看。等于白存。
+   * 这里补上读面：天梯页折叠一行「上次回顾」，展开即逐题解析。 */
+  function lastReviewOf(ctx) {
+    try {
+      let v = ctx.keep && typeof ctx.keep.get === 'function' ? ctx.keep.get(REVIEW_KEEP_KEY) : null
+      if (!v || typeof v !== 'object' || !Array.isArray(v.review) || !v.review.length) return null
+      return v
+    } catch (e) { return null }
+  }
+  function lastReviewHTML(ctx) {
+    let v = lastReviewOf(ctx)
+    if (!v) return ''
+    let ok = v.review.filter(function (r) { return r.ok }).length
+    let res = v.score === 1 ? '胜' : v.score === 0 ? '负' : v.score === 0.5 ? '平' : '—'
+    return '<details class="du-lastrev"><summary>'
+      + '<span class="t">' + I('bookOpen') + '上次回顾 · vs ' + ico(v.oppIcon) + ' ' + esc(v.oppName || '对手') + '</span>'
+      + '<span class="m">' + esc(v.subj || '') + ' · ' + res + ' · 答对 ' + ok + '/' + v.review.length
+      + (v.at ? ' · ' + fmtTime(v.at) : '') + '</span>'
+      + '<button class="drop" data-act="drop-review" title="清掉这条回顾">' + I('cpTrash') + '</button>'
+      + '</summary><div class="bd">' + reviewHTML(v.review) + '</div></details>'
   }
 
   function oppCard(c, i) {
@@ -756,11 +858,11 @@
     let lockMsg = o.boss ? ('ELO ' + BOSS_UNLOCK_ELO + ' 解锁心魔') : ('ELO ' + (o.elo - UNLOCK_WINDOW) + ' 解锁')
     return '<div class="du-opp' + (c.locked ? ' locked' : '') + (o.boss ? ' boss' : '') + '" style="--i:' + i + '"'
       + (c.locked ? '' : ' data-act="pick" data-oid="' + o.id + '" role="button" tabindex="0"') + '>'
-      + '<div class="ic">' + o.icon + '</div><div class="nm">' + esc(o.name) + '</div>'
+      + '<div class="ic">' + ico(o.icon) + '</div><div class="nm">' + esc(o.name) + '</div>'
       + '<div class="tg">' + esc(o.tag) + '</div>'
       + '<div class="meta"><span>命中率 ' + Math.round(o.acc * 100) + '%</span><span class="elo">ELO ' + o.elo + '</span></div>'
-      + (c.locked ? '<div class="lock">🔒 ' + lockMsg + '</div>'
-        : '<button class="du-btn sm du-friendly" data-act="friendly" data-oid="' + o.id + '" title="不计 ELO、不进编年史，纯练手感">🤝 友谊赛</button>')
+      + (c.locked ? '<div class="lock">' + I('lockN') + lockMsg + '</div>'
+        : '<button class="du-btn sm du-friendly" data-act="friendly" data-oid="' + o.id + '" title="不计 ELO、不进编年史，纯练手感">' + I('cpChat') + '友谊赛</button>')
       + '</div>'
   }
 
@@ -781,7 +883,7 @@
   function srcChip(m, icon, label, hint, cur, enabled) {
     return '<div class="du-src' + (cur === m ? ' on' : '') + (enabled ? '' : ' off') + '" data-act="src-mode" data-m="' + m + '"'
       + (enabled ? ' role="button" tabindex="0"' : '') + ' style="--i:' + (enabled ? 1 : 0) + '">'
-      + '<b>' + icon + ' ' + esc(label) + '</b><span>' + esc(hint) + '</span></div>'
+      + '<b>' + icon + esc(label) + '</b><span>' + esc(hint) + '</span></div>'
   }
   function examPickerHTML(ctx, state) {
     let exams = nativeExams(ctx).slice(0, 12)
@@ -794,7 +896,7 @@
       let n = (e.questions || []).length
       return '<div class="du-pick' + (state.examId === e.id ? ' on' : '') + '" style="--i:' + i + '"'
         + ' data-act="src-exam" data-id="' + esc(e.id || '') + '" role="button" tabindex="0">'
-        + '<b>📄 ' + esc(trunc(e.title || '未命名卷', 26)) + '</b>'
+        + '<b>' + I('fileText') + esc(trunc(e.title || '未命名卷', 26)) + '</b>'
         + '<span>' + esc(e.subject || '未分科') + ' · 共 ' + n + ' 题' + (e.completedAt ? ' · 已考过' : '') + '</span></div>'
     }).join('') + '</div>'
   }
@@ -807,11 +909,11 @@
     if (books.length) {
       h += '</div><div class="du-picklist">'
         + '<div class="du-pick' + (!state.bookId ? ' on' : '') + '" data-act="src-book" data-id="" role="button" tabindex="0">'
-        + '<b>🚫 不用讲义</b><span>仅按错题命题</span></div>'
+        + '<b>' + I('ban') + '不用讲义</b><span>仅按错题命题</span></div>'
         + books.map(function (b, i) {
           return '<div class="du-pick' + (state.bookId === b.id ? ' on' : '') + '" style="--i:' + (i + 1) + '"'
             + ' data-act="src-book" data-id="' + esc(b.id || '') + '" role="button" tabindex="0">'
-            + '<b>📖 ' + esc(trunc(b.title || '未命名书', 24)) + '</b>'
+            + '<b>' + I('bookOpen') + esc(trunc(b.title || '未命名书', 24)) + '</b>'
             + '<span>' + esc(b.subject || '未分科') + ' · ' + num(b.questionCount, (b.chapters || []).length) + ' 章</span></div>'
         }).join('') + '</div>'
     } else {
@@ -825,10 +927,10 @@
     let t = titleOf(p.elo, p.badges)
     let d = dailyOpp()
     let dailyClaimed = !!(p.daily && p.daily.key === d.key && p.daily.claimed)
-    let s = '<div class="du-card" style="--i:0"><h3 class="du-h">' + t.icon + ' ' + t.name + ' <em>ELO ' + p.elo + '</em></h3>'
+    let s = '<div class="du-card" style="--i:0"><h3 class="du-h">' + ico(t.icon) + ' ' + t.name + ' <em>ELO ' + p.elo + '</em></h3>'
       + '<div class="du-desc">与 AI 对手同题竞速：答对造成伤害（速度越快越痛），答错则挨打，双对互相反震；'
       + '问数耗尽比剩余 HP，一方归零提前 KO。ELO 按等级分公式结算，连胜有加成，段位随 ELO 晋升。'
-      + '在站内任何工具完成一组刷题（quizDone）都会给本场充能 🛡 护盾：下一场 +20 HP。</div>'
+      + '在站内任何工具完成一组刷题（quizDone）都会给本场充能护盾：下一场 +20 HP。</div>'
       + '<div class="du-statgrid">'
       + statCell(0, p.elo, '当前 ELO') + statCell(1, p.wins, '胜场') + statCell(2, p.losses, '负场')
       + statCell(3, p.draws, '平局') + statCell(4, p.history.length, '总场次')
@@ -848,18 +950,20 @@
     /* 每日挑战 + 错题复仇 */
     s += '<div class="du-card" style="--i:1">'
       + '<div class="du-daily" data-act="daily" role="button" tabindex="0" style="cursor:pointer">'
-      + '<span class="ic">⚡</span><div class="tx"><b>今日挑战者：' + d.opp.icon + ' ' + esc(d.opp.name) + '</b>'
+      + '<span class="ic">' + I('cpBolt') + '</span><div class="tx"><b>今日挑战者：' + ico(d.opp.icon) + ' ' + esc(d.opp.name) + '</b>'
       + '<span>ELO ' + d.opp.elo + ' · 胜利 +' + d.bonus + ' ELO（每日限一次' + (dailyClaimed ? ' · 今日已领取，仍可陪练' : '') + '）'
       + ' · 种子按日期固定，判定全天可复现</span></div>'
       + '<button class="du-btn sm fire">' + (dailyClaimed ? '陪练' : '挑战') + '</button></div>'
       + (p.wrongBook.length
         ? '<div class="du-daily du-revenge" data-act="revenge" role="button" tabindex="0">'
-          + '<span class="ic">📕</span><div class="tx"><b>错题复仇（' + p.wrongBook.length + '）</b>'
+          + '<span class="ic">' + I('mistakes') + '</span><div class="tx"><b>错题复仇（' + p.wrongBook.length + '）</b>'
           + '<span>' + esc(trunc(p.wrongBook[0].stem, 34)) + (p.wrongBook.length > 1 ? ' 等' : '')
           + ' · 单人重做，答对即移除；不限时刷新你对错题的肌肉记忆</span></div>'
           + '<button class="du-btn sm">开始清算</button></div>'
         : '')
       + '</div>'
+    /* 上次回顾：接着上一场继续（刷新/切模块都不丢） */
+    s += lastReviewHTML(ctx)
     /* 出题来源：站内数据接入（题库/题卷/错题/资料库 —— 全走 ctx.Store 只读桥） */
     ;(function () {
       let mode = state.srcMode || 'ai'
@@ -867,27 +971,27 @@
       let bankN = bankPool(ctx, subject).length
       let examN = nativeExams(ctx).length
       let mkN = nativeMistakes(ctx).length
-      s += '<div class="du-card" style="--i:2"><h3 class="du-h">🎯 出题来源 <em>站内数据接入</em></h3>'
+      s += '<div class="du-card" style="--i:2"><h3 class="du-h">' + I('target') + '出题来源 <em>站内数据接入</em></h3>'
         + '<div class="du-desc">出题来源对天梯 / 每日 / 友谊赛全部生效：'
         + '<b>AI 智能</b>无限新题；<b>站内题库</b>直接抽你收藏的题目（零 AI 调用，秒开）；'
         + '<b>题卷挑战</b>拿站内整张卷的选择题开战；<b>弱项突击</b>让 AI 读你站内错题本'
         + '（可选叠加资料库讲义）针对薄弱点命题。非友谊赛战败题可同步进站内错题本。</div>'
         + '<div class="du-srcrow">'
-        + srcChip('ai', '🧠', 'AI 智能', '无限新题', mode, true)
-        + srcChip('bank', '🗃', '站内题库', bankN + ' 道可选', mode, bankN > 0)
-        + srcChip('exam', '📄', '题卷挑战', examN + ' 张整卷', mode, examN > 0)
-        + srcChip('weak', '🎯', '弱项突击', mkN + ' 条错题驱动', mode, mkN > 0)
+        + srcChip('ai', I('cpBrain'), 'AI 智能', '无限新题', mode, true)
+        + srcChip('bank', I('archive'), '站内题库', bankN + ' 道可选', mode, bankN > 0)
+        + srcChip('exam', I('fileText'), '题卷挑战', examN + ' 张整卷', mode, examN > 0)
+        + srcChip('weak', I('target'), '弱项突击', mkN + ' 条错题驱动', mode, mkN > 0)
         + '</div>'
         + (mode === 'exam' ? examPickerHTML(ctx, state) : '')
         + (mode === 'weak' ? weakPickerHTML(ctx, state) : '')
         + '</div>'
     })()
     /* 成就徽章墙 */
-    s += '<div class="du-card" style="--i:3"><h3 class="du-h">🏅 成就 <em>' + p.badges.length + ' / ' + BADGES.length + '</em></h3>'
+    s += '<div class="du-card" style="--i:3"><h3 class="du-h">' + I('trophy') + '成就 <em>' + p.badges.length + ' / ' + BADGES.length + '</em></h3>'
       + '<div class="du-badges">' + BADGES.map(function (b, i) {
         let got = p.badges.indexOf(b.id) >= 0
         return '<div class="du-badge' + (got ? '' : ' off') + '" style="--i:' + i + '" title="' + esc(b.desc) + '">'
-          + '<div class="t"><i>' + (got ? b.icon : '❔') + '</i>' + esc(b.name) + '</div>'
+          + '<div class="t"><i>' + (got ? ico(b.icon) : I('helpCircle')) + '</i>' + esc(b.name) + '</div>'
           + '<p>' + esc(b.desc) + '</p></div>'
       }).join('') + '</div></div>'
     s += '<div class="du-card" style="--i:4"><h3 class="du-h">选择对手</h3>'
@@ -945,6 +1049,7 @@
   /* ════════════════════════ 6. 主视图：大厅 ⇄ 决斗 ⇄ 结算 ════════════════════════ */
 
   function mountMain(el, ctx) {
+    HOST_CTX = ctx
     injectStyles()
     let state = {
       view: 'lobby', bt: null, last: null,
@@ -1006,19 +1111,19 @@
       }
       bt.pHp = bt.pMax; bt.oHp = bt.oMax
       /* 预置来源标签：开战首帧（loading 态）的顶部条也要带；loader 细化后用 render() 刷新 */
-      bt.srcLabel = bt.solo ? '📕 错题复仇'
-        : bt.srcMode === 'bank' ? '🗃 站内题库'
-          : bt.srcMode === 'exam' ? '📄 题卷挑战'
-            : bt.srcMode === 'weak' ? '🎯 弱项突击' : '🧠 AI 智能出题'
+      bt.srcLabel = bt.solo ? '错题复仇'
+        : bt.srcMode === 'bank' ? '站内题库'
+          : bt.srcMode === 'exam' ? '题卷挑战'
+            : bt.srcMode === 'weak' ? '弱项突击' : 'AI 智能出题'
       if (bt.shield && !bt.friendly) {
         p.shield = false
         profileSave(ctx, p)
-        ctx.Toast.show('🛡 护盾生效：本场 +20 HP', 'info', 2200)
+        ctx.Toast.show('护盾生效：本场 +20 HP', 'info', 2200)
       }
       state.view = 'battle'
       render()
       if (bt.solo) {
-        bt.srcLabel = '📕 错题复仇'
+        bt.srcLabel = '错题复仇'
         bt.qs = opts.soloQs.slice(0, 10)
         bt.phase = 'fight'
         renderQuestion()
@@ -1033,7 +1138,7 @@
             + bankQs.length + ' 道）—— 去题库/题卷收藏些好题，或切回 AI 智能', 'warn', 4200)
           state.view = 'lobby'; state.bt = null; render(); return
         }
-        bt.qs = bankQs; bt.srcLabel = '🗃 站内题库 × ' + bankQs.length
+        bt.qs = bankQs; bt.srcLabel = '站内题库 × ' + bankQs.length
         bt.phase = 'fight'
         render()
         renderQuestion()
@@ -1053,7 +1158,7 @@
           state.view = 'lobby'; state.bt = null; render(); return
         }
         bt.qs = shuffle(exQs).slice(0, 10)
-        bt.srcLabel = '📄 ' + trunc(exam.title || '题卷', 16) + ' × ' + bt.qs.length
+        bt.srcLabel = trunc(exam.title || '题卷', 16) + ' × ' + bt.qs.length
         bt.phase = 'fight'
         render()
         renderQuestion()
@@ -1068,9 +1173,9 @@
         sys = sysGenWeak(subject, opp, n, mks, bookExcerpt(book))
         usr = '科目：' + subject + '；题数：' + n + '；依据站内 ' + mks.length + ' 条错题'
           + (book ? ' + 资料库《' + trunc(book.title || '', 20) + '》' : '') + ' 针对性命题'
-        bt.srcLabel = '🎯 弱项突击' + (book ? ' · ' + trunc(book.title || '', 10) : '')
+        bt.srcLabel = '弱项突击' + (book ? ' · ' + trunc(book.title || '', 10) : '')
       } else {
-        bt.srcLabel = '🧠 AI 智能出题'
+        bt.srcLabel = 'AI 智能出题'
       }
       aiJSON(ctx, sys, usr, { timeout: 180000, maxTokens: 4000 })
         .then(function (raw) {
@@ -1096,7 +1201,7 @@
     function startRevenge() {
       let p = profileGet(ctx)
       if (!p.wrongBook.length) { ctx.Toast.show('错题本是空的 —— 先去打一场', 'info', 1800); return }
-      let opp = { id: 'revenge', name: '过去的自己', icon: '📕', elo: profileGet(ctx).elo, acc: 0, tag: '错题清算中' }
+      let opp = { id: 'revenge', name: '过去的自己', icon: 'mistakes', elo: profileGet(ctx).elo, acc: 0, tag: '错题清算中' }
       startBattle(opp, { soloQs: p.wrongBook })
     }
 
@@ -1108,25 +1213,25 @@
         + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap">'
         + '<span style="font-size:11.5px;color:var(--du-sub)">'
         + (bt.srcLabel ? esc(bt.srcLabel) + ' · ' : '')
-        + (bt.friendly ? '🤝 友谊赛 · 不计 ELO · ' : '')
+        + (bt.friendly ? I('cpChat') + '友谊赛 · 不计 ELO · ' : '')
         + '键盘：<span class="du-kbd">1</span>-<span class="du-kbd">4</span> 或 <span class="du-kbd">A</span>-<span class="du-kbd">D</span> 作答 · <span class="du-kbd">Enter</span> 下一题</span>'
-        + '<button class="du-btn sm" data-act="forfeit">' + (bt.solo ? '✕ 退出清算' : '🏳 认输') + '</button></div>'
+        + '<button class="du-btn sm" data-act="forfeit">' + (bt.solo ? I('cpCross') + '退出清算' : I('ban') + '认输') + '</button></div>'
         + '<div class="du-hps">'
-        + '<div class="du-hpbox" id="du-hp-p"><div class="du-hpname"><span class="ic">🎓</span>你'
-        + (bt.shield ? ' <span title="quizDone 护盾">🛡</span>' : '')
+        + '<div class="du-hpbox" id="du-hp-p"><div class="du-hpname"><span class="ic">' + I('graduation') + '</span>你'
+        + (bt.shield ? '<span title="quizDone 护盾">' + I('cpCheck') + '</span>' : '')
         + '<span style="color:var(--du-sub);font-weight:400">' + (bt.solo ? '错题复仇' : 'ELO ' + myElo) + '</span></div>'
         + '<div class="du-hpbar"><div class="du-hpfill" style="width:100%"></div></div>'
         + '<div class="du-hpnum"><span class="n">' + bt.pHp + '</span> / ' + bt.pMax + '</div></div>'
       if (!bt.solo) {
         s += '<div class="du-vs">VS</div>'
-          + '<div class="du-hpbox opp" id="du-hp-o"><div class="du-hpname"><span class="ic">' + bt.opp.icon + '</span>' + esc(bt.opp.name)
+          + '<div class="du-hpbox opp" id="du-hp-o"><div class="du-hpname"><span class="ic">' + ico(bt.opp.icon) + '</span>' + esc(bt.opp.name)
           + '<span style="color:var(--du-sub);font-weight:400">ELO ' + bt.opp.elo + '</span></div>'
           + '<div class="du-hpbar"><div class="du-hpfill" style="width:100%"></div></div>'
           + '<div class="du-hpnum"><span class="n">' + bt.oHp + '</span> / ' + bt.oMax + '</div></div>'
       }
       s += '</div><div class="du-qarea">'
       if (bt.phase === 'loading') {
-        s += '<div class="du-empty"><b>' + bt.opp.icon + ' ' + esc(bt.opp.name) + ' 正在布题…</b>AI 命题中，稍安勿躁</div>'
+        s += '<div class="du-empty"><b>' + ico(bt.opp.icon) + ' ' + esc(bt.opp.name) + ' 正在布题…</b>AI 命题中，稍安勿躁</div>'
       } else if (bt.qs.length) {
         s += qHTML(bt)
       }
@@ -1267,7 +1372,7 @@
       let judge = body.querySelector('.du-judge')
       if (judge) {
         judge.className = 'du-judge on ' + (playerCorrect ? 'ok' : 'no')
-        judge.innerHTML = '<b>' + (playerCorrect ? '✓ 已掌握，移出错题本' : '✗ 仍在错题本（错 ' + (function () {
+        judge.innerHTML = '<b>' + (playerCorrect ? I('check') + '已掌握，移出错题本' : I('cpCross') + '仍在错题本（错 ' + (function () {
           let p = profileGet(ctx)
           let hit = p.wrongBook.filter(function (x) { return x.stem === q.stem })[0]
           return hit ? hit.wrong : 1
@@ -1275,7 +1380,7 @@
       }
       let next = body.querySelector('[data-act="next-q"]')
       if (next) {
-        next.textContent = bt.idx >= bt.qs.length - 1 ? '完成清算 ✔' : '下一题 →'
+        next.textContent = bt.idx >= bt.qs.length - 1 ? '完成清算' : '下一题 →'
         next.style.display = ''
       }
     }
@@ -1320,14 +1425,14 @@
       let judge = body.querySelector('.du-judge')
       if (judge) {
         judge.className = 'du-judge on ' + (playerCorrect ? 'ok' : 'no')
-        judge.innerHTML = '<b>' + (playerCorrect ? '✓ 答对' : '✗ 答错 / 超时') + '</b> · ' + verdict
+        judge.innerHTML = '<b>' + (playerCorrect ? I('check') + '答对' : I('cpCross') + '答错 / 超时') + '</b> · ' + verdict
           + '<br><span style="color:var(--du-sub)">' + esc(q.explain) + '</span>'
       }
       updateHp(body.querySelector('#du-hp-p'), bt.pHp, bt.pMax, r.pDmg)
       updateHp(body.querySelector('#du-hp-o'), bt.oHp, bt.oMax, r.oDmg)
       let next = body.querySelector('[data-act="next-q"]')
       if (next) {
-        next.textContent = bt.idx >= bt.qs.length - 1 || bt.pHp <= 0 || bt.oHp <= 0 ? '查看结算 ⚔' : '下一题 →'
+        next.textContent = bt.idx >= bt.qs.length - 1 || bt.pHp <= 0 || bt.oHp <= 0 ? '查看结算' : '下一题 →'
         next.style.display = ''
       }
     }
@@ -1350,7 +1455,7 @@
       state.bt = null
       state.view = 'lobby'
       render()
-      ctx.Toast.show('📕 清算完成：掌握 ' + cleared + ' 题' + (left ? '，还剩 ' + left + ' 题待复仇' : '，错题本清空 🎉'), left ? 'info' : 'ok', 3200)
+      ctx.Toast.show('清算完成：掌握 ' + cleared + ' 题' + (left ? '，还剩 ' + left + ' 题待复仇' : '，错题本清空'), left ? 'info' : 'ok', 3200)
       try { ctx.log('错题复仇：' + cleared + '/' + bt.review.length + '，剩余 ' + left) } catch (e) { }
     }
 
@@ -1362,7 +1467,7 @@
       /* 战败题回写站内原生错题本（dedupKey 幂等；config 可关；友谊赛也回写 —— 练手感同样攒错题） */
       if (!bt.solo) {
         let wb = writeBackMistakes(ctx, bt)
-        if (wb > 0) ctx.Toast.show('📕 已同步 ' + wb + ' 道战败题到站内错题本', 'info', 2600)
+        if (wb > 0) ctx.Toast.show('已同步 ' + wb + ' 道战败题到站内错题本', 'info', 2600)
       }
       /* 友谊赛：纯练手感 —— 不动 ELO/编年史/成就/每日，保留回顾与错题本 */
       if (bt.friendly) {
@@ -1418,7 +1523,7 @@
         p.badges = p.badges.concat(fresh)
         fresh.forEach(function (id) {
           let b = BADGES.filter(function (x) { return x.id === id })[0]
-          if (b) ctx.Toast.show('🏅 成就解锁：' + b.icon + ' ' + b.name, 'ok', 3200)
+          if (b) ctx.Toast.show('成就解锁：' + b.name, 'ok', 3200)
         })
       }
       p.history.unshift({
@@ -1451,29 +1556,29 @@
         let fw = last.score === 1
         let fko = last.ko ? (fw ? ' · KO！' + esc(last.opp.name) + ' HP 归零' : ' · 被 KO') : ''
         return '<div class="du-card" style="--i:0"><div class="du-banner ' + (fw ? 'win' : 'lose') + '">'
-          + '<div class="big">🤝 友谊赛' + (last.forfeit ? ' · 提前结束' : fw ? ' · 你赢了' : last.score === 0.5 ? ' · 平局' : ' · 输了') + '</div>'
+          + '<div class="big">' + I('cpChat') + '友谊赛' + (last.forfeit ? ' · 提前结束' : fw ? ' · 你赢了' : last.score === 0.5 ? ' · 平局' : ' · 输了') + '</div>'
           + '<div class="sub">vs ' + last.opp.icon + ' ' + esc(last.opp.name) + ' · ' + esc(last.subj)
           + (last.srcLabel ? ' · ' + esc(last.srcLabel) : '')
           + ' · 剩余 HP ' + last.pHp + ' : ' + last.oHp + fko + ' · 不计 ELO，纯练手感</div>'
           + '</div>'
           + '<div style="display:flex;gap:9px;flex-wrap:wrap;margin:4px 0 13px">'
-          + '<button class="du-btn fire" data-act="rematch">⚔ 再来一场友谊赛</button>'
+          + '<button class="du-btn fire" data-act="rematch">' + I('cpPlay') + '再来一场友谊赛</button>'
           + '<button class="du-btn" data-act="go-lobby">返回天梯</button>'
           + '</div>'
-          + (last.review && last.review.length ? '<h3 class="du-h" style="margin-top:6px">📖 题目回顾 <em>' + last.review.length + ' 题</em></h3>' : '')
+          + (last.review && last.review.length ? '<h3 class="du-h" style="margin-top:6px">' + I('bookOpen') + '题目回顾 <em>' + last.review.length + ' 题</em></h3>' : '')
           + reviewHTML(last.review)
           + '</div>'
       }
       let win = last.score === 1
       let koTxt = last.ko ? (win ? ' · KO！' + esc(last.opp.name) + ' HP 归零' : ' · 被 KO，你的 HP 归零') : ''
       let s = '<div class="du-card" style="--i:0"><div class="du-banner ' + (win ? 'win' : 'lose') + '">'
-        + '<div class="big">' + (last.forfeit ? '🏳 认输' : win ? '🏆 胜利' : last.score === 0.5 ? '🤝 平局' : '💀 战败') + '</div>'
+        + '<div class="big">' + (last.forfeit ? I('ban') + '认输' : win ? I('trophy') + '胜利' : last.score === 0.5 ? I('cpChat') + '平局' : I('ban') + '战败') + '</div>'
         + '<div class="sub">vs ' + last.opp.icon + ' ' + esc(last.opp.name) + '（ELO ' + last.opp.elo + '）· ' + esc(last.subj)
         + (last.srcLabel ? ' · ' + esc(last.srcLabel) : '')
         + (last.forfeit ? ' · 中途认输' : ' · 剩余 HP ' + last.pHp + ' : ' + last.oHp + koTxt) + '</div>'
         + '<span class="du-elodelta ' + (last.delta >= 0 ? 'up' : 'down') + '">' + (last.delta >= 0 ? '+' : '') + last.delta + ' ELO'
         + (last.bonus ? '（连胜 +' + last.bonus + '）' : '') + (last.dailyBonus ? '（每日挑战 +' + last.dailyBonus + '）' : '') + '</span>'
-        + (win && last.streak > 1 ? '<div class="sub" style="margin-top:7px">🔥 当前连胜 <b style="color:var(--du-gold)">' + last.streak + '</b> —— 下场胜利再 +' + Math.min(last.streak, STREAK_MAX) + ' ELO</div>' : '')
+        + (win && last.streak > 1 ? '<div class="sub" style="margin-top:7px">' + I('flame') + '当前连胜 <b style="color:var(--du-gold)">' + last.streak + '</b> —— 下场胜利再 +' + Math.min(last.streak, STREAK_MAX) + ' ELO</div>' : '')
         + '</div>'
         + '<div class="du-statgrid">'
         + '<div class="du-stat" style="--i:0"><b id="du-elonum">' + last.oldElo + '</b><span>当前 ELO</span></div>'
@@ -1482,14 +1587,14 @@
         + statCell(3, profileGet(ctx).history.length, '总场次')
         + '</div>'
         + '<div style="display:flex;gap:9px;flex-wrap:wrap;margin:4px 0 13px">'
-        + '<button class="du-btn fire" data-act="rematch">⚔ 再战一场</button>'
+        + '<button class="du-btn fire" data-act="rematch">' + I('cpPlay') + '再战一场</button>'
         + '<button class="du-btn" data-act="go-lobby">返回天梯</button>'
         + '</div>'
         + histList(profileGet(ctx), 6)
         + '</div>'
       /* 赛后题目回顾：解析不丢，逐题可折叠回看 */
       if (!last.forfeit && last.review && last.review.length) {
-        s += '<div class="du-card" style="--i:1"><h3 class="du-h">📖 题目回顾 <em>' + last.review.length + ' 题 · 答对 '
+        s += '<div class="du-card" style="--i:1"><h3 class="du-h">' + I('bookOpen') + '题目回顾 <em>' + last.review.length + ' 题 · 答对 '
           + last.review.filter(function (r) { return r.ok }).length + '</em></h3>'
           + reviewHTML(last.review) + '</div>'
       }
@@ -1553,6 +1658,13 @@
         if (bt && bt.judgeTimer) { clearTimeout(bt.judgeTimer); bt.judgeTimer = null }
         state.view = 'lobby'; state.bt = null; render()
       },
+      /* 清掉上次回顾：details 的 summary 里点按钮会连带切换展开态，这里掐掉 */
+      'drop-review': function (t, ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation() }
+        try { ctx.keep.set(REVIEW_KEEP_KEY, null) } catch (e) { }
+        ctx.Toast.show('已清掉上次回顾', 'ok', 1800)
+        render()
+      },
       rematch: function () {
         if (!state.last) return
         if (state.last.friendly) startBattle(state.last.opp, { friendly: true })
@@ -1603,7 +1715,9 @@
       + '出题来源可切换：AI 智能 / 站内题库 / 题卷挑战 / 弱项突击（读站内错题本+资料库讲义）；'
       + '战败题自动同步进站内原生错题本；站内任何工具完成刷题（quizDone）可为本场充能护盾。',
     tools: [
-      { id: T_MAIN, title: '博弈刷题场', icon: '⚔️', mount: mountMain }
+      /* 图标用品牌砖（与页眉 .du-mark 同款），不再是功能性的 target 字形：
+       * 插件内部每个子页的页眉都自有图标（天梯/牌库/对战…），模块入口这枚只承担"这是刷题场"。 */
+      { id: T_MAIN, title: '博弈刷题场', icon: MARK_TILE, mount: mountMain }
     ],
     config: [
       { key: 'subject', label: '决斗科目', type: 'select', default: '数学', options: SUBJECTS },
@@ -1620,10 +1734,10 @@
           p.shield = true
           profileSave(ctx, p)
           /* 【站内适配 2026-10-22 · 真 bug】ctx.notify 是**单参**接口（对象或纯标题串）。
-           * 原写法 `ctx.notify('博弈刷题场', '🛡 护盾已充能…')` 的第二参会被静默丢弃 ——
+           * 原写法 `ctx.notify('博弈刷题场', '护盾已充能…')` 的第二参会被静默丢弃 ——
            * 用户只看到标题「博弈刷题场」，护盾这件事一个字都没说。 */
           if (typeof ctx.notify === 'function') {
-            ctx.notify({ title: '🛡 护盾已充能', body: '下一场决斗 +20 HP（站内刷题充能）', level: 'success', timeout: 6000 })
+            ctx.notify({ title: '护盾已充能', body: '下一场决斗 +20 HP（站内刷题充能）', level: 'success', timeout: 6000 })
           }
           ctx.log('quizDone → 决斗护盾充能', 'debug')
         } catch (e) { }
@@ -1634,6 +1748,7 @@
     memory: '用户装有「博弈刷题场」插件：可以把刷题变成 PvE 决斗（工具 → 博弈刷题场）。'
       + 'ELO 天梯、AI 对手竞速、心魔 Boss。用户提到「刷题没动力」「想挑战」「天梯」时，建议他去决斗场打一场。',
     init: function (ctx) {
+      HOST_CTX = ctx
       /* 声明自己的 AI 场景（出题）：数学选择题要出对、要出得像真题 → think + 公式契约。 */
       try {
         if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {

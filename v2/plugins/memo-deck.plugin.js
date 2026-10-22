@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.0.0'
+  let VERSION = '1.2.0'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -93,6 +93,37 @@
   function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
+
+  /* ════════════════════════ 站内图标（2026-10-22 用户要求：摆脱原生 emoji） ════════════════════════
+   * 为什么不留 emoji：emoji 是**字体渲染**的，同一个字符在 Win/Android/iOS 上是三套画风，
+   * 尺寸、基线、颜色都不受控 —— 混在用线性 SVG 做的站内 UI 里就像贴纸；夜间主题下更明显
+   * （emoji 自带彩色，卡片暗下去它还是亮的）。
+   *
+   * 取值顺序（都是站内公开层，不碰 Store/AI/App 这些内部单例）：
+   *   ① ctx.U.icon(key) —— 与站内视觉逐像素一致、随主题换色、带 .ci 基线样式；
+   *   ② window.ICONS[key] —— globals 注册的同一张图标表。**必须有这一级**：
+   *      manifest 的 icon 在 register() 时就求值（比 init(ctx) 早），那时还没有 ctx；
+   *   ③ 都取不到 → 返回空串。调用方对「纯图标按钮」都要写 `I(k) || '文字'` 兜底，
+   *      否则图标缺了按钮会变成空白方块（点了没反馈的那种"坏按钮"）。
+   *
+   * 铁律：key 必须是 site icons.ts SPEC 里真实存在的语义名（传错静默得空串，不报错）。
+   * 本文件用到的每一个 key 都已对照 SPEC 核过。 */
+  let HOST_CTX = null
+  function I(key, cls) {
+    try {
+      if (HOST_CTX && HOST_CTX.U && typeof HOST_CTX.U.icon === 'function') {
+        let s = HOST_CTX.U.icon(key, cls)
+        if (s) return s
+      }
+    } catch (e) { /* 宿主图标层异常 → 走下一级 */ }
+    try {
+      if (typeof window !== 'undefined' && window.ICONS && window.ICONS[key]) {
+        return String(window.ICONS[key]).replace('<svg', '<svg class="ci ' + (cls || '') + '"')
+      }
+    } catch (e) { /* 无 window 环境（单测 teardown）*/ }
+    return ''
+  }
+
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
   function uid(p) { return (p || 'c') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
 
@@ -188,6 +219,53 @@
       lastQ: null,         // 上次评分（统计页画记忆曲线用）
       lastSeen: 0
     }
+  }
+
+  /* ══════════════════ 错题 → 闪卡（站内数据接入 · 2026-10-22） ══════════════════
+   * 为什么补这一条：本插件原本只有两条制卡入口 —— 手打，或把笔记丢给 AI。
+   * 但用户真正「记不住」的东西，站内早就攒在错题本里了（刷题、押题、决斗场都会回写 mistakes）。
+   * 错题本和闪卡之间没有路，等于逼用户把同一道题抄两遍 —— 而抄的那一遍通常不会发生。
+   *
+   * 三条硬约束（先定死，否则这个按钮只会往牌库里灌垃圾卡）：
+   *   ① 卡背必须**真的能自测**：既没答案、又没解析的错题一律跳过
+   *      （问得出、答不出的卡，每次复习都是白挨一下）；
+   *   ② 幂等：用错题自己的 dedupKey 记到 card.srcRef 上，重复点只补新错题，
+   *      不会把同一道题堆成十张；
+   *   ③ 只读 Store（ctx.Store.get），不调 update —— 错题本是别处的账，本插件不改它。 */
+  let SUBJ_ALIAS = [
+    ['math', '数学'], ['数学', '数学'], ['高数', '数学'],
+    ['eng', '英语'], ['英语', '英语'],
+    ['pol', '政治'], ['政治', '政治'],
+    ['major', '专业课'], ['专业', '专业课']
+  ]
+  /** 站内科目 key / 中文名 → 本插件 SUBJECTS（对不上就落「其他」，绝不猜） */
+  function subjectOf(raw) {
+    let s = flat(raw).toLowerCase()
+    for (let i = 0; i < SUBJ_ALIAS.length; i++) if (s.indexOf(SUBJ_ALIAS[i][0]) >= 0) return SUBJ_ALIAS[i][1]
+    return '其他'
+  }
+  function siteMistakes(ctx) {
+    try {
+      let st = (ctx.Store && typeof ctx.Store.get === 'function') ? ctx.Store.get() : null
+      return (st && Array.isArray(st.mistakes)) ? st.mistakes : []
+    } catch (e) { return [] }
+  }
+  /** 单条错题 → 卡片；不可用（无题干 / 无答案且无解析）返回 null，由调用方计数跳过 */
+  function cardFromMistake(m, i) {
+    if (!m || typeof m !== 'object') return null
+    let front = flat(m.stem || m.desc || '')
+    if (front.length < 4) return null
+    let ans = flat(m.answer || '')
+    let sol = flat(m.solution || '')
+    if (!ans && !sol) return null
+    let c = newCard(front, (ans && sol) ? (ans + '\n\n' + sol) : (ans || sol), {
+      subject: subjectOf(m.subject),
+      tags: ['错题'],
+      hint: flat(m.note || '')
+    })
+    /* srcRef 只在「从站内数据生成」的卡上出现，用于幂等去重；手打/AI 卡没有它 */
+    c.srcRef = 'mk:' + (m.dedupKey || m.id || (i + ':' + front.slice(0, 24)))
+    return c
   }
 
   /* 评分排期：返回 {card, requeue} —— requeue=true 表示本场内还要再见 */
@@ -372,12 +450,16 @@
    */
   let CSS = [
     /* —— 令牌：全部映射站点设计令牌，夜间/晨岚主题自动跟随 —— */
-    '.md-root{--md-acc:var(--blue,#2563eb);--md-acc2:var(--purple,#7c3aed);--md-ink:var(--text-primary,#1e2a4a);'
+    /* 令牌块：**必须同时声明在模态层上**。弹窗节点挂在 document.body（`.md-modal`），
+     * 在 `.md-root` 之外 —— 只写在 root 上时，弹窗里所有 var(--md-*) 全部悬空，
+     * 背景/边框/文字色一起失效，整块变成半透明，底下的页面（连那排选项卡）直接透出来。
+     * 版式与令牌拆成两条规则：模态层只要令牌，不要 root 的出血负 margin / min-height。 */
+    '.md-root,.md-modal{--md-acc:var(--blue,#2563eb);--md-acc2:var(--purple,#7c3aed);--md-ink:var(--text-primary,#1e2a4a);'
       + '--md-sub:var(--text-muted,#7c8aa8);--md-ink2:var(--text-secondary,#4a5670);--md-line:var(--line,#d8dde8);'
       + '--md-bg:var(--surface,#fff);--md-soft:var(--surface-muted,#f6f8fc);--md-ok:var(--ok,#0f7c4a);'
       + '--md-warn:var(--warn,#c47615);--md-danger:var(--danger,#d83b3b);'
-      + '--md-ease:cubic-bezier(.22,.8,.26,1);'
-      + 'color:var(--md-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
+      + '--md-ease:cubic-bezier(.22,.8,.26,1)}',
+    '.md-root{color:var(--md-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
       /* 出血到视口边缘（与原生页 eden/mind 同手法）：host 卡片的内边距被负 margin 抵消 */
       + 'margin:calc(var(--vp-t,16px)*-1) calc(var(--vp-x,16px)*-1) calc(var(--vp-b,24px)*-1);'
       + 'min-height:calc(100vh - 59px);display:flex;flex-direction:column;background:var(--md-soft)}',
@@ -510,7 +592,9 @@
     '.md-pickall input{width:15px;height:15px;cursor:pointer;accent-color:var(--md-acc);margin:0}',
 
     /* —— 编辑器弹层（页面内自绘模态；灯箱/编辑共用一套遮罩） —— */
+    /* 弹层自带字体与文字色：它在 body 上，不继承 .md-root 的排版，不写就只能吃站点 body 的默认值 */
     '.md-modal{position:fixed;inset:0;z-index:9000;display:none;place-items:center;padding:22px;'
+      + 'color:var(--md-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
       + 'background:rgba(10,16,30,.5);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}',
     '.md-modal.on{display:grid;animation:md-fade .2s ease both}',
     '.md-modal-box{width:min(620px,94vw);max-height:88vh;overflow:auto;background:var(--md-bg);border:1px solid var(--md-line);'
@@ -653,6 +737,11 @@
     '@media (max-width:560px){.md-grades{grid-template-columns:repeat(2,1fr)}.md-search{width:100%;max-width:none}'
       + '.md-sub2{display:none}.md-hchip:nth-child(n+4){display:none}.md-grid{grid-template-columns:1fr 1fr}'
       + '.md-body{padding:14px calc(var(--vp-x,16px) + 10px) 34px}}',
+'.md-h svg.ci,.md-nav a svg.ci,.md-flame svg.ci,.md-iconbtn svg.ci{margin-right:0}',
+    '.md-btn svg.ci{width:15px;height:15px}',
+    '.md-flame svg.ci,.md-iconbtn svg.ci{width:15px;height:15px}',
+    '.md-empty .ico svg.ci{width:34px;height:34px;display:block;margin:0 auto}',
+    '.md-bighint svg.ci{width:13px;height:13px;margin-right:4px}',
     '@media (max-width:400px){.md-grid{grid-template-columns:1fr}.md-nav a{padding:0 10px;font-size:11.5px}}',
     /* 动效可及性：系统要求减少动效时，全部动画一次性关掉 */
     '@media (prefers-reduced-motion:reduce){.md-root *{animation:none!important;transition:none!important}}'
@@ -670,16 +759,30 @@
   /* ════════════════════════ 5. 壳：吸顶页眉 + 页内导航 + 共享件 ════════════════════════ */
 
   let NAV = [
-    { id: T_DECK, icon: '🃏', label: '牌库' },
-    { id: T_REVIEW, icon: '⚡', label: '复习' },
-    { id: T_STATS, icon: '📈', label: '统计' },
-    { id: T_PREFS, icon: '⚙️', label: '设置' }
+    { id: T_DECK, icon: 'list', label: '牌库' },
+    { id: T_REVIEW, icon: 'cpBolt', label: '复习' },
+    { id: T_STATS, icon: 'trendingUp', label: '统计' },
+    { id: T_PREFS, icon: 'cpGear', label: '设置' }
   ]
 
   /* 页眉图标（内联 SVG，不依赖站点图标库 —— 插件契约只承诺 ctx/window/document） */
+  let MARK_PATHS = '<rect x="3" y="6" width="13" height="15" rx="2.5"/><path d="M8 3.5h11a2 2 0 0 1 2 2V19"/>'
+    + '<path d="M7 11h5M7 14.5h5M7 18h3"/>'
   let MARK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
-    + '<rect x="3" y="6" width="13" height="15" rx="2.5"/><path d="M8 3.5h11a2 2 0 0 1 2 2V19"/>'
-    + '<path d="M7 11h5M7 14.5h5M7 18h3"/></svg>'
+    + MARK_PATHS + '</svg>'
+  /* 模块图标＝页眉同款卡牌标，外面再包一层**紫→蓝渐变圆角砖**（白字形）。
+   * 为什么砖要自己画：页眉那枚是 `div.md-mark` 的 CSS 渐变 + 里层描边 svg，
+   * 导航栏只吃一段 SVG 串（没有 CSS 可依附），底色与白描边都得写进 svg。
+   * 24 格 → 48 格：translate(9.6 9.6) scale(1.2) 缩进内边距；描边比页眉粗（1.9→2.6），
+   * 否则 22px 槽里只剩 ~1px，糊成一团（与站内线性图标不同字重）。
+   * 紫→蓝与复试模拟舱的蓝→紫**反向**：两件插件主色令牌相同，砖必须能一眼分开。
+   * 渐变 id 带插件前缀（mdMarkG）：多插件同名 id 会让后注册的砖抢走前面的填充。 */
+  let MARK_TILE = '<svg viewBox="0 0 48 48" width="1em" height="1em" aria-hidden="true">'
+    + '<defs><linearGradient id="mdMarkG" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0" stop-color="#7C3AED"/><stop offset="1" stop-color="#2563EB"/></linearGradient></defs>'
+    + '<rect width="48" height="48" rx="13" fill="url(#mdMarkG)"/>'
+    + '<g transform="translate(9.6 9.6) scale(1.2)" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">'
+    + MARK_PATHS + '</g></svg>'
 
   /* 页眉统计 chips：deck/log 现算（纯函数），各页签共用一份口径 */
   function heroChips(ctx) {
@@ -724,6 +827,7 @@
    * 四页共享同一套壳与页眉统计，合一后切页签不重建页眉、不丢吸顶滚动态，
    * 且插件中心只出现一个入口 —— 这正是「插件中心承载力」考察的另一种形态。 */
   function mountApp(el, ctx) {
+    HOST_CTX = ctx
     injectStyles()
     let tab = T_DECK
     let pending = {}            /* 带参跳入：统计页「去攻坚」→ 牌库按失误排序 */
@@ -739,7 +843,7 @@
         + '<div class="md-titles"><div class="md-title">记忆宫殿 <em>闪卡引擎 v' + VERSION + '</em></div>'
         + '<div class="md-sub2">' + esc((TAB_META[tab] || {}).subtitle || '') + '</div></div>'
         + '<nav class="md-nav">' + NAV.map(function (n) {
-          return '<a data-act="tab" data-id="' + n.id + '" class="' + (n.id === tab ? 'on' : '') + '">' + n.icon + ' ' + n.label + '</a>'
+          return '<a data-act="tab" data-id="' + n.id + '" class="' + (n.id === tab ? 'on' : '') + '">' + I(n.icon) + n.label + '</a>'
         }).join('') + '</nav>'
         + '<div class="md-hero-stats">' + heroChips(ctx) + '</div>'
     }
@@ -904,9 +1008,9 @@
   function cardHtml(card, now, i, manage, picked) {
     let tags = card.tags.map(function (t) { return '<span class="md-tag">#' + esc(t) + '</span>' }).join('')
     let facts = '<div class="md-facts">'
-      + '<button class="md-iconbtn" data-act="edit" data-id="' + card.id + '" title="编辑">✏️</button>'
-      + '<button class="md-iconbtn" data-act="suspend" data-id="' + card.id + '" title="' + (card.suspended ? '恢复' : '暂停（不再排期）') + '">' + (card.suspended ? '▶️' : '⏸️') + '</button>'
-      + '<button class="md-iconbtn del" data-act="del" data-id="' + card.id + '" title="删除">🗑</button>'
+      + '<button class="md-iconbtn" data-act="edit" data-id="' + card.id + '" title="编辑">' + I('cpPencil') + '</button>'
+      + '<button class="md-iconbtn" data-act="suspend" data-id="' + card.id + '" title="' + (card.suspended ? '恢复' : '暂停（不再排期）') + '">' + (card.suspended ? I('cpPlay') : I('pause')) + '</button>'
+      + '<button class="md-iconbtn del" data-act="del" data-id="' + card.id + '" title="删除">' + I('cpTrash') + '</button>'
       + '</div>'
     let pick = manage
       ? '<span class="md-pick" data-act="pick" data-id="' + card.id + '" title="勾选"><input type="checkbox" tabindex="-1" ' + (picked ? 'checked' : '') + ' style="accent-color:var(--md-acc)"></span>'
@@ -916,7 +1020,7 @@
       + '<div class="md-face"><div class="md-fmeta" style="margin-bottom:0">' + pick + dueBadge(card, now) + '<span>' + esc(card.subject) + '</span>' + tags + '</div>'
       + '<div class="md-ftext">' + esc(card.front) + '</div><div class="md-fmeta">' + facts + '</div></div>'
       + '<div class="md-face back"><div class="md-ftext">' + esc(card.back) + '</div>'
-      + (card.hint ? '<div class="md-bighint" style="margin-top:auto">💡 ' + esc(card.hint) + '</div>' : '')
+      + (card.hint ? '<div class="md-bighint" style="margin-top:auto">' + I('bulb') + esc(card.hint) + '</div>' : '')
       + '<div class="md-fmeta"><span>难度 ' + card.ease.toFixed(2) + ' · 连续成功 ' + card.reps + ' · 失败 ' + card.lapses + ' 次</span></div></div>'
       + '</div></div>'
   }
@@ -964,7 +1068,7 @@
   /* 卡片编辑器模态：新增/编辑同一张表单；onSave(front,back,subject,tags,hint) */
   function openEditor(opts, onSave) {
     let m = openModal(
-      '<div class="md-modal-h">✏️ ' + (opts.card ? '编辑卡片' : '新建卡片')
+      '<div class="md-modal-h">' + I('cpPencil') + (opts.card ? '编辑卡片' : '新建卡片')
       + '<button class="md-iconbtn x" data-x="1">×</button></div>'
       + '<div class="md-field"><span>卡面（问题 / 提示语）</span>'
       + '<textarea class="md-ta" data-f="front" rows="4" placeholder="例：洛必达法则的三个使用条件？">' + esc(opts.card ? opts.card.front : '') + '</textarea></div>'
@@ -1060,7 +1164,7 @@
       let tags = allTags(deck)
       let subjOpts = ['全部'].concat(SUBJECTS)
       return '<section class="md-card" style="--i:0">'
-        + '<div class="md-h">🃏 牌库 <em>' + deck.length + ' 张 · ' + fmtSize(deckSize(deck)) + '</em></div>'
+        + '<div class="md-h">' + I('list') + '牌库 <em>' + deck.length + ' 张 · ' + fmtSize(deckSize(deck)) + '</em></div>'
         + '<div class="md-desc">卡片是记忆的最小单元。点击卡片 3D 翻面预览；悬停出现编辑/暂停/删除。</div>'
         + '<div class="md-tools">'
         + '<input class="md-input md-search" data-f="q" placeholder="搜索卡面 / 卡背 / 标签…" value="' + esc(view.q) + '">'
@@ -1079,30 +1183,31 @@
         + '<span class="md-count">' + list.length + ' 张</span></div>'
         + '<div class="md-tools">'
         + '<button class="md-btn primary" data-act="new">＋ 新建卡片</button>'
-        + '<button class="md-btn" data-act="ai">✨ AI 制卡</button>'
-        + '<button class="md-btn" data-act="import">📥 导入</button>'
-        + '<button class="md-btn" data-act="export">📤 导出</button>'
-        + '<button class="md-btn' + (view.manage ? ' primary' : '') + '" data-act="manage">☑️ 批量</button>'
-        + '<button class="md-btn" data-act="goreview">⚡ 去复习</button>'
+        + '<button class="md-btn" data-act="ai">' + I('cpSpark') + 'AI 制卡</button>'
+        + '<button class="md-btn" data-act="mkmk">' + I('mistakes') + '错题制卡</button>'
+        + '<button class="md-btn" data-act="import">' + I('cpDownload') + '导入</button>'
+        + '<button class="md-btn" data-act="export">' + I('shareOut') + '导出</button>'
+        + '<button class="md-btn' + (view.manage ? ' primary' : '') + '" data-act="manage">' + I('cpCheck') + '批量</button>'
+        + '<button class="md-btn" data-act="goreview">' + I('cpBolt') + '去复习</button>'
         + '</div>'
         /* 批量操作条：默认收起，进管理模式才出现（与试卷提取「整理条」同一交互） */
         + (view.manage
           ? '<div class="md-editbar">'
           + '<label class="md-pickall" data-act="pickall"><input type="checkbox" tabindex="-1"> 全选本页</label>'
           + '<span class="md-count">已选 ' + Object.keys(view.sel).length + ' 张</span>'
-          + '<button class="md-btn sm danger" data-act="bdel">🗑 删除所选</button>'
-          + '<button class="md-btn sm" data-act="bsusp">⏸ 暂停所选</button>'
-          + '<button class="md-btn sm" data-act="bres">▶️ 恢复所选</button>'
-          + '<button class="md-btn sm" data-act="manage">✕ 退出</button>'
+          + '<button class="md-btn sm danger" data-act="bdel">' + I('cpTrash') + '删除所选</button>'
+          + '<button class="md-btn sm" data-act="bsusp">' + I('pause') + '暂停所选</button>'
+          + '<button class="md-btn sm" data-act="bres">' + I('cpPlay') + '恢复所选</button>'
+          + '<button class="md-btn sm" data-act="manage">' + I('cpCross') + '退出</button>'
           + '</div>'
           : '')
         + (list.length
           ? '<div class="md-grid">' + list.map(function (c, i) { return cardHtml(c, now, i, view.manage, !!view.sel[c.id]) }).join('') + '</div>'
-          : '<div class="md-empty"><span class="ico">🃏</span><b>这里还空着</b>'
+          : '<div class="md-empty"><span class="ico">' + I('list') + '</span><b>这里还空着</b>'
           + (deck.length
             ? '没有匹配当前筛选的卡片 —— 换个关键词或科目。'
-            : '建第一张卡，或点「✨ AI 制卡」把一段笔记变成一叠卡片。<div style="margin-top:12px">'
-            + '<button class="md-btn" data-act="sample">🎁 载入 10 张示例卡（跨科目）</button></div>') + '</div>')
+            : '建第一张卡，或点「AI 制卡」把一段笔记变成一叠卡片。<div style="margin-top:12px">'
+            + '<button class="md-btn" data-act="sample">' + I('party') + '载入 10 张示例卡（跨科目）</button></div>') + '</div>')
         + '</section>'
     }
 
@@ -1161,7 +1266,7 @@
           n++
         })
         deckSave(ctx, deck)
-        ctx.Toast.show('已载入 ' + n + ' 张示例卡 —— 去「⚡ 复习」体验流程', 'success', 2600)
+        ctx.Toast.show('已载入 ' + n + ' 张示例卡 —— 去「复习」体验流程', 'success', 2600)
         ctx.log('载入示例卡包 ' + n + ' 张')
         repaint()
       },
@@ -1244,7 +1349,40 @@
         }).catch(function () { /* 用户取消选文件，静默 */ })
       },
       goreview: function () { env.go(T_REVIEW) },
-      ai: function () { openAiPanel() }
+      ai: function () { openAiPanel() },
+      /* 错题制卡：把站内错题本里「有答案 / 有解析」的题变成闪卡。
+       * 幂等靠 cardFromMistake 写的 srcRef，所以可以放心让用户反复点。 */
+      mkmk: function () {
+        let mk = siteMistakes(ctx)
+        if (!mk.length) { ctx.Toast.show('站内错题本还是空的 —— 先刷题或整理错题再来', 'info', 2600); return }
+        let deck = deckGet(ctx)
+        let have = {}
+        deck.forEach(function (c) { if (c.srcRef) have[c.srcRef] = 1 })
+        let added = 0, dup = 0, bad = 0, full = false
+        for (let i = 0; i < mk.length; i++) {
+          let c = cardFromMistake(mk[i], i)
+          /* 【2026-10-22】跳过要能解释：原先 dup 和 bad 混在一个 skip 里，只报「跳过 5 条」，
+           * 用户分不清"这些我已经制过卡了"还是"这些题本来就没答案、制不了" —— 后者是要去补答案的。 */
+          if (!c) { bad++; continue }
+          if (have[c.srcRef]) { dup++; continue }
+          if (deck.length >= DECK_MAX_CARDS) { full = true; break }
+          deck.unshift(c); have[c.srcRef] = 1; added++
+        }
+        let why = []
+        if (dup) why.push('重复 ' + dup + ' 条')
+        if (bad) why.push('缺题干或答案 ' + bad + ' 条')
+        if (!added) {
+          let msg = full ? ('牌库已满（' + DECK_MAX_CARDS + ' 张上限）—— 先删一些旧卡')
+            : ('没有可用的新错题' + (why.length ? '（' + why.join('、') + '）' : '') + ' —— 去错题本补上答案/解析再来')
+          ctx.Toast.show(msg, 'info', 3000)
+          return
+        }
+        deckSave(ctx, deck)
+        ctx.log('错题制卡 ' + added + ' 张（重复 ' + dup + ' / 不可用 ' + bad + '）')
+        ctx.Toast.show('已从错题本制卡 ' + added + ' 张'
+          + (why.length ? '（跳过 ' + why.join('、') + '）' : '') + (full ? ' · 牌库已满' : ''), 'success', 3200)
+        repaint()
+      }
     })
 
     /* 输入类控件（搜索/标签/排序）不走 data-act 委托，单独绑 */
@@ -1261,7 +1399,7 @@
     function openAiPanel() {
       if (!aiReady(ctx)) { ctx.Toast.show('请先在设置里配置 AI 接口', 'warn', 2600); return }
       let m = openModal(
-        '<div class="md-modal-h">✨ AI 制卡 <em style="font-style:normal;font-size:11px;color:var(--md-sub);font-weight:600">笔记 → 问答闪卡</em>'
+        '<div class="md-modal-h">' + I('cpSpark') + 'AI 制卡 <em style="font-style:normal;font-size:11px;color:var(--md-sub);font-weight:600">笔记 → 问答闪卡</em>'
         + '<button class="md-iconbtn x" data-x="1">×</button></div>'
         + '<div class="md-health">' + healthCell(true, 'AI 已配置') + healthCell(true, '单次最多 ' + GEN_MAX_CARDS + ' 张') + '</div>'
         + '<div class="md-field"><span>粘贴笔记（讲义/错题解析/考点清单均可）</span>'
@@ -1384,19 +1522,19 @@
       let total = q.fresh.length + q.due.length
       let streak = streakOf(log, now)
       let head = '<section class="md-card" style="--i:0">'
-        + '<div class="md-h">⚡ 今日复习 <em>' + dkey(now) + '</em></div>'
+        + '<div class="md-h">' + I('cpBolt') + '今日复习 <em>' + dkey(now) + '</em></div>'
       if (!total) {
-        return head + '<div class="md-empty"><span class="ico">🎉</span><b>今日无事可做</b>'
+        return head + '<div class="md-empty"><span class="ico">' + I('party') + '</span><b>今日无事可做</b>'
           + (q.freshLeft + q.dueLeft > 0
             ? '今日额度（新卡 ' + dailyNew + ' / 复习 ' + dailyReview + '）已用完 —— 明天再来，间隔重复的价值就在「等」。'
-            : '没有到期的卡片。去「牌库」加几张卡，或粘贴笔记「✨ AI 制卡」。')
-          + '<div style="margin-top:12px"><button class="md-btn" data-act="godeck">🃏 去牌库</button> '
-          + '<button class="md-btn" data-act="gostats">📈 看统计</button></div></div></section>'
+            : '没有到期的卡片。去「牌库」加几张卡，或粘贴笔记「AI 制卡」。')
+          + '<div style="margin-top:12px"><button class="md-btn" data-act="godeck">' + I('list') + '去牌库</button> '
+          + '<button class="md-btn" data-act="gostats">' + I('trendingUp') + '看统计</button></div></div></section>'
           + '<section class="md-card" style="--i:1"><div class="md-h">近 14 天</div>' + heatHtml(activity, now) + '</section>'
       }
       return head
         + '<div class="md-desc">SM-2 间隔重复：记得越牢，下次见面越远。'
-        + (streak ? ' <span class="md-flame"><span class="fi">🔥</span>连续 ' + streak + ' 天</span>' : '') + '</div>'
+        + (streak ? ' <span class="md-flame"><span class="fi">' + I('flame') + '</span>连续 ' + streak + ' 天</span>' : '') + '</div>'
         + '<div class="md-result">'
         + '<div class="md-rstat" style="--i:0"><b style="color:var(--md-warn)">' + q.due.length + '</b><span>到期复习</span></div>'
         + '<div class="md-rstat" style="--i:1"><b style="color:var(--md-acc)">' + q.fresh.length + '</b><span>今日新卡</span></div>'
@@ -1404,7 +1542,7 @@
         + '</div>'
         + (q.dueLeft + q.freshLeft > 0 ? '<div class="md-note">超出今日额度的 ' + (q.dueLeft + q.freshLeft) + ' 张已自动顺延 —— 细水长流比一次刷爆有效。</div>' : '')
         + '<div style="margin-top:14px;display:flex;gap:9px;flex-wrap:wrap">'
-        + '<button class="md-btn primary" data-act="start" style="height:42px;padding:0 26px;font-size:14.5px">▶ 开始今日复习（' + total + ' 张）</button>'
+        + '<button class="md-btn primary" data-act="start" style="height:42px;padding:0 26px;font-size:14.5px">' + I('cpPlay') + '开始今日复习（' + total + ' 张）</button>'
         + '</div></section>'
         + '<section class="md-card" style="--i:1"><div class="md-h">近 14 天打卡</div>' + heatHtml(activity, now) + '</section>'
     }
@@ -1437,7 +1575,7 @@
           + '<div class="md-bigcard-in">'
           + '<div class="md-bigface"><div class="md-bigtext">' + esc(card.front) + '</div>'
           /* 助记提示是「回忆钩子」，放卡面（帮你想起来），不是放卡背（那就泄密了） */
-          + (card.hint ? '<div class="md-bighint">💡 ' + esc(card.hint) + '</div>' : '')
+          + (card.hint ? '<div class="md-bighint">' + I('bulb') + esc(card.hint) + '</div>' : '')
           + '<div class="md-bigfoot"><span class="md-tag">' + esc(card.subject) + '</span>'
           + card.tags.map(function (t) { return '<span class="md-tag">#' + esc(t) + '</span>' }).join('')
           + '<span style="margin-left:auto">' + (card.studied ? '复习 · 间隔 ' + card.ivl + ' 天' : '新卡首见') + '</span></div></div>'
@@ -1476,7 +1614,7 @@
       let accuracy = S.graded ? Math.round((S.graded - S.again) / S.graded * 100) : null
       let activity = dailyActivity(logGet(ctx), 14, Date.now())
       return '<section class="md-card" style="--i:0">'
-        + '<div class="md-h">🎉 本场完成 <em>用时 ' + Math.floor(secs / 60) + ' 分 ' + (secs % 60) + ' 秒</em></div>'
+        + '<div class="md-h">' + I('party') + '本场完成 <em>用时 ' + Math.floor(secs / 60) + ' 分 ' + (secs % 60) + ' 秒</em></div>'
         + '<div class="md-result">'
         + '<div class="md-rstat" style="--i:0"><b style="color:var(--md-acc)">' + S.graded + '</b><span>已评卡</span></div>'
         + '<div class="md-rstat" style="--i:1"><b style="color:var(--md-danger)">' + S.again + '</b><span>重来</span></div>'
@@ -1484,9 +1622,9 @@
         + '<div class="md-rstat" style="--i:3"><b>' + S.newLearned + '</b><span>新卡首过</span></div>'
         + '</div>'
         + '<div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:6px">'
-        + '<button class="md-btn primary" data-act="again2">⚡ 再学一轮（到期才排）</button>'
-        + '<button class="md-btn" data-act="gostats">📈 看记忆曲线</button>'
-        + '<button class="md-btn" data-act="godeck">🃏 回牌库</button>'
+        + '<button class="md-btn primary" data-act="again2">' + I('cpBolt') + '再学一轮（到期才排）</button>'
+        + '<button class="md-btn" data-act="gostats">' + I('trendingUp') + '看记忆曲线</button>'
+        + '<button class="md-btn" data-act="godeck">' + I('list') + '回牌库</button>'
         + '</div></section>'
         + '<section class="md-card" style="--i:1"><div class="md-h">近 14 天打卡</div>' + heatHtml(activity) + '</section>'
     }
@@ -1713,32 +1851,32 @@
       let warns = deck.filter(function (c) { return c.studied && c.lapses > 0 && !c.suspended })
         .sort(function (a, b) { return b.lapses - a.lapses }).slice(0, 5)
       if (!warns.length) return ''
-      return '<section class="md-card" style="--i:4"><div class="md-h">⚠️ 遗忘预警 <em>失败次数 Top ' + warns.length + '</em></div>'
+      return '<section class="md-card" style="--i:4"><div class="md-h">' + I('warn') + '遗忘预警 <em>失败次数 Top ' + warns.length + '</em></div>'
         + '<div class="md-desc">这些卡反复「重来」—— 要么是卡背写太长记不住，要么是卡面表述有歧义。点「去攻坚」逐张改写。</div>'
         + warns.map(function (c, i) {
           return '<div class="md-kv" style="--i:' + i + '"><b>' + esc(trunc(c.front, 42)) + '</b>'
             + '<span>失败 ' + c.lapses + ' 次 · 难度 ' + c.ease.toFixed(2) + '</span></div>'
         }).join('')
-        + '<div style="margin-top:12px"><button class="md-btn" data-act="warnfix">🔧 去牌库按「失误」排序攻坚</button></div>'
+        + '<div style="margin-top:12px"><button class="md-btn" data-act="warnfix">' + I('wrench') + '去牌库按「失误」排序攻坚</button></div>'
         + '</section>'
     }
 
     let body =
-      '<section class="md-card" style="--i:0"><div class="md-h">📈 总览 <em>近 ' + RANGE + ' 天</em></div>'
+      '<section class="md-card" style="--i:0"><div class="md-h">' + I('trendingUp') + '总览 <em>近 ' + RANGE + ' 天</em></div>'
       + '<div class="md-statgrid">'
       + '<div class="md-stat" style="--i:0"><b data-count="' + deck.length + '">0</b><span>牌库总量</span></div>'
       + '<div class="md-stat" style="--i:1"><b data-count="' + reviewedTotal + '">0</b><span>累计评分</span></div>'
       + '<div class="md-stat" style="--i:2"><b>' + (ret == null ? '—' : '<i data-count="' + ret + '">0</i>%') + '</b><span>30 天保留率</span></div>'
       + '<div class="md-stat" style="--i:3"><b>' + (ret7 == null ? '—' : '<i data-count="' + ret7 + '">0</i>%') + '</b><span>7 天保留率</span></div>'
-      + '<div class="md-stat" style="--i:4"><b class="md-flame"><span class="fi">🔥</span><i data-count="' + streak + '">0</i></b><span>连续天数</span></div>'
+      + '<div class="md-stat" style="--i:4"><b class="md-flame"><span class="fi">' + I('flame') + '</span><i data-count="' + streak + '">0</i></b><span>连续天数</span></div>'
       + '<div class="md-stat" style="--i:5"><b data-count="' + mins + '">0</b><span>累计分钟（估）</span></div>'
       + '</div>'
       + distBar()
       + '</section>'
-      + '<section class="md-card" style="--i:1"><div class="md-h">🧠 记忆曲线 <em>每日正确率</em></div>' + curveSvg() + '</section>'
-      + '<section class="md-card" style="--i:2"><div class="md-h">📅 未来 7 天到期 <em>峰值 ' + fcMax + ' 张/天</em></div>' + forecastBars()
+      + '<section class="md-card" style="--i:1"><div class="md-h">' + I('cpBrain') + '记忆曲线 <em>每日正确率</em></div>' + curveSvg() + '</section>'
+      + '<section class="md-card" style="--i:2"><div class="md-h">' + I('cpCal') + '未来 7 天到期 <em>峰值 ' + fcMax + ' 张/天</em></div>' + forecastBars()
       + '<div class="md-note">柱图在挂载后长高 —— 峰值日考虑减量，谷底日适合加新卡。</div></section>'
-      + '<section class="md-card" style="--i:3"><div class="md-h">🗓️ 全年打卡 <em>' + Math.min(364, log.length ? 364 : 0) + ' 天窗口</em></div>'
+      + '<section class="md-card" style="--i:3"><div class="md-h">' + I('cpCal') + '全年打卡 <em>' + Math.min(364, log.length ? 364 : 0) + ' 天窗口</em></div>'
       + (log.length ? yearHeat() : '<div class="md-empty"><b>还没有数据</b>完成一场复习后，这里会长出你的打卡地图。</div>')
       + '</section>'
       + warnSection()
@@ -1774,14 +1912,14 @@
       let ai = aiReady(ctx)
       let q = dueQueue(deck.filter(function (c) { return !c.suspended }), Date.now(), 9999, 9999)
       return '<section class="md-card" style="--i:0">'
-        + '<div class="md-h">⚙️ 每日额度</div>'
+        + '<div class="md-h">' + I('cpGear') + '每日额度</div>'
         + '<div class="md-desc">在插件中心 → 本插件「配置」里改；改完即生效，无需刷新。</div>'
         + '<div class="md-kv"><span>每日新卡上限</span><b>' + num(ctx.config('dailyNew'), 15) + ' 张</b></div>'
         + '<div class="md-kv"><span>每日复习上限</span><b>' + num(ctx.config('dailyReview'), 80) + ' 张</b></div>'
         + '<div class="md-kv"><span>提醒时刻</span><b>' + esc(String(ctx.config('remindAt') || '20:30')) + ' 后</b></div>'
         + '<div class="md-kv"><span>悬停牌库按「最难」攻坚</span><b>牌库页排序选「按最难」</b></div>'
         + '</section>'
-        + '<section class="md-card" style="--i:1"><div class="md-h">🩺 体检</div>'
+        + '<section class="md-card" style="--i:1"><div class="md-h">' + I('flask') + '体检</div>'
         + '<div class="md-health">'
         + healthCell(ai, ai ? 'AI 已配置（制卡可用）' : 'AI 未配置（制卡不可用，手工建卡不受影响）')
         + healthCell(deck.length > 0, deck.length ? '牌库 ' + deck.length + ' 张 · ' + fmtSize(deckSize(deck)) : '牌库为空')
@@ -1789,7 +1927,7 @@
         + healthCell(log.length < LOG_MAX, '日志 ' + log.length + ' / ' + LOG_MAX + ' 条')
         + healthCell(q.due.length === 0, q.due.length ? '今日有 ' + q.due.length + ' 张到期' : '今日无到期卡')
         + '</div></section>'
-        + '<section class="md-card" style="--i:2"><div class="md-h">🧮 引擎说明</div>'
+        + '<section class="md-card" style="--i:2"><div class="md-h">' + I('cpNodes') + '引擎说明</div>'
         + '<div class="md-desc">SM-2 间隔重复（Anki 同源变体）：评分四档（重来/困难/良好/轻松），'
         + '难度因子 EF′ = EF + (0.1 − (5−q)(0.08 + (5−q)·0.02))，夹在 [' + EASE_MIN + ', ' + EASE_MAX + ']；'
         + '首过 1 天、二过 6 天，之后 I(n) = I(n−1) × EF，「困难」×' + HARD_F + '、「轻松」×' + EASY_F + '；'
@@ -1798,13 +1936,13 @@
         + '<div class="md-kv"><span>初始 / 边界难度因子</span><b>' + EASE_INIT + ' / ' + EASE_MIN + ' ~ ' + EASE_MAX + '</b></div>'
         + '<div class="md-kv"><span>数据存放</span><b>牌库随云同步 · 会话现场只留本机</b></div>'
         + '</section>'
-        + '<section class="md-card" style="--i:3"><div class="md-h">🗃️ 数据管理</div>'
+        + '<section class="md-card" style="--i:3"><div class="md-h">' + I('archive') + '数据管理</div>'
         + '<div class="md-desc">牌库与日志存在本插件的云同步空间里。导出做备份，导入可迁移到其它设备。</div>'
         + '<div class="md-tools">'
-        + '<button class="md-btn" data-act="export">📤 导出全部（JSON）</button>'
-        + '<button class="md-btn" data-act="import">📥 导入备份</button>'
-        + '<button class="md-btn" data-act="sample">🎁 载入示例卡包</button>'
-        + '<button class="md-btn danger" data-act="wipe">🗑 清空牌库与日志</button>'
+        + '<button class="md-btn" data-act="export">' + I('shareOut') + '导出全部（JSON）</button>'
+        + '<button class="md-btn" data-act="import">' + I('cpDownload') + '导入备份</button>'
+        + '<button class="md-btn" data-act="sample">' + I('party') + '载入示例卡包</button>'
+        + '<button class="md-btn danger" data-act="wipe">' + I('cpTrash') + '清空牌库与日志</button>'
         + '</div>'
         + '<div class="md-msg" data-f="msg"></div></section>'
     }
@@ -1891,7 +2029,7 @@
       if (!n) return                                             /* 无事可做不打扰 */
       ctx.keep.set('lastRemind', tk)
       ctx.notify({
-        title: '⚡ 闪卡到期 ' + n + ' 张',
+        title: '闪卡到期 ' + n + ' 张',
         body: '其中复习 ' + q.due.length + ' 张、新卡 ' + q.fresh.length + ' 张 —— 点开即学。',
         level: 'info',
         timeout: 0,
@@ -1913,7 +2051,7 @@
       if (n < 10) return
       ctx.keep.set('lastQuizNudge', tk)
       ctx.notify({
-        title: '🃏 错题刚出炉，趁热制卡？',
+        title: '错题刚出炉，趁热制卡？',
         body: '闪卡还有 ' + n + ' 张到期。把刚错的考点做成卡，比整本重读有效。',
         level: 'info',
         timeout: 12000,
@@ -1932,7 +2070,8 @@
     desc: 'SM-2 间隔重复闪卡（四合一单工具页）：牌库/复习/统计/设置页签切换，AI 制卡、到期提醒、吸顶页眉、3D 翻面。插件中心承载力测试件（约两千行单文件）。',
     tools: [
       /* 四合一：只注册这一个入口，四个页签在页内切换（mountApp 持有壳） */
-      { id: 'memo-deck', title: '记忆宫殿 · 闪卡', icon: '🧠', mount: mountApp }
+      /* 【v1.1】模块图标换品牌砖（紫→蓝渐变 + 白卡牌），与页眉同款字形 */
+      { id: 'memo-deck', title: '记忆宫殿 · 闪卡', icon: MARK_TILE, mount: mountApp }
     ],
     config: [
       { key: 'dailyNew', label: '每日新卡上限', type: 'number', default: 15 },
@@ -1946,7 +2085,7 @@
         prompt: '用户输入：{input}\n你是记忆宫殿插件的制卡教练。把用户给的笔记/考点/错题解析，拆成 5-15 张「问答闪卡」建议。'
           + '每张输出：卡面（一个能独立回答的问题）、卡背（≤80 字答案，公式用 $LaTeX$）、标签。'
           + '一卡一事、提问化、不照搬原句；标题/页码/客套话不制卡。'
-          + '输出后提醒用户：去「工具 → 闪卡牌库 → ✨ AI 制卡」可以一键入库并开始复习。'
+          + '输出后提醒用户：去「工具 → 闪卡牌库 → AI 制卡」可以一键入库并开始复习。'
       }
     ],
     timers: [
@@ -1973,6 +2112,7 @@
     memory: '用户装有「记忆宫殿 · 闪卡」插件（工具抽屉 → 记忆宫殿 · 闪卡，内部四页签：牌库/复习/统计/设置）。'
       + '当用户问「该复习什么」「记不住」时，提醒他去闪卡的复习页签。',
     init: function (ctx) {
+      HOST_CTX = ctx
       /* 声明自己的 AI 场景（制卡）：卡背常放公式 → latexNeed 必须开，
        * 否则 AI 制的卡里 `$…$` 不走站内公式契约（渲染出来是源码）。 */
       try {
