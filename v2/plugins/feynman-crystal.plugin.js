@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.2'
+  let VERSION = '1.3'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -2143,7 +2143,15 @@
   }
 
   let CSS = [
-    '.fx-root{--fx-acc:#0f766e;--fx-acc2:#2563eb;--fx-ink:var(--text-primary,#1b2430);--fx-sub:var(--text-muted,#6b7788);--fx-line:var(--line,#e5e7eb);--fx-line2:color-mix(in srgb,var(--text-primary,#1b2430) 24%,transparent);--fx-bg:var(--surface,#fff);--fx-soft:var(--surface-muted,#f6f8fb);--fx-gut:var(--vp-x,16px);--fx-w:1180px;position:relative;color:var(--fx-ink);font:14px/1.65 "PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}',
+    '.fx-root{--fx-acc:#0f766e;--fx-acc2:#2563eb;--fx-on-acc:#fff;--fx-warn-ink:#b45309;--fx-ink:var(--text-primary,#1b2430);--fx-sub:var(--text-muted,#6b7788);--fx-line:var(--line,#e5e7eb);--fx-line2:color-mix(in srgb,var(--text-primary,#1b2430) 24%,transparent);--fx-bg:var(--surface,#fff);--fx-soft:var(--surface-muted,#f6f8fb);--fx-gut:var(--vp-x,16px);--fx-w:1180px;position:relative;color:var(--fx-ink);font:14px/1.65 "PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}',
+    /* —— 夜间：主色底改站点同款鎏金，压在底上的字改墨色 ——
+     * 白天的青绿 #0f766e 是「晶体」的品牌色，但夜间两处同时翻车：
+     *   ① 当**字**用（页眉砖的 `color`、`.fx-btn.ghost.on` 等）压在 #121a2f 上只有 3.16:1；
+     *   ② `--fx-acc2` 写死的是**白天蓝** #2563eb，夜间主按钮还是那条白天的蓝紫渐变。
+     * 站点夜间的规矩是「主色 = --nk-acc 鎏金，压在鎏金上的字 = --nk-acc-ink 墨色」。 */
+    'html[data-theme="night"] .fx-root{--fx-acc:var(--nk-acc,#f0b95a);--fx-acc2:#e2a43f;--fx-on-acc:var(--nk-acc-ink,#2a1c04);--fx-warn-ink:var(--warn,#e8ae3f)}',
+    /* 破坏性文字按钮：写死的 #b91c1c 在夜间深底上只有 2.89:1（读数实测），换成语义令牌 */
+    'html[data-theme="night"] .fx-btn.danger,html[data-theme="night"] .fx-icobtn.danger{color:var(--danger,#ef6a63)}',
     '.fx-root *,.fx-root *::before,.fx-root *::after{box-sizing:border-box}',
     '.fx-root button{font-family:inherit;color:inherit}',
     '.fx-aura{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;background-image:repeating-linear-gradient(90deg,color-mix(in srgb,var(--fx-ink) 4%,transparent) 0 1px,transparent 1px 96px);mask-image:linear-gradient(180deg,#000,transparent 72%);-webkit-mask-image:linear-gradient(180deg,#000,transparent 72%)}',
@@ -2192,8 +2200,8 @@
     '.fx-btn:hover{color:var(--fx-acc);border-bottom-color:currentColor}',
     '.fx-btn:active{transform:translateY(1px)}',
     '.fx-btn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8}',
-    '.fx-btn.primary{height:34px;padding:0 18px;border:0;border-radius:999px;background:linear-gradient(135deg,var(--fx-acc),var(--fx-acc2));color:#fff;box-shadow:0 8px 20px -12px rgba(15,118,110,.9)}',
-    '.fx-btn.primary:hover{color:#fff;transform:translateY(-1px)}',
+    '.fx-btn.primary{height:34px;padding:0 18px;border:0;border-radius:999px;background:linear-gradient(135deg,var(--fx-acc),var(--fx-acc2));color:var(--fx-on-acc);box-shadow:0 8px 20px -12px color-mix(in srgb,var(--fx-acc) 90%,transparent)}',
+    '.fx-btn.primary:hover{color:var(--fx-on-acc);transform:translateY(-1px)}',
     '.fx-btn.ghost{color:var(--fx-sub)}',
     '.fx-btn.ghost.on{color:var(--fx-acc);border-bottom-color:var(--fx-acc)}',
     '.fx-btn.danger{color:#b91c1c}',
@@ -2307,7 +2315,7 @@
     '.fx-btn svg.ci,.fx-icobtn svg.ci,.fx-dock-item svg.ci{margin-right:0}',
     '.fx-dock-item:hover{color:var(--fx-ink)}',
     '.fx-dock-item:hover svg{transform:translateY(-2px) scale(1.06)}',
-    '.fx-dock-item.on{color:#fff}',
+    '.fx-dock-item.on{color:var(--fx-on-acc)}',
     '.fx-dot{position:absolute;top:5px;right:11px;width:6px;height:6px;border-radius:50%;background:#e11d48;box-shadow:0 0 6px #e11d48;display:none}',
     '.fx-dot.show{display:block;animation:fxDot 1.6s infinite}',
     '@keyframes fxDot{50%{opacity:.35}}',
@@ -2433,8 +2441,8 @@
     '.fx-hcell i{width:6px;height:6px;border-radius:50%;background:var(--fx-sub)}',
     '.fx-hcell.ok{color:var(--fx-acc);border-bottom-color:color-mix(in srgb,var(--fx-acc) 40%,transparent)}',
     '.fx-hcell.ok i{background:var(--fx-acc)}',
-    '.fx-hcell.no{color:#b45309;border-bottom-color:rgba(180,83,9,.35)}',
-    '.fx-hcell.no i{background:#b45309}',
+    '.fx-hcell.no{color:var(--fx-warn-ink);border-bottom-color:color-mix(in srgb,var(--warn,#b45309) 35%,transparent)}',
+    '.fx-hcell.no i{background:var(--warn,#b45309)}',
     '.fx-cfglist{display:flex;flex-direction:column}',
     '.fx-cfgrow{display:grid;grid-template-columns:130px 76px 1fr;gap:14px;align-items:baseline;font-size:12px;padding:10px 0;border-bottom:1px solid var(--fx-line)}',
     '.fx-cfgrow b{font-weight:700}',

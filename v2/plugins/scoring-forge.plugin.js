@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.2'
+  let VERSION = '1.3'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -1862,7 +1862,15 @@
    * 设计语言沿用「讲义式排版」但换主色：朱砂（批卷红）+ 米纸，与费曼晶体的青绿区分开。
    * 页眉/dock/卡片/表单/空态/面板/夜间/响应式放这里（任何场景都要有）。 */
   let CSS = [
-    '.sf-root{--sf-acc:#b23a2e;--sf-acc2:#8a5a2b;--sf-ink:var(--text-primary,#1b2430);--sf-sub:var(--text-muted,#6b7788);--sf-line:var(--line,#e5e7eb);--sf-line2:color-mix(in srgb,var(--text-primary,#1b2430) 24%,transparent);--sf-bg:var(--surface,#fff);--sf-soft:var(--surface-muted,#f6f8fb);--sf-gut:var(--vp-x,16px);--sf-w:1180px;position:relative;color:var(--sf-ink);font:14px/1.65 "PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}',
+    '.sf-root{--sf-acc:#b23a2e;--sf-acc2:#8f3a2a;--sf-on-acc:#fff;--sf-warn-ink:#b45309;--sf-ink:var(--text-primary,#1b2430);--sf-sub:var(--text-muted,#6b7788);--sf-line:var(--line,#e5e7eb);--sf-line2:color-mix(in srgb,var(--text-primary,#1b2430) 24%,transparent);--sf-bg:var(--surface,#fff);--sf-soft:var(--surface-muted,#f6f8fb);--sf-gut:var(--vp-x,16px);--sf-w:1180px;position:relative;color:var(--sf-ink);font:14px/1.65 "PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}',
+    /* —— 夜间：主色底改站点同款鎏金，压在底上的字改墨色 ——
+     * 本插件白天的主色是砖红 #b23a2e（「熔炉」），写死的深色在夜间**当底**算安全、
+     * 但当**字**就塌了（#b23a2e 压在 #121a2f 上只有 2.9:1）。站点夜间的规矩很明确：
+     * 主色一律是 `--nk-acc` 鎏金、压在鎏金上的字是 `--nk-acc-ink` 墨色（main.css 那条
+     * `html[data-theme=night] .btn-primary`）。这里对齐同一套，白天不受影响。 */
+    'html[data-theme="night"] .sf-root{--sf-acc:var(--nk-acc,#f0b95a);--sf-acc2:#e2a43f;--sf-on-acc:var(--nk-acc-ink,#2a1c04);--sf-warn-ink:var(--warn,#e8ae3f)}',
+    /* 破坏性文字按钮：写死的 #b91c1c 在夜间深底上只有 2.89:1（读数实测），换成语义令牌 */
+    'html[data-theme="night"] .sf-btn.danger,html[data-theme="night"] .sf-icobtn.danger{color:var(--danger,#ef6a63)}',
     '.sf-root *,.sf-root *::before,.sf-root *::after{box-sizing:border-box}',
     '.sf-root button{font-family:inherit;color:inherit}',
     '.sf-aura{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;background-image:repeating-linear-gradient(90deg,color-mix(in srgb,var(--sf-ink) 4%,transparent) 0 1px,transparent 1px 96px);mask-image:linear-gradient(180deg,#000,transparent 72%);-webkit-mask-image:linear-gradient(180deg,#000,transparent 72%)}',
@@ -1899,8 +1907,8 @@
     '.sf-btn:hover{color:var(--sf-acc);border-bottom-color:currentColor}',
     '.sf-btn:active{transform:translateY(1px)}',
     '.sf-btn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8}',
-    '.sf-btn.primary{height:34px;padding:0 18px;border:0;border-radius:999px;background:linear-gradient(135deg,var(--sf-acc),#8f3a2a);color:#fff;box-shadow:0 8px 20px -12px rgba(178,58,46,.9)}',
-    '.sf-btn.primary:hover{color:#fff;transform:translateY(-1px)}',
+    '.sf-btn.primary{height:34px;padding:0 18px;border:0;border-radius:999px;background:linear-gradient(135deg,var(--sf-acc),var(--sf-acc2));color:var(--sf-on-acc);box-shadow:0 8px 20px -12px color-mix(in srgb,var(--sf-acc) 90%,transparent)}',
+    '.sf-btn.primary:hover{color:var(--sf-on-acc);transform:translateY(-1px)}',
     '.sf-btn.ghost{color:var(--sf-sub)}',
     '.sf-btn.ghost.on{color:var(--sf-acc);border-bottom-color:var(--sf-acc)}',
     '.sf-btn.danger{color:#b91c1c}',
@@ -1977,13 +1985,13 @@
     '.sf-dock{position:sticky;z-index:40;bottom:calc(70px + env(safe-area-inset-bottom,0px));display:flex;justify-content:center;gap:2px;width:max-content;margin:18px auto 0;padding:6px;border-radius:18px;background:color-mix(in srgb,var(--sf-bg) 84%,transparent);border:1px solid var(--sf-line);box-shadow:0 16px 36px -26px rgba(20,32,28,.7);backdrop-filter:blur(20px) saturate(1.15);-webkit-backdrop-filter:blur(20px) saturate(1.15)}',
     'html[data-layout="workbench"] .sf-dock{bottom:20px}',
     '@media (max-width:900px){html[data-layout="workbench"] .sf-dock{bottom:calc(70px + env(safe-area-inset-bottom,0px))}}',
-    '.sf-dock-ind{position:absolute;top:6px;bottom:6px;left:6px;width:62px;border-radius:14px;background:linear-gradient(135deg,var(--sf-acc),#8f3a2a);box-shadow:0 6px 16px -8px rgba(178,58,46,.8);transition:left .38s cubic-bezier(.3,.85,.3,1),width .38s cubic-bezier(.3,.85,.3,1)}',
+    '.sf-dock-ind{position:absolute;top:6px;bottom:6px;left:6px;width:62px;border-radius:14px;background:linear-gradient(135deg,var(--sf-acc),var(--sf-acc2));box-shadow:0 6px 16px -8px color-mix(in srgb,var(--sf-acc) 80%,transparent);transition:left .38s cubic-bezier(.3,.85,.3,1),width .38s cubic-bezier(.3,.85,.3,1)}',
     '.sf-dock-item{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:62px;padding:8px 13px;border:0;border-radius:14px;background:none;color:var(--sf-sub);font-size:10.5px;font-weight:600;letter-spacing:.04em;cursor:pointer;transition:color .25s}',
     '.sf-dock-item svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;transition:transform .25s}',
     '.sf-dock-item em{font-style:normal}',
     '.sf-dock-item:hover{color:var(--sf-ink)}',
     '.sf-dock-item:hover svg{transform:translateY(-2px) scale(1.06)}',
-    '.sf-dock-item.on{color:#fff}',
+    '.sf-dock-item.on{color:var(--sf-on-acc)}',
     '.sf-dot{position:absolute;top:5px;right:11px;width:6px;height:6px;border-radius:50%;background:#e11d48;box-shadow:0 0 6px #e11d48;display:none}',
     '.sf-dot.show{display:block;animation:sfDot 1.6s infinite}',
     '@keyframes sfDot{50%{opacity:.35}}',
@@ -2021,7 +2029,7 @@
     '.sf-pmark{width:28px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--sf-line2);border-radius:0;background:none;color:var(--sf-sub);font-size:12px;cursor:pointer;transition:all .16s}',
     '.sf-pmark svg{width:13px;height:13px;display:block}',
     '.sf-pmark:hover{border-color:var(--sf-acc);color:var(--sf-acc)}',
-    '.sf-pmark.on{background:var(--sf-acc);border-color:var(--sf-acc);color:#fff}',
+    '.sf-pmark.on{background:var(--sf-acc);border-color:var(--sf-acc);color:var(--sf-on-acc)}',
     '.sf-pmark[data-mode="half"].on{background:#b45309;border-color:#b45309}',
     '.sf-pmark[data-mode="miss"].on{background:#475569;border-color:#475569}',
     '.sf-comment{margin-top:14px;padding:12px 0 12px 16px;border-left:2px solid var(--sf-line2);font-size:13px;line-height:1.85}',
@@ -2092,10 +2100,10 @@
     '.sf-health{display:flex;gap:26px;flex-wrap:wrap;margin-bottom:6px}',
     '.sf-hcell{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;color:var(--sf-sub);padding-bottom:4px;border-bottom:1px solid var(--sf-line)}',
     '.sf-hcell i{width:6px;height:6px;border-radius:50%;background:var(--sf-sub)}',
-    '.sf-hcell.ok{color:#0f766e;border-bottom-color:rgba(15,118,110,.4)}',
-    '.sf-hcell.ok i{background:#0f766e}',
-    '.sf-hcell.no{color:#b45309;border-bottom-color:rgba(180,83,9,.35)}',
-    '.sf-hcell.no i{background:#b45309}',
+    '.sf-hcell.ok{color:var(--ok,#0f766e);border-bottom-color:color-mix(in srgb,var(--ok,#0f766e) 40%,transparent)}',
+    '.sf-hcell.ok i{background:var(--ok,#0f766e)}',
+    '.sf-hcell.no{color:var(--sf-warn-ink);border-bottom-color:color-mix(in srgb,var(--warn,#b45309) 35%,transparent)}',
+    '.sf-hcell.no i{background:var(--warn,#b45309)}',
     '.sf-cfglist{display:flex;flex-direction:column}',
     '.sf-cfgrow{display:grid;grid-template-columns:130px 76px 1fr;gap:14px;align-items:baseline;font-size:12px;padding:10px 0;border-bottom:1px solid var(--sf-line)}',
     '.sf-cfgrow b{font-weight:700}',

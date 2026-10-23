@@ -53,7 +53,7 @@
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。
    * 走「主.次」而不是补丁位：市场条目只记两位（见 paper-extract-plugin-1-1.test.ts
    * 那条"市场版本必须等于源码 VERSION 的前两段"），补丁位留给不改变对外行为的修。 */
-  let VERSION = '1.6.0'
+  let VERSION = '1.7.0'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
@@ -1779,7 +1779,17 @@
    * 样式：全部走站点设计令牌（夜间的 --surface 是深色，硬编码 #fff 会白底白字）
    * ══════════════════════════════════════════════════════════════════ */
   let CSS = [
-    '.px-wrap{--px-acc:var(--blue,#2563eb);--px-ink:var(--text-primary,#1b2430);--px-sub:var(--text-muted,#6b7788);--px-line:var(--line,#e3e8f0);--px-bg:var(--surface,#fff);--px-soft:var(--surface-muted,#f6f8fb);color:var(--px-ink);font:14px/1.6 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;max-width:1180px;margin:0 auto}',
+    '.px-wrap{--px-acc:var(--blue,#2563eb);--px-acc2:var(--purple,#7c3aed);--px-on-acc:#fff;--px-acc-text:var(--px-acc);--px-warn-ink:#b45309;--px-ink:var(--text-primary,#1b2430);--px-sub:var(--text-muted,#6b7788);--px-line:var(--line,#e3e8f0);--px-bg:var(--surface,#fff);--px-soft:var(--surface-muted,#f6f8fb);color:var(--px-ink);font:14px/1.6 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;max-width:1180px;margin:0 auto}',
+    /* —— 夜间：主色底改站点同款鎏金，压在底上的字改墨色 ——
+     * 【实测 2026-10-23】`--px-acc` 走 `var(--blue)`，夜间变浅蓝 #7aa2ff（亮度 .39），
+     * `.px-nav a.on` 的白字压上去只有 **2.49:1** —— 三个子页的当前页签全部读不出字。
+     * 站点夜间主按钮是 `linear-gradient(135deg,#f6cd6f,#e2a43f)` + `var(--nk-acc-ink)`，
+     * 这里对齐同一套（不是"顺手换颜色"，是站点本来就规定了夜间主色）。 */
+    'html[data-theme="night"] .px-wrap{--px-acc:var(--nk-acc,#f0b95a);--px-acc2:#e2a43f;--px-on-acc:var(--nk-acc-ink,#2a1c04);--px-warn-ink:var(--warn,#e8ae3f)}',
+    /* —— 金色主题：橙底不改，改「压在橙底上的字」与「橙色当文字」 ——
+     * `--px-acc` 在 gold = 品牌橙 #d9820a（填充色）：白字压橙 2.94、橙当小字压奶油卡 2.82。
+     * 墨字 5.64 / 深暖棕 5.92；渐变暗端由焦糖 #a8681c 提亮到 #f2b45c，好让墨字压整条渐变都够。 */
+    'html[data-theme="gold"] .px-wrap{--px-acc2:#f2b45c;--px-on-acc:var(--accent-ink,#2a1c04);--px-acc-text:var(--accent-text,#8f5305)}',
     /* 导航 */
     /* 【v1.4 三合一 · 吸顶】三条子页收进同一个工具页后，导航条就是唯一的换页入口，
      * 卷库滚到第 6 卷还得滚回顶上才能切 → 吸顶。
@@ -1798,7 +1808,7 @@
     '.px-nav a b{display:inline-flex;align-items:center;font-size:15px;font-weight:400}',
     '.px-nav a b svg{width:15px;height:15px;display:block}',
     '.px-nav a:hover{background:var(--px-soft);color:var(--px-ink)}',
-    '.px-nav a.on{background:var(--px-acc);color:#fff;box-shadow:0 4px 12px rgba(37,99,235,.28)}',
+    '.px-nav a.on{background:var(--px-acc);color:var(--px-on-acc);box-shadow:0 4px 12px color-mix(in srgb,var(--px-acc) 28%,transparent)}',
     '.px-nav-v{margin-left:auto;font-size:11px;color:var(--px-sub);letter-spacing:.4px;padding-right:6px}',
     /* 品牌砖：导航条左侧的 24px 方砖（窗口 svg 的 width=1em 会被这条撑满） */
     '.px-mark{width:24px;height:24px;flex:0 0 24px;display:grid;place-items:center;font-size:24px;margin-right:2px}',
@@ -1814,38 +1824,41 @@
     '.px-hcell i{width:7px;height:7px;border-radius:50%;background:var(--px-sub);display:inline-block}',
     '.px-hcell.ok{color:var(--ok,#16a34a);border-color:rgba(22,163,74,.35);background:rgba(22,163,74,.08)}',
     '.px-hcell.ok i{background:var(--ok,#16a34a)}',
-    '.px-hcell.no{color:var(--warn,#d97706);border-color:rgba(217,119,6,.32);background:rgba(217,119,6,.08)}',
+    '.px-hcell.no{color:var(--px-warn-ink);border-color:rgba(217,119,6,.32);background:rgba(217,119,6,.08)}',
     '.px-hcell.no i{background:var(--warn,#d97706)}',
     '.px-hcell em{font-style:normal;color:inherit;opacity:.85}',
     /* 表单 */
     '.px-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px}',
     '.px-f{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--px-sub)}',
     '.px-f select,.px-f input,.px-search{height:36px;border:1px solid var(--px-line);border-radius:10px;padding:0 10px;background:var(--px-bg);color:var(--px-ink);outline:none;font-size:13px;font-family:inherit}',
-    '.px-f select:focus,.px-f input:focus,.px-search:focus,.px-ta:focus{border-color:var(--px-acc);box-shadow:0 0 0 3px rgba(37,99,235,.13)}',
+    '.px-f select:focus,.px-f input:focus,.px-search:focus,.px-ta:focus{border-color:var(--px-acc-text);box-shadow:0 0 0 3px rgba(37,99,235,.13)}',
     '.px-ta{width:100%;min-height:96px;border:1px solid var(--px-line);border-radius:10px;padding:10px;background:var(--px-bg);color:var(--px-ink);font:12.5px/1.7 ui-monospace,Consolas,monospace;outline:none;resize:vertical;box-sizing:border-box}',
     '.px-more{margin:12px 0 4px;border-top:1px dashed var(--px-line);padding-top:10px}',
     '.px-more>summary{cursor:pointer;font-size:12.5px;color:var(--px-sub);font-weight:600;user-select:none;list-style:none}',
     '.px-more>summary::-webkit-details-marker{display:none}',
-    '.px-more>summary:before{content:"▸ ";color:var(--px-acc)}',
+    '.px-more>summary:before{content:"▸ ";color:var(--px-acc-text)}',
     '.px-more[open]>summary:before{content:"▾ "}',
     '.px-more>.px-grid{margin-top:12px}',
     /* 上传区 */
     '.px-drop{border:1.6px dashed var(--px-line);border-radius:14px;background:var(--px-soft);padding:22px 16px;text-align:center;cursor:pointer;transition:border-color .18s,background .18s;margin:4px 0 14px}',
-    '.px-drop:hover,.px-drop.over{border-color:var(--px-acc);background:rgba(37,99,235,.05)}',
+    '.px-drop:hover,.px-drop.over{border-color:var(--px-acc-text);background:rgba(37,99,235,.05)}',
     '.px-drop.has{border-style:solid;border-color:var(--ok,#16a34a);background:rgba(22,163,74,.05)}',
     '.px-drop .ico{font-size:26px;line-height:1.2;display:block;margin-bottom:4px}',
     '.px-drop b{display:block;font-size:13.5px;word-break:break-all}',
     '.px-drop small{color:var(--px-sub);font-size:11.5px;line-height:1.7;display:block;margin-top:3px}',
     /* 按钮 */
     '.px-btn{height:36px;padding:0 15px;border-radius:10px;border:1px solid var(--px-line);background:var(--px-bg);cursor:pointer;font-weight:600;font-size:13px;color:var(--text-secondary,#33425a);font-family:inherit;transition:transform .12s,border-color .16s,background .16s}',
-    '.px-btn:hover:not(:disabled){border-color:var(--px-acc);color:var(--px-acc)}',
+    '.px-btn:hover:not(:disabled){border-color:var(--px-acc-text);color:var(--px-acc-text)}',
     '.px-btn:active:not(:disabled){transform:translateY(1px)}',
-    '.px-btn.primary{background:linear-gradient(135deg,var(--blue,#2563eb),var(--purple,#7c3aed));color:#fff;border:0;box-shadow:0 6px 16px rgba(37,99,235,.25)}',
-    '.px-btn.primary:hover:not(:disabled){color:#fff;filter:brightness(1.05)}',
+    '.px-btn.primary{background:linear-gradient(135deg,var(--px-acc),var(--px-acc2));color:var(--px-on-acc);border:0;box-shadow:0 6px 16px color-mix(in srgb,var(--px-acc) 25%,transparent)}',
+    '.px-btn.primary:hover:not(:disabled){color:var(--px-on-acc);filter:brightness(1.05)}',
+    '.px-btn.primary:disabled{background:color-mix(in srgb,var(--px-ink) 7%,transparent);color:var(--px-sub);box-shadow:none}',
     '.px-btn.danger{color:var(--danger,#dc2626);border-color:rgba(220,38,38,.3)}',
     '.px-btn.danger:hover:not(:disabled){background:rgba(220,38,38,.07);color:var(--danger,#dc2626)}',
     '.px-btn.sm{height:30px;padding:0 11px;font-size:12px;border-radius:9px}',
-    '.px-btn:disabled{opacity:.45;cursor:not-allowed}',
+    '/* 禁用态不用 `opacity:.45`：深色主题下按钮连文字一起被压成背景色，读不出来 */',
+    '.px-btn:disabled{opacity:1;cursor:not-allowed;color:var(--px-sub);border-color:var(--px-line);'
+      + 'background:color-mix(in srgb,var(--px-ink) 6%,transparent);box-shadow:none}',
     '.px-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}',
     '.px-msg{font-size:12px;color:var(--px-sub)}',
     /* 进度 */
@@ -1855,7 +1868,7 @@
     '.px-steps{display:flex;gap:7px;flex-wrap:wrap}',
     '.px-step{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:5px 11px;border-radius:999px;border:1px solid var(--px-line);color:var(--px-sub);background:var(--px-bg);transition:all .2s}',
     '.px-step i{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.55}',
-    '.px-step.on{border-color:var(--px-acc);color:var(--px-acc);font-weight:700;background:rgba(37,99,235,.07)}',
+    '.px-step.on{border-color:var(--px-acc-text);color:var(--px-acc-text);font-weight:700;background:rgba(37,99,235,.07)}',
     '.px-step.done{border-color:rgba(22,163,74,.4);color:var(--ok,#16a34a);background:rgba(22,163,74,.07)}',
     '.px-log{max-height:190px;overflow:auto;background:#0d1524;color:#c8d6ee;border-radius:11px;padding:11px;font:11.5px/1.7 ui-monospace,Consolas,monospace;white-space:pre-wrap;margin-top:10px}',
     '.px-log:empty{display:none}',
@@ -1896,9 +1909,9 @@
     '.px-meta{color:var(--px-sub);font-size:11.5px;display:flex;gap:12px;flex-wrap:wrap;margin-top:4px}',
     '.px-q-ft{margin-top:8px}',
     '.px-mini{border:1px solid var(--px-line);background:none;border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer;color:var(--px-sub);font-family:inherit}',
-    '.px-mini:hover{border-color:var(--px-acc);color:var(--px-acc)}',
+    '.px-mini:hover{border-color:var(--px-acc-text);color:var(--px-acc-text)}',
     '.px-mini.danger:hover{border-color:var(--danger,#dc2626);color:var(--danger,#dc2626)}',
-    '.px-mini:disabled{opacity:.42;cursor:not-allowed}',
+    '.px-mini:disabled{opacity:1;cursor:not-allowed;color:var(--px-sub);border-color:var(--px-line)}',
     '.px-mini:disabled:hover{border-color:var(--px-line);color:var(--px-sub)}',
     /* 整理条：勾选/批量删/撤销/重编号 */
     '.px-editbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:11px;padding:9px 11px;border:1px dashed var(--px-line);border-radius:11px;background:var(--px-soft)}',
@@ -1912,7 +1925,7 @@
     '.px-drop .ico svg.ci{width:26px;height:26px;display:block;margin:0 auto}',
     '@media (max-width:560px){.px-seg button{padding:7px 9px;font-size:11.5px}.px-edit-tip{margin-left:0;flex-basis:100%}'
       + '.px-editbar .px-pickall{flex-basis:100%}.px-editbar .px-mini{flex:1 1 0;min-width:0;text-align:center}}',
-    '.px-q.picked{border-color:var(--px-acc);box-shadow:0 0 0 2px rgba(37,99,235,.14)}',
+    '.px-q.picked{border-color:var(--px-acc-text);box-shadow:0 0 0 2px rgba(37,99,235,.14)}',
     /* 勾选框放在题头行里（不做绝对定位的角标）：首屏就能点，也不会盖住配图内容 */
     '.px-pick{display:inline-flex;align-items:center;padding:1px 3px;border-radius:7px;cursor:pointer}',
     '.px-pick:hover{background:var(--px-soft)}',
@@ -2323,7 +2336,7 @@
     /* 上次提取：从卷库带出来（不自动载入图片，避免一进页面就吃几十 MB 内存） */
     let bank = bankGet(ctx)
     if (bank.length) {
-      $('[data-msg]').innerHTML = '卷库里还有 ' + bank.length + ' 套提取记录 —— <a data-goto="' + T_LIB + '" style="color:var(--px-acc);cursor:pointer">去看看</a>'
+      $('[data-msg]').innerHTML = '卷库里还有 ' + bank.length + ' 套提取记录 —— <a data-goto="' + T_LIB + '" style="color:var(--px-acc-text);cursor:pointer">去看看</a>'
     }
     /* 导航绑定放在所有会动态塞进 [data-goto] 的 innerHTML 之后：
      * 顶部三个 tab 是静态的，但上面那句"去看看"是运行时才拼的，

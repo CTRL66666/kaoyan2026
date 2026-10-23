@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.2.0'
+  let VERSION = '1.3.0'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -457,8 +457,29 @@
     '.md-root,.md-modal{--md-acc:var(--blue,#2563eb);--md-acc2:var(--purple,#7c3aed);--md-ink:var(--text-primary,#1e2a4a);'
       + '--md-sub:var(--text-muted,#7c8aa8);--md-ink2:var(--text-secondary,#4a5670);--md-line:var(--line,#d8dde8);'
       + '--md-bg:var(--surface,#fff);--md-soft:var(--surface-muted,#f6f8fc);--md-ok:var(--ok,#0f7c4a);'
-      + '--md-warn:var(--warn,#c47615);--md-danger:var(--danger,#d83b3b);'
+      + '--md-warn:var(--warn,#c47615);--md-danger:var(--danger,#d83b3b);--md-warn-ink:#b45309;'
+      /* 「主色底上的字色」单独成令牌：白天是白字，夜间主色成了鎏金必须换成墨字。
+         不抽出来的话，每处 `background:var(--md-acc)` 旁边都得写一条夜间覆盖规则。 */
+      + '--md-on-acc:#fff;'
+      /* 「强调色**当文字**」的那一档（页签选中、悬停、统计数字…）。默认就是强调色本身，
+         day/morning/night 三套主题零变化；只有「鸦荔金」在下面的 gold 块里换成深暖棕，
+         因为那里的 `--blue` 被重映射成品牌橙 #d9820a —— 当 11.5px 小字压奶油卡只有 **2.82:1**。 */
+      + '--md-acc-text:var(--md-acc);'
       + '--md-ease:cubic-bezier(.22,.8,.26,1)}',
+    /* —— 夜间：把「主色底 + 白字」换成站点同款「鎏金底 + 墨字」 ——
+     * 站点的夜间主按钮就是鎏金（main.css `html[data-theme=night] .btn-primary`：
+     * linear-gradient(135deg,#f6cd6f,#e2a43f) + var(--nk-acc-ink)）。插件沿用 `var(--blue)`
+     * 时夜间会变成浅蓝 #7aa2ff（亮度 .39），白字压上去只有 **2.49:1** —— 连 WCAG 最低档
+     * 3:1 都不到。改令牌一处，砖/主按钮/进度/勾选整片自动跟随。 */
+    'html[data-theme="night"] .md-root,html[data-theme="night"] .md-modal{'
+      + '--md-acc:var(--nk-acc,#f0b95a);--md-acc2:#e2a43f;--md-on-acc:var(--nk-acc-ink,#2a1c04);--md-warn-ink:var(--warn,#e8ae3f)}',
+    /* —— 金色主题：品牌橙做填充**不改**，改的是「压在填充上的字」和「强调色当文字」 ——
+     * 站点 `--blue` 在 gold 被重映射成 #d9820a（填充色）、`--purple` 成焦糖 #a8681c：
+     *   · 白字压橙 = 2.94（主按钮/页签），墨字压橙 = 5.64；
+     *   · 橙当小字压奶油卡 = 2.82，深暖棕 #8f5305 = 5.92。
+     * 渐变暗端从焦糖 #a8681c 提亮到 #f2b45c：墨字要能压**整条渐变**（暗端 3.07 不够）。 */
+    'html[data-theme="gold"] .md-root,html[data-theme="gold"] .md-modal{'
+      + '--md-acc2:#f2b45c;--md-on-acc:var(--accent-ink,#2a1c04);--md-acc-text:var(--accent-text,#8f5305)}',
     '.md-root{color:var(--md-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
       /* 出血到视口边缘（与原生页 eden/mind 同手法）：host 卡片的内边距被负 margin 抵消 */
       + 'margin:calc(var(--vp-t,16px)*-1) calc(var(--vp-x,16px)*-1) calc(var(--vp-b,24px)*-1);'
@@ -478,7 +499,7 @@
     '.md-hero.md-stuck{padding-top:8px;padding-bottom:8px;box-shadow:0 10px 26px -14px rgba(30,36,90,.28)}',
     /* 徽标：渐变圆角方块 + 「呼吸」微动画（只动 transform/opacity，GPU 合成零重排；
        停靠时同步缩小 —— 尺寸过渡与 hero 压缩同一曲线，视觉是「一整块在收」） */
-    '.md-mark{width:46px;height:46px;border-radius:15px;flex:0 0 auto;color:#fff;position:relative;'
+    '.md-mark{width:46px;height:46px;border-radius:15px;flex:0 0 auto;color:var(--md-on-acc);position:relative;'
       + 'background:linear-gradient(135deg,var(--md-acc),var(--md-acc2));display:flex;align-items:center;justify-content:center;'
       + 'box-shadow:0 6px 18px color-mix(in oklab,var(--md-acc) 35%,transparent);'
       + 'transition:width .3s var(--md-ease),height .3s var(--md-ease),border-radius .3s var(--md-ease);animation:md-breathe 3.6s ease-in-out infinite}',
@@ -497,7 +518,7 @@
       + 'font-size:12.5px;font-weight:600;color:var(--md-sub);cursor:pointer;user-select:none;white-space:nowrap;'
       + 'transition:color .18s,background .18s,box-shadow .18s,transform .18s}',
     '.md-nav a:hover{color:var(--md-ink);transform:translateY(-1px)}',
-    '.md-nav a.on{background:var(--md-bg);color:var(--md-acc);box-shadow:0 2px 8px rgba(16,30,60,.13)}',
+    '.md-nav a.on{background:var(--md-bg);color:var(--md-acc-text);box-shadow:0 2px 8px rgba(16,30,60,.13)}',
     /* 页眉统计 chips */
     '.md-hero-stats{display:flex;gap:7px;flex-wrap:wrap}',
     '.md-hchip{font-size:11.5px;padding:4px 11px;border-radius:999px;border:1px solid var(--md-line);'
@@ -526,13 +547,20 @@
     '.md-btn{height:36px;padding:0 15px;border-radius:10px;border:1px solid var(--md-line);background:var(--md-bg);'
       + 'cursor:pointer;font-weight:600;font-size:13px;color:var(--md-ink2);font-family:inherit;position:relative;overflow:hidden;'
       + 'transition:transform .12s,border-color .16s,color .16s,box-shadow .16s,filter .16s}',
-    '.md-btn:hover:not(:disabled){border-color:var(--md-acc);color:var(--md-acc);box-shadow:0 4px 12px rgba(37,99,235,.14);transform:translateY(-1px)}',
+    '.md-btn:hover:not(:disabled){border-color:var(--md-acc-text);color:var(--md-acc-text);box-shadow:0 4px 12px rgba(37,99,235,.14);transform:translateY(-1px)}',
     '.md-btn:active:not(:disabled){transform:translateY(1px)}',
-    '.md-btn:disabled{opacity:.45;cursor:not-allowed}',
+    /* 禁用态：不用 `opacity:.45` —— 半透明**组**的观感 = α×组内 + (1-α)×组背后，
+     * 深色主题下整颗按钮连同文字一起被压成背景色（实测 1.54:1），白天也一样糊（浅紫底白字）。
+     * 改成语义色：底与边框退到 "不可用"，文字退到 --xx-sub（白天 4.55:1 / 夜间 4.4:1）。 */
+    '.md-btn:disabled{opacity:1;cursor:not-allowed;color:var(--md-sub);border-color:var(--md-line);'
+      + 'background:color-mix(in oklab,var(--md-ink) 6%,transparent);box-shadow:none}',
+    /* 主按钮的禁用态：连渐变一起撤掉（否则浅蓝渐变 + 半透明白字，白天也是 1.5:1 的白雾） */
+    '.md-btn.primary:disabled{background:color-mix(in oklab,var(--md-ink) 7%,transparent);color:var(--md-sub);box-shadow:none}',
+    '.md-btn.primary:disabled::after{display:none}',
     /* 主按钮：渐变 + 扫光（::after 平移，悬停触发一次） */
-    '.md-btn.primary{background:linear-gradient(135deg,var(--md-acc),var(--md-acc2));color:#fff;border:0;'
+    '.md-btn.primary{background:linear-gradient(135deg,var(--md-acc),var(--md-acc2));color:var(--md-on-acc);border:0;'
       + 'box-shadow:0 6px 16px color-mix(in oklab,var(--md-acc) 30%,transparent)}',
-    '.md-btn.primary:hover:not(:disabled){color:#fff;filter:brightness(1.06)}',
+    '.md-btn.primary:hover:not(:disabled){color:var(--md-on-acc);filter:brightness(1.06)}',
     '.md-btn.primary::after{content:"";position:absolute;top:0;left:-80%;width:50%;height:100%;'
       + 'background:linear-gradient(100deg,transparent,rgba(255,255,255,.35),transparent);transform:skewX(-20deg);transition:none}',
     '.md-btn.primary:hover::after{left:130%;transition:left .6s ease}',
@@ -549,7 +577,7 @@
     '.md-input,.md-sel,.md-ta{height:36px;border:1px solid var(--md-line);border-radius:10px;padding:0 11px;'
       + 'background:var(--md-bg);color:var(--md-ink);outline:none;font-size:13px;font-family:inherit;box-sizing:border-box;'
       + 'transition:border-color .16s,box-shadow .16s}',
-    '.md-input:focus,.md-sel:focus,.md-ta:focus{border-color:var(--md-acc);box-shadow:0 0 0 3px color-mix(in oklab,var(--md-acc) 14%,transparent)}',
+    '.md-input:focus,.md-sel:focus,.md-ta:focus{border-color:var(--md-acc-text);box-shadow:0 0 0 3px color-mix(in oklab,var(--md-acc) 14%,transparent)}',
     '.md-ta{width:100%;min-height:90px;padding:10px;font:12.5px/1.7 var(--font-mono,monospace);resize:vertical}',
     '.md-search{width:210px;max-width:46vw}',
     '.md-msg{font-size:12px;color:var(--md-sub)}',
@@ -573,7 +601,7 @@
     '.md-tag{display:inline-block;font-size:10.5px;border-radius:999px;padding:1px 8px;background:var(--md-soft);'
       + 'color:var(--md-ink2);border:1px solid var(--md-line)}',
     '.md-due{font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid transparent}',
-    '.md-due.new{background:color-mix(in oklab,var(--md-acc) 10%,transparent);color:var(--md-acc);border-color:color-mix(in oklab,var(--md-acc) 28%,transparent)}',
+    '.md-due.new{background:color-mix(in oklab,var(--md-acc) 10%,transparent);color:var(--md-acc-text);border-color:color-mix(in oklab,var(--md-acc) 28%,transparent)}',
     '.md-due.now{background:color-mix(in oklab,var(--md-warn) 12%,transparent);color:var(--md-warn);border-color:color-mix(in oklab,var(--md-warn) 30%,transparent)}',
     '.md-due.far{color:var(--md-sub);border-color:var(--md-line)}',
     '.md-due.done{background:color-mix(in oklab,var(--md-ok) 10%,transparent);color:var(--md-ok);border-color:color-mix(in oklab,var(--md-ok) 28%,transparent)}',
@@ -582,14 +610,14 @@
     '.md-iconbtn{width:26px;height:26px;border-radius:8px;border:1px solid var(--md-line);background:var(--md-bg);'
       + 'cursor:pointer;font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;'
       + 'transition:all .15s;color:var(--md-sub)}',
-    '.md-iconbtn:hover{border-color:var(--md-acc);color:var(--md-acc);transform:translateY(-1px)}',
+    '.md-iconbtn:hover{border-color:var(--md-acc-text);color:var(--md-acc-text);transform:translateY(-1px)}',
     '.md-iconbtn.del:hover{border-color:var(--md-danger);color:var(--md-danger)}',
     /* 批量管理模式：勾选态描边 + 整理条 */
-    '.md-fcard.picked .md-face{border-color:var(--md-acc);box-shadow:0 0 0 2px color-mix(in oklab,var(--md-acc) 16%,transparent)}',
+    '.md-fcard.picked .md-face{border-color:var(--md-acc-text);box-shadow:0 0 0 2px color-mix(in oklab,var(--md-acc) 16%,transparent)}',
     '.md-editbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:13px;padding:9px 12px;'
       + 'border:1px dashed var(--md-line);border-radius:12px;background:var(--md-soft)}',
     '.md-pickall{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--md-sub);cursor:pointer;user-select:none}',
-    '.md-pickall input{width:15px;height:15px;cursor:pointer;accent-color:var(--md-acc);margin:0}',
+    '.md-pickall input{width:15px;height:15px;cursor:pointer;accent-color:var(--md-acc-text);margin:0}',
 
     /* —— 编辑器弹层（页面内自绘模态；灯箱/编辑共用一套遮罩） —— */
     /* 弹层自带字体与文字色：它在 body 上，不继承 .md-root 的排版，不写就只能吃站点 body 的默认值 */
@@ -609,7 +637,7 @@
       + 'border-radius:10px;background:var(--md-bg);cursor:text}',
     '.md-chips input{border:0;outline:none;flex:1;min-width:90px;font:inherit;color:var(--md-ink);background:none}',
     '.md-chipx{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:3px 9px;border-radius:999px;'
-      + 'background:color-mix(in oklab,var(--md-acc) 10%,transparent);color:var(--md-acc);animation:md-fade .18s ease both}',
+      + 'background:color-mix(in oklab,var(--md-acc) 10%,transparent);color:var(--md-acc-text);animation:md-fade .18s ease both}',
     '.md-chipx i{font-style:normal;cursor:pointer;opacity:.7}.md-chipx i:hover{opacity:1}',
 
     /* —— AI 制卡骨架屏（生成等待期 shimmer） —— */
@@ -622,7 +650,7 @@
     '.md-genrow{display:flex;gap:9px;align-items:flex-start;padding:10px;border:1px solid var(--md-line);'
       + 'border-radius:12px;margin-bottom:9px;background:var(--md-bg);transition:border-color .16s,box-shadow .16s}',
     '.md-genrow:hover{border-color:color-mix(in oklab,var(--md-acc) 40%,var(--md-line))}',
-    '.md-genrow.picked{border-color:var(--md-acc);box-shadow:0 0 0 2px color-mix(in oklab,var(--md-acc) 15%,transparent)}',
+    '.md-genrow.picked{border-color:var(--md-acc-text);box-shadow:0 0 0 2px color-mix(in oklab,var(--md-acc) 15%,transparent)}',
     '.md-genrow .b{flex:1;min-width:0}',
     '.md-genrow .f{font-size:12.8px;font-weight:700;word-break:break-word}',
     '.md-genrow .k{font-size:12px;color:var(--md-sub);margin-top:3px;white-space:pre-wrap;word-break:break-word}',
@@ -664,8 +692,8 @@
     '.md-grade.g-hard b{color:var(--md-warn)}',
     '.md-grade.g-good:hover{border-color:var(--md-ok);box-shadow:0 8px 20px color-mix(in oklab,var(--md-ok) 22%,transparent)}',
     '.md-grade.g-good b{color:var(--md-ok)}',
-    '.md-grade.g-easy:hover{border-color:var(--md-acc);box-shadow:0 8px 20px color-mix(in oklab,var(--md-acc) 22%,transparent)}',
-    '.md-grade.g-easy b{color:var(--md-acc)}',
+    '.md-grade.g-easy:hover{border-color:var(--md-acc-text);box-shadow:0 8px 20px color-mix(in oklab,var(--md-acc) 22%,transparent)}',
+    '.md-grade.g-easy b{color:var(--md-acc-text)}',
     /* 连续天数火焰：跳动 + 光晕脉冲 */
     '.md-flame{display:inline-flex;align-items:center;gap:5px;font-weight:800;color:var(--md-warn)}',
     '.md-flame .fi{display:inline-block;animation:md-flame 1.6s ease-in-out infinite;transform-origin:50% 90%}',
@@ -720,7 +748,7 @@
     '.md-hcell i{width:7px;height:7px;border-radius:50%;background:var(--md-sub)}',
     '.md-hcell.ok{color:var(--md-ok);border-color:color-mix(in oklab,var(--md-ok) 35%,transparent);background:color-mix(in oklab,var(--md-ok) 8%,transparent)}',
     '.md-hcell.ok i{background:var(--md-ok)}',
-    '.md-hcell.no{color:var(--md-warn);border-color:color-mix(in oklab,var(--md-warn) 32%,transparent);background:color-mix(in oklab,var(--md-warn) 8%,transparent)}',
+    '.md-hcell.no{color:var(--md-warn-ink);border-color:color-mix(in oklab,var(--md-warn) 32%,transparent);background:color-mix(in oklab,var(--md-warn) 8%,transparent)}',
     '.md-hcell.no i{background:var(--md-warn)}',
     '.md-note{font-size:12px;color:var(--md-sub);line-height:1.8;margin-top:9px}',
     '.md-note code{background:var(--md-soft);border:1px solid var(--md-line);border-radius:5px;padding:1px 5px;font-family:var(--font-mono,monospace)}',
@@ -1013,7 +1041,7 @@
       + '<button class="md-iconbtn del" data-act="del" data-id="' + card.id + '" title="删除">' + I('cpTrash') + '</button>'
       + '</div>'
     let pick = manage
-      ? '<span class="md-pick" data-act="pick" data-id="' + card.id + '" title="勾选"><input type="checkbox" tabindex="-1" ' + (picked ? 'checked' : '') + ' style="accent-color:var(--md-acc)"></span>'
+      ? '<span class="md-pick" data-act="pick" data-id="' + card.id + '" title="勾选"><input type="checkbox" tabindex="-1" ' + (picked ? 'checked' : '') + ' style="accent-color:var(--md-acc-text)"></span>'
       : ''
     return '<div class="md-fcard' + (picked ? ' picked' : '') + '" data-act="flip" style="--i:' + Math.min(i || 0, 12) + '">'
       + '<div class="md-fcard-in">'
@@ -1476,7 +1504,7 @@
       function paintGen() {
         out.innerHTML = genCards.map(function (c, i) {
           return '<div class="md-genrow picked" data-pickrow="1" data-i="' + i + '" style="--i:' + Math.min(i, 10) + '">'
-            + '<input type="checkbox" checked style="margin-top:2px;accent-color:var(--md-acc)">'
+            + '<input type="checkbox" checked style="margin-top:2px;accent-color:var(--md-acc-text)">'
             + '<div class="b"><div class="f">' + esc(c.front) + '</div><div class="k">' + esc(c.back) + '</div></div></div>'
         }).join('')
       }
@@ -1537,7 +1565,7 @@
         + (streak ? ' <span class="md-flame"><span class="fi">' + I('flame') + '</span>连续 ' + streak + ' 天</span>' : '') + '</div>'
         + '<div class="md-result">'
         + '<div class="md-rstat" style="--i:0"><b style="color:var(--md-warn)">' + q.due.length + '</b><span>到期复习</span></div>'
-        + '<div class="md-rstat" style="--i:1"><b style="color:var(--md-acc)">' + q.fresh.length + '</b><span>今日新卡</span></div>'
+        + '<div class="md-rstat" style="--i:1"><b style="color:var(--md-acc-text)">' + q.fresh.length + '</b><span>今日新卡</span></div>'
         + '<div class="md-rstat" style="--i:2"><b>' + (ret == null ? '—' : ret + '%') + '</b><span>30 天保留率</span></div>'
         + '</div>'
         + (q.dueLeft + q.freshLeft > 0 ? '<div class="md-note">超出今日额度的 ' + (q.dueLeft + q.freshLeft) + ' 张已自动顺延 —— 细水长流比一次刷爆有效。</div>' : '')
@@ -1616,7 +1644,7 @@
       return '<section class="md-card" style="--i:0">'
         + '<div class="md-h">' + I('party') + '本场完成 <em>用时 ' + Math.floor(secs / 60) + ' 分 ' + (secs % 60) + ' 秒</em></div>'
         + '<div class="md-result">'
-        + '<div class="md-rstat" style="--i:0"><b style="color:var(--md-acc)">' + S.graded + '</b><span>已评卡</span></div>'
+        + '<div class="md-rstat" style="--i:0"><b style="color:var(--md-acc-text)">' + S.graded + '</b><span>已评卡</span></div>'
         + '<div class="md-rstat" style="--i:1"><b style="color:var(--md-danger)">' + S.again + '</b><span>重来</span></div>'
         + '<div class="md-rstat" style="--i:2"><b>' + (accuracy == null ? '—' : accuracy + '%') + '</b><span>正确率</span></div>'
         + '<div class="md-rstat" style="--i:3"><b>' + S.newLearned + '</b><span>新卡首过</span></div>'

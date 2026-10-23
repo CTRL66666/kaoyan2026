@@ -24,7 +24,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.0'
+  let VERSION = '1.5.0'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -259,7 +259,19 @@
     '.ivs-root,.ivs-modal{--iv-acc:var(--blue,#2563eb);--iv-acc2:var(--purple,#7c3aed);--iv-ink:var(--text-primary,#1e2a4a);'
       + '--iv-sub:var(--text-muted,#7c8aa8);--iv-ink2:var(--text-secondary,#4a5670);--iv-line:var(--line,#d8dde8);'
       + '--iv-bg:var(--surface,#fff);--iv-soft:var(--surface-muted,#f6f8fc);--iv-ok:var(--ok,#0f7c4a);'
-      + '--iv-warn:var(--warn,#c47615);--iv-danger:var(--danger,#d83b3b);--iv-ease:cubic-bezier(.22,.8,.26,1)}',
+      + '--iv-warn:var(--warn,#c47615);--iv-danger:var(--danger,#d83b3b);--iv-on-acc:#fff;--iv-acc-text:var(--iv-acc);--iv-ease:cubic-bezier(.22,.8,.26,1)}',
+    /* —— 夜间：主色底改成站点同款鎏金，压在底上的字改墨色 ——
+     * 站点夜间主按钮 = `linear-gradient(135deg,#f6cd6f,#e2a43f)` + `var(--nk-acc-ink)`；
+     * 插件沿用 `var(--blue)` 时夜间是浅蓝 #7aa2ff，白字只有 2.49:1（亮/暗两个都塌）。
+     * 改令牌一处，砖 / 主按钮 / 头像 / 用户气泡 / 成绩大数字一起跟随。 */
+    'html[data-theme="night"] .ivs-root,html[data-theme="night"] .ivs-modal{'
+      + '--iv-acc:var(--nk-acc,#f0b95a);--iv-acc2:#e2a43f;--iv-on-acc:var(--nk-acc-ink,#2a1c04)}',
+    /* —— 金色主题：橙底不改，改「压在橙底上的字」与「橙色当文字」 ——
+     * `--iv-acc` 在 gold = 品牌橙 #d9820a（填充色）：白字压橙 2.94、橙当小字压奶油卡 2.82
+     * （段选按钮 `.ivs-seg button.on` 就是后者）。墨字 5.64 / 深暖棕 5.92。
+     * 渐变暗端由焦糖 #a8681c 提亮到 #f2b45c，好让墨字压整条渐变都够。 */
+    'html[data-theme="gold"] .ivs-root,html[data-theme="gold"] .ivs-modal{'
+      + '--iv-acc2:#f2b45c;--iv-on-acc:var(--accent-ink,#2a1c04);--iv-acc-text:var(--accent-text,#8f5305)}',
     '.ivs-root{color:var(--iv-ink);font:14px/1.65 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;'
       + 'margin:calc(var(--vp-t,16px)*-1) calc(var(--vp-x,16px)*-1) calc(var(--vp-b,24px)*-1);'
       + 'min-height:calc(100vh - 59px);display:flex;flex-direction:column;background:var(--iv-soft)}',
@@ -272,7 +284,7 @@
       + 'transition:padding .3s var(--iv-ease),box-shadow .3s var(--iv-ease),max-height .34s var(--iv-ease)}',
     '.ivs-hero.ivs-stuck{padding-top:8px;padding-bottom:8px;box-shadow:0 10px 26px -14px rgba(30,36,90,.28)}',
     /* 徽标：渐变方块 + 声波纹呼吸（面试=对话的语义） */
-    '.ivs-mark{width:46px;height:46px;border-radius:15px;flex:0 0 auto;color:#fff;'
+    '.ivs-mark{width:46px;height:46px;border-radius:15px;flex:0 0 auto;color:var(--iv-on-acc);'
       + 'background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));display:flex;align-items:center;justify-content:center;'
       + 'box-shadow:0 6px 18px color-mix(in oklab,var(--iv-acc) 35%,transparent);'
       + 'transition:width .3s var(--iv-ease),height .3s var(--iv-ease),border-radius .3s var(--iv-ease);animation:ivs-breathe 3.4s ease-in-out infinite}',
@@ -308,17 +320,22 @@
     '.ivs-input,.ivs-sel,.ivs-ta{height:36px;border:1px solid var(--iv-line);border-radius:10px;padding:0 11px;'
       + 'background:var(--iv-bg);color:var(--iv-ink);outline:none;font-size:13px;font-family:inherit;box-sizing:border-box;'
       + 'transition:border-color .16s,box-shadow .16s}',
-    '.ivs-input:focus,.ivs-sel:focus,.ivs-ta:focus{border-color:var(--iv-acc);box-shadow:0 0 0 3px color-mix(in oklab,var(--iv-acc) 14%,transparent)}',
+    '.ivs-input:focus,.ivs-sel:focus,.ivs-ta:focus{border-color:var(--iv-acc-text);box-shadow:0 0 0 3px color-mix(in oklab,var(--iv-acc) 14%,transparent)}',
     '.ivs-ta{width:100%;min-height:74px;padding:10px;resize:vertical;line-height:1.7}',
     '.ivs-btn{height:36px;padding:0 15px;border-radius:10px;border:1px solid var(--iv-line);background:var(--iv-bg);'
       + 'cursor:pointer;font-weight:600;font-size:13px;color:var(--iv-ink2);font-family:inherit;position:relative;overflow:hidden;'
       + 'transition:transform .12s,border-color .16s,color .16s,box-shadow .16s,filter .16s}',
-    '.ivs-btn:hover:not(:disabled){border-color:var(--iv-acc);color:var(--iv-acc);box-shadow:0 4px 12px rgba(37,99,235,.14);transform:translateY(-1px)}',
+    '.ivs-btn:hover:not(:disabled){border-color:var(--iv-acc-text);color:var(--iv-acc-text);box-shadow:0 4px 12px rgba(37,99,235,.14);transform:translateY(-1px)}',
     '.ivs-btn:active:not(:disabled){transform:translateY(1px)}',
-    '.ivs-btn:disabled{opacity:.45;cursor:not-allowed}',
-    '.ivs-btn.primary{background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));color:#fff;border:0;'
+    '/* 禁用态不用 `opacity:.45`：半透明**组**的观感 = α×组内 + (1-α)×组背后，深色主题下整颗按钮'
+      + '连同文字一起被压成背景色（实测 1.54:1），白天是浅紫底白字（1.5:1）。改成语义色。 */',
+    '.ivs-btn:disabled{opacity:1;cursor:not-allowed;color:var(--iv-sub);border-color:var(--iv-line);'
+      + 'background:color-mix(in oklab,var(--iv-ink) 6%,transparent);box-shadow:none}',
+    '.ivs-btn.primary{background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));color:var(--iv-on-acc);border:0;'
       + 'box-shadow:0 6px 16px color-mix(in oklab,var(--iv-acc) 30%,transparent)}',
-    '.ivs-btn.primary:hover:not(:disabled){color:#fff;filter:brightness(1.06)}',
+    '.ivs-btn.primary:hover:not(:disabled){color:var(--iv-on-acc);filter:brightness(1.06)}',
+    '.ivs-btn.primary:disabled{background:color-mix(in oklab,var(--iv-ink) 7%,transparent);color:var(--iv-sub);box-shadow:none}',
+    '.ivs-btn.primary:disabled::after{display:none}',
     '.ivs-btn.primary::after{content:"";position:absolute;top:0;left:-80%;width:50%;height:100%;'
       + 'background:linear-gradient(100deg,transparent,rgba(255,255,255,.35),transparent);transform:skewX(-20deg)}',
     '.ivs-btn.primary:hover::after{left:130%;transition:left .6s ease}',
@@ -329,19 +346,19 @@
     '.ivs-seg{display:inline-flex;background:var(--iv-soft);border:1px solid var(--iv-line);border-radius:11px;padding:3px;gap:2px}',
     '.ivs-seg button{border:0;background:none;font:600 12px/1 inherit;padding:7px 14px;border-radius:8px;cursor:pointer;'
       + 'color:var(--iv-sub);font-family:inherit;flex:none;white-space:nowrap;transition:all .18s}',
-    '.ivs-seg button.on{background:var(--iv-bg);color:var(--iv-acc);box-shadow:0 1px 4px rgba(16,30,60,.12)}',
+    '.ivs-seg button.on{background:var(--iv-bg);color:var(--iv-acc-text);box-shadow:0 1px 4px rgba(16,30,60,.12)}',
     /* ── 面试间（聊天） ── */
     '.ivs-room{display:flex;flex-direction:column;gap:0;height:calc(100vh - 300px);min-height:380px}',
     '.ivs-msgs{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:6px 4px 12px;scroll-behavior:smooth}',
     '.ivs-msg{display:flex;gap:10px;max-width:88%;animation:ivs-rise .34s var(--iv-ease) both}',
     '.ivs-msg.user{align-self:flex-end;flex-direction:row-reverse}',
     '.ivs-ava{width:36px;height:36px;border-radius:12px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;'
-      + 'font-size:17px;color:#fff;background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));'
+      + 'font-size:17px;color:var(--iv-on-acc);background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));'
       + 'box-shadow:0 4px 12px color-mix(in oklab,var(--iv-acc) 30%,transparent)}',
     '.ivs-msg.user .ivs-ava{background:var(--iv-soft);color:var(--iv-ink2);border:1px solid var(--iv-line);box-shadow:none}',
     '.ivs-bubble{padding:11px 14px;border-radius:14px;font-size:13.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word}',
     '.ivs-msg.prof .ivs-bubble{background:var(--iv-soft);border:1px solid var(--iv-line);border-top-left-radius:4px}',
-    '.ivs-msg.user .ivs-bubble{background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));color:#fff;border-top-right-radius:4px}',
+    '.ivs-msg.user .ivs-bubble{background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));color:var(--iv-on-acc);border-top-right-radius:4px}',
     /* 打字指示器（三点弹跳） */
     '.ivs-typing{display:inline-flex;gap:4px;padding:13px 15px;background:var(--iv-soft);border:1px solid var(--iv-line);border-radius:14px;border-top-left-radius:4px}',
     '.ivs-typing i{width:6px;height:6px;border-radius:50%;background:var(--iv-sub);animation:ivs-dot 1.1s ease-in-out infinite}',
@@ -353,7 +370,7 @@
     '.ivs-compose{display:flex;gap:9px;align-items:flex-end;border-top:1px solid var(--iv-line);padding-top:12px}',
     '.ivs-compose .ivs-ta{min-height:46px;max-height:140px;flex:1}',
     '.ivs-roombar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px}',
-    '.ivs-round{font-size:12px;font-weight:700;color:var(--iv-acc);background:color-mix(in oklab,var(--iv-acc) 10%,transparent);'
+    '.ivs-round{font-size:12px;font-weight:700;color:var(--iv-acc-text);background:color-mix(in oklab,var(--iv-acc) 10%,transparent);'
       + 'border:1px solid color-mix(in oklab,var(--iv-acc) 28%,transparent);border-radius:999px;padding:3px 11px}',
     '.ivs-clock{font-size:12px;color:var(--iv-sub);font-variant-numeric:tabular-nums}',
     /* ── 成绩单 ── */
@@ -408,7 +425,7 @@
     '.ivs-msg2{display:flex;gap:8px;margin-bottom:10px;font-size:12.8px;line-height:1.7}',
     '.ivs-msg2 .r{font-weight:800;flex:0 0 auto;font-size:11px;padding:2px 8px;border-radius:999px;height:fit-content}',
     '.ivs-msg2.prof .r{background:var(--iv-soft);color:var(--iv-sub);border:1px solid var(--iv-line)}',
-    '.ivs-msg2.user .r{background:color-mix(in oklab,var(--iv-acc) 12%,transparent);color:var(--iv-acc)}',
+    '.ivs-msg2.user .r{background:color-mix(in oklab,var(--iv-acc) 12%,transparent);color:var(--iv-acc-text)}',
 /* 【2026-10-22】.ivs-h 是 display:flex + gap:8px —— 图标再留 margin-right:5px 就是
  * 「gap + margin」双付 13px（真机量过）。间距交给 gap，图标自己清零。
  * .ivs-f>span 里是纯文字（无图标），那条留着当兜底，不影响布局。 */

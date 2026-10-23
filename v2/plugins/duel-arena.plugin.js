@@ -546,10 +546,13 @@
       + 'transition:transform .12s,border-color .16s,color .16s,box-shadow .16s,filter .16s}',
     '.du-btn:hover:not(:disabled){border-color:var(--du-acc);color:var(--du-acc);box-shadow:0 4px 12px rgba(37,99,235,.14);transform:translateY(-1px)}',
     '.du-btn:active:not(:disabled){transform:translateY(1px)}',
-    '.du-btn:disabled{opacity:.45;cursor:not-allowed}',
+    '/* 禁用态不用 `opacity:.45`：深色主题下按钮连文字一起被压成背景色，读不出来 */',
+    '.du-btn:disabled{opacity:1;cursor:not-allowed;color:var(--du-sub);border-color:var(--du-line);'
+      + 'background:color-mix(in oklab,var(--du-ink) 6%,transparent);box-shadow:none}',
     '.du-btn.fire{background:linear-gradient(135deg,var(--du-gold),var(--du-danger));color:#fff;border:0;'
       + 'box-shadow:0 6px 16px color-mix(in oklab,var(--du-gold) 35%,transparent)}',
     '.du-btn.fire:hover:not(:disabled){color:#fff;filter:brightness(1.06)}',
+    '.du-btn.fire:disabled{background:color-mix(in oklab,var(--du-ink) 7%,transparent);color:var(--du-sub);box-shadow:none}',
     '.du-btn.sm{height:30px;padding:0 11px;font-size:12px;border-radius:9px}',
     '.du-note{font-size:12px;color:var(--du-sub);line-height:1.8;margin-top:9px}',
     /* —— 天梯 —— */
