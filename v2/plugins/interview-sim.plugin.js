@@ -24,7 +24,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.5.0'
+  let VERSION = '1.6.0'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -99,11 +99,78 @@
   function adviceFor(report) {
     if (!report || !report.scores) return []
     return DIMS.map(function (d) {
-      return { dim: d, score: clamp(num(report.scores[d.key], 0), 0, 100) }
-    }).filter(function (x) { return x.score < 70 })
+      let v = report.scores[d.key]
+      return { dim: d, score: (v === null || v === undefined) ? null : clamp(num(v, 0), 0, 100) }
+    })
+      /* 【2026-10-23 第 26 轮】只对**真给了分**的维度提"薄弱"建议：
+       * 原来把 null 当 0 → "这轮没答到这个维度"会被判成"最薄弱"，建议全指错方向。 */
+      .filter(function (x) { return x.score != null && x.score < 70 })
       .sort(function (a, b) { return a.score - b.score })
       .slice(0, 2)
       .map(function (x) { return { label: x.dim.label, score: x.score, tip: ADVICE[x.dim.key] || '' } })
+  }
+
+  /* ============================================================
+   * 评分：提示词护栏 + 保守解析（2026-10-23 第 26 轮）
+   * ------------------------------------------------------------
+   * 为什么两块必须一起改：面试分是**模型单次判定**直接写进编年史的，
+   * 解析口径一松，坏的不只是这一次分数，而是"平均分 / 走势线 / 薄弱建议"整条链。
+   * 三件事（对齐站点对 AI 判定的硬要求：多证、明示不许默认正确、存疑只标记不自动改数据）：
+   *   ① 提示词给**评分锚点** + 要求**证据**（哪一轮、哪句原话），并明确允许 null；
+   *   ② 解析端保守：缺失/脏值一律 null（不是 0），总分只平均"真给了分"的维度；
+   *   ③ 一个维度都没评出来 → 不落库（一条 0 分会永久拉低平均分，且用户无从察觉）。
+   * ============================================================ */
+  let SCORE_ANCHORS = [
+    ['<60', '明显不达标：答错、答偏，或只会背定义不会用'],
+    ['60-74', '及格：方向对，但缺体系/缺例子/有明显漏洞'],
+    ['75-84', '良好：结论清楚、论据够用，仍有可打磨处'],
+    ['85+', '优秀：体系完整、有独立判断，且接得住追问']
+  ]
+
+  function scoreSystemPrompt() {
+    return '你是考研复试的评分系统。根据下面的完整面试 transcript，按四个维度评分。\n'
+      + '维度：' + DIMS.map(function (d) { return d.key + '=' + d.label + '（' + d.desc + '）' }).join('；') + '\n'
+      + '评分锚点（先定档、再给分，不要因为"回答流畅"就拔高）：\n'
+      + SCORE_ANCHORS.map(function (a) { return '  ' + a[0] + ' ' + a[1] }).join('\n') + '\n'
+      + '硬规则：\n'
+      + '1) 每个维度必须给 evidence：从考生原话里摘一句（≤40 字）作为依据。\n'
+      + '2) 摘不出依据的维度给 null，不要给 0、也不要猜 —— "这轮没答到这个维度"和"答得差"是两件事。\n'
+      + '3) 不要默认考生是对的：出现事实错误、术语误用要直接扣分，并在 comments 里点名第几轮。\n'
+      + '4) 多数考生落在 60-80；85+ 必须在 transcript 里有明确支撑（体系感 / 独立判断 / 接住追问）。\n'
+      + '5) 不确定就降分，并在 note 里写清不确定在哪；宁可保守，不要"看起来很努力"就加分。\n'
+      + '只输出 JSON：{"scores":{"professional":数或null,"logic":数或null,"expression":数或null,"composure":数或null},'
+      + '"evidence":{"professional":"原话摘录","logic":"…","expression":"…","composure":"…"},'
+      + '"confidence":"high|medium|low","gaps":["明显没覆盖的点"],'
+      + '"comments":["≤80字点评，点名第几轮"],"summary":"≤40字总评"}'
+  }
+
+  /** 把模型的原始返回收成可落库的成绩单（纯函数，单测直接打这里）。
+   *  保守裁决的三条：
+   *   · 不是有限数（缺失、"85分"、null）→ null，**绝不折算成 0**；
+   *   · 超出 0..100 的笔误（105 / -5）→ 夹住（这类是刻度误写，不是判错）；
+   *   · 有分但没给证据 → 保留分数但标 weak（存疑只标记，不自动改数据）。 */
+  function normalizeReport(raw) {
+    let src = (raw && raw.scores) || {}
+    let evs = (raw && raw.evidence) || {}
+    let scores = {}, weak = {}, missing = []
+    let sum = 0, cnt = 0
+    DIMS.forEach(function (d) {
+      let v0 = src[d.key]
+      let v = (v0 === null || v0 === undefined || v0 === '') ? NaN : Number(v0)
+      if (!isFinite(v)) { scores[d.key] = null; missing.push(d.key); return }
+      v = Math.round(clamp(v, 0, 100))
+      scores[d.key] = v
+      if (!flat(evs[d.key] || '')) weak[d.key] = true
+      sum += v; cnt++
+    })
+    return {
+      scores: scores, weak: weak, missing: missing, scored: cnt,
+      total: cnt ? Math.round(sum / cnt) : null,
+      confidence: flat((raw && raw.confidence) || '').toLowerCase().slice(0, 8),
+      gaps: (Array.isArray(raw && raw.gaps) ? raw.gaps : []).map(function (g) { return flat(g).slice(0, 60) }).filter(Boolean).slice(0, 4),
+      comments: (Array.isArray(raw && raw.comments) ? raw.comments : []).map(function (c) { return flat(c).slice(0, 200) }).filter(Boolean).slice(0, 4),
+      summary: flat((raw && raw.summary) || '').slice(0, 60)
+    }
   }
 
   /* ════════════════════════ 1. 小工具 ════════════════════════ */
@@ -114,7 +181,19 @@
     })
   }
   function flat(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim() }
-  function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
+  /* 【2026-10-23 第 26 轮】截断时别把公式切一半：`$…$` 成对出现，切点落在一对里面时收尾的 `$` 被切掉
+   * → 站点渲染器认不出完整公式，整段按原文显示（用户截图里那条 `$\lim\limits_{x\to…`）。
+   * 判据：切点前 `$` 个数为奇数 = 正切在公式里 → 退到那个 `$` 之前。尾部残留反斜杠同样退一格。
+   * 注意：这个助手在六件插件里各自拷了一份（单文件插件无法共享模块），改一处必须六处同步 ——
+   *   `tests/ui/plugin-trunc-math-2026-10-23.test.ts` 会把六份源码全扫一遍。 */
+  function trunc(s, n) {
+    s = String(s || '')
+    if (!(s.length > n)) return s          /* 没传 n 时保持原行为（不截断） */
+    let cut = s.slice(0, n)
+    if ((cut.match(/\$/g) || []).length % 2 === 1) cut = cut.slice(0, cut.lastIndexOf('$'))
+    if (cut.endsWith('\\')) cut = cut.slice(0, -1)
+    return cut + '…'
+  }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
 
@@ -315,8 +394,14 @@
       + 'background:var(--iv-soft);color:var(--iv-sub);border:1px solid var(--iv-line)}',
     '.ivs-desc{color:var(--iv-sub);font-size:12.5px;line-height:1.75;margin-bottom:13px}',
     /* 控制台表单 */
-    '.ivs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:13px}',
-    '.ivs-f{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--iv-sub)}',
+    /* minmax 190 → 202：3 项分段器（「专业面 综合面 英语面」）内容宽 200 + 边框内距 8 = 208，
+     * 190 的列宽在 1469/1170 两档实测只有 196~203 → 差几个像素就得横向滚动。
+     * 抬到 202 后 auto-fit 的列数会降一档，列宽回到 208 以上，选项一屏看全。
+     * （滚动仍是兜底：真塞满 11 本书时 `overflow-x:auto` 保证它滚而不是溢出。） */
+    '.ivs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(202px,1fr));gap:12px;margin-bottom:13px}',
+    /* `min-width:0`：栅格项默认 min-width:auto（= 内容的 min-content 宽），
+     * 会让「资料库材料包」那一行的 chips 把整格撑得比卡片还宽（2026-10-23 第 26 轮）。 */
+    '.ivs-f{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--iv-sub)}',
     '.ivs-input,.ivs-sel,.ivs-ta{height:36px;border:1px solid var(--iv-line);border-radius:10px;padding:0 11px;'
       + 'background:var(--iv-bg);color:var(--iv-ink);outline:none;font-size:13px;font-family:inherit;box-sizing:border-box;'
       + 'transition:border-color .16s,box-shadow .16s}',
@@ -342,9 +427,21 @@
     '.ivs-btn.danger{color:var(--iv-danger);border-color:color-mix(in oklab,var(--iv-danger) 30%,transparent)}',
     '.ivs-btn.sm{height:30px;padding:0 11px;font-size:12px;border-radius:9px}',
     '.ivs-note{font-size:12px;color:var(--iv-sub);line-height:1.8;margin-top:9px}',
-    /* 压力档位分段器 */
-    '.ivs-seg{display:inline-flex;background:var(--iv-soft);border:1px solid var(--iv-line);border-radius:11px;padding:3px;gap:2px}',
-    '.ivs-seg button{border:0;background:none;font:600 12px/1 inherit;padding:7px 14px;border-radius:8px;cursor:pointer;'
+    /* 压力档位 / 面试模式 / 资料库材料包共用的分段器。
+     * 【2026-10-23 第 26 轮】必须 `max-width:100%;overflow-x:auto` —— 资料库最多 11 个按钮
+     * （「不使用」+ 10 本书），不封顶就会**画到卡片外面**：`.ivs-f` 是列 flex、`.ivs-grid` 是
+     * `minmax(190px,1fr)`，两者的 min-width:auto 都拦不住内容宽度，于是整条 chips 冲出卡片
+     * （用户截图里冲出去约 285px，压在页面留白上）。
+     * 这是「同一事实第三处」：memo-deck 的 `.md-seg`、paper-extract 的 `.px-seg` 早就这么修了
+     * （见那两处的「窄屏分段器不压缩文字」注释），interview-sim 当时漏了。
+     * 挤压时改为横向滚动，不换行、不压字（按钮 flex:none + nowrap 见下一条）。 */
+    '.ivs-seg{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none;'
+      + 'background:var(--iv-soft);border:1px solid var(--iv-line);border-radius:11px;padding:3px;gap:2px}',
+    '.ivs-seg::-webkit-scrollbar{display:none}',
+    /* padding 14 → 12：与 memo-deck `.md-seg` / paper-extract `.px-seg` 对齐（同一套分段器语言）。
+     * 顺带解决一个实测量出来的边界：3 项分段器内容宽 206 + 边框内距 8 = 214，
+     * 而 1469+左栏展开时栅格列只有 211 —— 差 3px 就得滚动；改 12 后是 200，一屏看全。 */
+    '.ivs-seg button{border:0;background:none;font:600 12px/1 inherit;padding:7px 12px;border-radius:8px;cursor:pointer;'
       + 'color:var(--iv-sub);font-family:inherit;flex:none;white-space:nowrap;transition:all .18s}',
     '.ivs-seg button.on{background:var(--iv-bg);color:var(--iv-acc-text);box-shadow:0 1px 4px rgba(16,30,60,.12)}',
     /* ── 面试间（聊天） ── */
@@ -395,6 +492,17 @@
     '.ivs-advice p{margin:4px 0 0;font-size:12.5px;line-height:1.75;color:var(--iv-ink2)}',
     /* 维度涨跌 + 自介专项计时 */
     '.ivs-delta{font-style:normal;font-weight:800;font-size:11px}',
+    /* 【2026-10-23 第 26 轮】未评 / 存疑 / 漏点三种"非分数"状态：
+     * 未评（模型找不到依据）必须是**灰条 + 斜纹**，一眼区别于"0 分"；存疑用琥珀色小标；
+     * 漏点列表是"下一步动作"，用左侧竖线而不是卡片，避免和点评抢视觉。 */
+    '.ivs-dim-na .ivs-track{opacity:.55}',
+    '.ivs-dim-na .ivs-fill{background:repeating-linear-gradient(135deg,var(--iv-line) 0 5px,transparent 5px 10px)}',
+    '.ivs-dim-na .ivs-dim-h span{color:var(--iv-sub)}',
+    '.ivs-weak{font-style:normal;font-size:10.5px;font-weight:800;color:var(--iv-warn);border:1px solid currentColor;border-radius:6px;padding:1px 5px;margin-left:4px}',
+    '.ivs-gaps{margin-top:10px;padding:9px 12px;border-left:3px solid var(--iv-warn);background:color-mix(in oklab,var(--iv-warn) 7%,transparent);border-radius:0 10px 10px 0}',
+    '.ivs-gaps b{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--iv-ink);margin-bottom:4px}',
+    '.ivs-gap{font-size:12px;color:var(--iv-ink2);line-height:1.7}',
+    '.ivs-gap::before{content:"·";margin-right:7px;color:var(--iv-warn);font-weight:900}',
     '.ivs-delta.up{color:var(--iv-ok)}.ivs-delta.down{color:var(--iv-danger)}',
     '.ivs-pitchbar{display:flex;align-items:center;gap:10px;margin:4px 0 12px}',
     '.ivs-pitchbar .ivs-track{flex:1}',
@@ -545,6 +653,17 @@
       else if (sess.report) bodyEl.innerHTML = reportHtml()
       else bodyEl.innerHTML = roomHtml()
       if (sess && !sess.report) bindCompose()
+      /* 【2026-10-23 第 26 轮】成绩单的两处动效必须在**每次重绘**后触发：
+       * 模板里 `data-count` 是真值、文本初值是 0，而原来没有任何地方调 countUp()
+       * → 大号总分永远显示 0（页眉 chips 和编年史却是对的，所以这个 bug 很难被察觉）。
+       * 统一放在 paint 里，交卷 / 回放 / 切页签回来都能正确落位。 */
+      let numEl = bodyEl.querySelector('.ivs-scorebig b[data-count]')
+      if (numEl) countUp(numEl, clamp(num(numEl.dataset.count, 0), 0, 100), 700)
+      if (bodyEl.querySelector('.ivs-fill')) {
+        requestAnimationFrame(function () {
+          bodyEl.querySelectorAll('.ivs-fill').forEach(function (f) { f.style.width = f.dataset.w + '%' })
+        })
+      }
       scrollBottom()
     }
 
@@ -664,14 +783,26 @@
         + (totalDelta != null ? ' · 较上次 <b style="color:' + (totalDelta >= 0 ? 'var(--iv-ok)' : 'var(--iv-danger)') + '">' + (totalDelta >= 0 ? '+' : '') + totalDelta + '</b>' : '')
         + '</span></div>'
         + DIMS.map(function (d, i) {
-          let v = clamp(num(r.scores && r.scores[d.key], 0), 0, 100)
-          let pv = prev && prev.scores ? num(prev.scores[d.key], null) : null
-          let dv = pv == null ? null : v - pv
-          return '<div class="ivs-dim" style="--i:' + i + '"><div class="ivs-dim-h"><b>' + d.label + '</b><span>' + d.desc + ' · ' + v + ' 分'
+          /* 未评维度（模型没找到依据）画成"灰条 + 本轮无依据"，不画成 0 分 ——
+           * 0 分是"答得差"的信号，null 是"没考到"的信号，两者混一起会让复盘方向全错。 */
+          let raw = r.scores ? r.scores[d.key] : null
+          let has = raw != null && isFinite(Number(raw))
+          let v = has ? Math.round(clamp(Number(raw), 0, 100)) : 0
+          let pv = prev && prev.scores && prev.scores[d.key] != null ? num(prev.scores[d.key], null) : null
+          let dv = (has && pv != null) ? v - pv : null
+          let weak = has && r.weak && r.weak[d.key]
+          return '<div class="ivs-dim' + (has ? '' : ' ivs-dim-na') + '" style="--i:' + i + '">'
+            + '<div class="ivs-dim-h"><b>' + d.label + '</b><span>' + d.desc + ' · '
+            + (has ? v + ' 分' : '本轮无依据，未评')
+            + (weak ? ' · <i class="ivs-weak">存疑</i>' : '')
             + (dv != null ? ' · <i class="ivs-delta ' + (dv >= 0 ? 'up' : 'down') + '">' + (dv >= 0 ? '+' : '') + dv + '</i>' : '')
             + '</span></div>'
             + '<div class="ivs-track"><div class="ivs-fill" data-w="' + v + '"></div></div></div>'
         }).join('')
+        + (r.gaps && r.gaps.length
+          ? '<div class="ivs-gaps"><b>' + I('compass') + '明显没覆盖的点</b>'
+            + r.gaps.map(function (g) { return '<div class="ivs-gap">' + esc(g) + '</div>' }).join('') + '</div>'
+          : '')
         + (r.comments && r.comments.length
           ? '<div style="margin-top:10px">' + r.comments.map(function (c) { return '<div class="ivs-cmt">' + esc(c) + '</div>' }).join('') + '</div>'
           : '')
@@ -698,8 +829,10 @@
         '## 维度得分', '',
         '| 维度 | 得分 |', '| --- | --- |']
       DIMS.forEach(function (d) {
-        lines.push('| ' + d.label + '（' + d.desc + '） | ' + clamp(num(r.scores && r.scores[d.key], 0), 0, 100) + ' |')
+        let v = r.scores ? r.scores[d.key] : null
+        lines.push('| ' + d.label + '（' + d.desc + '） | ' + (v == null ? '—（本轮无依据）' : clamp(num(v, 0), 0, 100)) + ' |')
       })
+      if (r.gaps && r.gaps.length) lines.push('', '## 明显没覆盖的点', '', ...r.gaps.map(function (g) { return '- ' + g }))
       if (r.summary) lines.push('', '## 总评', '', r.summary)
       if (r.comments && r.comments.length) lines.push('', '## 点评', '', ...r.comments.map(function (c) { return '- ' + c }))
       lines.push('', '## 对话记录', '')
@@ -928,44 +1061,44 @@
       else paint(), ask('考生已作答（第 ' + sess.exchanges + '/' + sess.rounds + ' 轮）。按流程纪律决定追问还是换题。只输出你的发言。')
     }
 
-    /* 交卷：结构化 rubric 评分（transcript 截头防超限） */
+    /* 交卷：结构化 rubric 评分（transcript 截头防超限）
+     * 【2026-10-23 第 26 轮】提示词与解析都走同一套「锚点 + 证据 + 保守裁决」：
+     *   · 提示词见 scoreSystemPrompt()（给锚点、要证据、明确允许 null、不许默认正确）；
+     *   · 解析见 normalizeReport()（脏值→null 而不是 0；有分无据→标存疑）；
+     *   · 一个维度都没评出来 → **不落库**，只提示重试（一条 0 分会永久拉低平均分）。 */
     function finish() {
       if (!sess || sess.report || busy) { if (busy) { ctx.Toast.show('等考官说完这句…', 'info', 1400); return } return }
       busy = true
       paint()
-      let sys = '你是复试评分系统。根据下面的完整面试 transcript，按四个维度各打 0-100 分并给出 2-4 条具体点评'
-        + '（指出具体哪轮回答暴露了什么问题、怎么改；点评要针对这个考生的真实表现，不写套话）。'
-        + '只输出 JSON：{"scores":{"professional":数,"logic":数,"expression":数,"composure":数},'
-        + '"comments":["≤80字点评",...],"summary":"≤40字总评"}'
+      let sys = scoreSystemPrompt()
       let text = transcriptText(sess.transcript)
       if (text.length > TRANSCRIPT_CHARS) text = text.slice(-TRANSCRIPT_CHARS)
       aiJSON(ctx, sys, text, { timeout: 180000, maxTokens: 3000 })
         .then(function (r) {
-          let scores = (r && r.scores) || {}
-          let total = 0, cnt = 0
-          DIMS.forEach(function (d) { let v = clamp(num(scores[d.key], 0), 0, 100); scores[d.key] = v; total += v; cnt++ })
-          total = cnt ? Math.round(total / cnt) : 0
-          /* 上一场同插件成绩单：维度对比用（取编年史最新一场；scores 在 report 内） */
+          let rep = normalizeReport(r)
+          if (rep.total == null) {
+            busy = false
+            ctx.Toast.show('这次没评出有效分数（模型没给出任何维度的依据）—— 点「交卷评分」再来一次', 'warn', 3600)
+            ctx.log('面试评分无有效维度：' + JSON.stringify(r).slice(0, 200), 'warn')
+            paint()
+            return
+          }
+          /* 上一场同插件成绩单：维度对比用（取编年史最新一场；scores 在 report 内）
+           * 必须在 sessionSave 之前取，否则取到的就是刚存进去的这一场 */
           let prevSess = sessionsGet(ctx)[0]
           sess.prev = prevSess && prevSess.report && prevSess.report.scores
             ? { total: prevSess.total != null ? num(prevSess.total, null) : num(prevSess.report.total, null), scores: prevSess.report.scores }
             : null
-          sess.report = {
-            total: total, scores: scores,
-            comments: (Array.isArray(r && r.comments) ? r.comments : []).map(function (c) { return flat(c).slice(0, 200) }).slice(0, 4),
-            summary: flat(r && r.summary || '').slice(0, 60)
-          }
-          sess.total = total /* 顶层冗余一份：编年史/统计/走势线直接可读 */
+          sess.report = rep
+          sess.total = rep.total /* 顶层冗余一份：编年史/统计/走势线直接可读 */
           sess.at = Date.now()
           sessionSave(ctx, sess)
           if (timer) { clearInterval(timer); timer = null }
-          ctx.log('面试完成：' + sess.subject + ' · ' + sess.pressure + ' · ' + total + ' 分')
+          ctx.log('面试完成：' + sess.subject + ' · ' + sess.pressure + ' · ' + rep.total + ' 分'
+            + (rep.missing.length ? '（未评 ' + rep.missing.length + ' 维）' : ''))
           busy = false
           paint()
-          /* 维度条动画：下一帧推到目标宽度 */
-          requestAnimationFrame(function () {
-            bodyEl.querySelectorAll('.ivs-fill').forEach(function (f) { f.style.width = f.dataset.w + '%' })
-          })
+          /* 维度条 / 总分的入场动效统一由 paint() 触发（见那里的注释），这里不再重复 */
         })
         .catch(function (e) {
           busy = false
@@ -1140,6 +1273,9 @@
       transcriptText: transcriptText,
       trendSpark: trendSpark,
       adviceFor: adviceFor,
+      normalizeReport: normalizeReport,
+      scoreSystemPrompt: scoreSystemPrompt,
+      SCORE_ANCHORS: SCORE_ANCHORS,
       SESSION_MAX: SESSION_MAX,
       mountMain: mountMain,
       nativeBooks: nativeBooks, bookExcerpt: bookExcerpt, findBook: findBook

@@ -110,7 +110,13 @@
   function shortTitle(s, n) {
     s = String(s || '')
     n = n || 14
-    return s.length > n ? s.slice(0, n) + '…' : s
+    if (s.length <= n) return s
+    /* 【2026-10-23 第 26 轮】切点落在一对 `$…$` 里面 → 收尾的 `$` 被切掉，
+     * 渲染器认不出完整公式就整段按原文显示。奇数个 `$` = 正在公式里 → 退到那个 `$` 之前。 */
+    let cut = s.slice(0, n)
+    if ((cut.match(/\$/g) || []).length % 2 === 1) cut = cut.slice(0, cut.lastIndexOf('$'))
+    if (cut.endsWith('\\')) cut = cut.slice(0, -1)
+    return cut + '…'
   }
 
   /* ============================================================
@@ -2154,7 +2160,10 @@
     'html[data-theme="night"] .fx-btn.danger,html[data-theme="night"] .fx-icobtn.danger{color:var(--danger,#ef6a63)}',
     '.fx-root *,.fx-root *::before,.fx-root *::after{box-sizing:border-box}',
     '.fx-root button{font-family:inherit;color:inherit}',
-    '.fx-aura{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;background-image:repeating-linear-gradient(90deg,color-mix(in srgb,var(--fx-ink) 4%,transparent) 0 1px,transparent 1px 96px);mask-image:linear-gradient(180deg,#000,transparent 72%);-webkit-mask-image:linear-gradient(180deg,#000,transparent 72%)}',
+    /* 【2026-10-23 第 26 轮】装饰底色出血到视口边（与 scoring-forge 同一条约定）：
+     * `inset:0` 会把模糊色斑与第一条竖网格线裁在**内容盒**边界上，导航栏与内容之间
+     * 露出站点页面底色 = 一条硬接缝。取负的 `--vp-*` 让底色盖住内边距带，内容位置不动。 */
+    '.fx-aura{position:absolute;inset:calc(var(--vp-t,16px) * -1) calc(var(--vp-x,16px) * -1) calc(var(--vp-b,24px) * -1);z-index:0;pointer-events:none;overflow:hidden;background-image:repeating-linear-gradient(90deg,color-mix(in srgb,var(--fx-ink) 4%,transparent) 0 1px,transparent 1px 96px);mask-image:linear-gradient(180deg,#000,transparent 72%);-webkit-mask-image:linear-gradient(180deg,#000,transparent 72%)}',
     '.fx-aura i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.28}',
     '.fx-aura i:nth-child(1){width:460px;height:460px;left:-160px;top:-200px;background:radial-gradient(circle,rgba(15,118,110,.5),transparent 68%);animation:fxFloat 30s ease-in-out infinite alternate}',
     '.fx-aura i:nth-child(2){width:380px;height:380px;right:-140px;top:-90px;background:radial-gradient(circle,rgba(37,99,235,.35),transparent 70%);animation:fxFloat 38s ease-in-out infinite alternate-reverse}',

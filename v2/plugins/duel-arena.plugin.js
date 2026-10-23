@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.2.1'
+  let VERSION = '1.3.0'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -109,7 +109,19 @@
     })
   }
   function flat(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim() }
-  function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
+  /* 【2026-10-23 第 26 轮】截断时别把公式切一半：`$…$` 成对出现，切点落在一对里面时收尾的 `$` 被切掉
+   * → 站点渲染器认不出完整公式，整段按原文显示（用户截图里那条 `$\lim\limits_{x\to…`）。
+   * 判据：切点前 `$` 个数为奇数 = 正切在公式里 → 退到那个 `$` 之前。尾部残留反斜杠同样退一格。
+   * 注意：这个助手在六件插件里各自拷了一份（单文件插件无法共享模块），改一处必须六处同步 ——
+   *   `tests/ui/plugin-trunc-math-2026-10-23.test.ts` 会把六份源码全扫一遍。 */
+  function trunc(s, n) {
+    s = String(s || '')
+    if (!(s.length > n)) return s          /* 没传 n 时保持原行为（不截断） */
+    let cut = s.slice(0, n)
+    if ((cut.match(/\$/g) || []).length % 2 === 1) cut = cut.slice(0, cut.lastIndexOf('$'))
+    if (cut.endsWith('\\')) cut = cut.slice(0, -1)
+    return cut + '…'
+  }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
 
@@ -433,6 +445,60 @@
   }
   function bookRemove(book, stem) {
     return book.filter(function (x) { return x.stem !== stem })
+  }
+
+  /* 【2026-10-23 第 26 轮】战绩导出（Markdown）。
+   * 为什么是 Markdown 而不是 JSON：这是**给人看**的东西（贴进笔记/复盘文档/发给研友），
+   * 六件插件里其它五件导出的都是 JSON（机器可读的备份），这里补的是人读的那一份。
+   * 内容取舍：只导"能复盘"的字段 —— 段位/胜负/连胜是趋势，逐场是过程，错题清单是下一步动作；
+   * 不导 seed / oid / icon 这类内部标识（对用户零信息量，还会把导出文件弄脏）。 */
+  function exportMarkdown(ctx) {
+    let p = profileGet(ctx)
+    let t = titleOf(p.elo, p.badges)
+    let lines = []
+    lines.push('# 对决场战绩 · ' + dkey())
+    lines.push('')
+    lines.push('- 段位：**' + t.name + '**（ELO ' + p.elo + '）')
+    lines.push('- 战绩：' + p.wins + ' 胜 / ' + p.losses + ' 负 / ' + p.draws + ' 平（共 ' + p.history.length + ' 场）')
+    lines.push('- 当前连胜：' + p.streak)
+    if (p.badges.length) {
+      let names = p.badges.map(function (id) {
+        let b = BADGES.filter(function (x) { return x.id === id })[0]
+        return b ? b.name : id
+      })
+      lines.push('- 徽章：' + names.join('、'))
+    }
+    lines.push('')
+    if (p.history.length) {
+      lines.push('## 最近 ' + Math.min(15, p.history.length) + ' 场')
+      lines.push('')
+      lines.push('| 时间 | 对手 | 结果 | ELO | 科目 |')
+      lines.push('|---|---|---|---|---|')
+      p.history.slice(0, 15).forEach(function (h) {
+        let r = h.result === 'W' ? '胜' : h.result === 'L' ? '负' : h.result === 'F' ? '认输' : '平'
+        lines.push('| ' + fmtTime(h.ts) + ' | ' + String(h.name || '').replace(/\|/g, '/') + ' | ' + r
+          + ' | ' + h.elo + '（' + (h.delta > 0 ? '+' : '') + h.delta + '） | ' + (h.subj || '') + ' |')
+      })
+      lines.push('')
+    }
+    if (p.wrongBook.length) {
+      let letters = ['A', 'B', 'C', 'D']
+      lines.push('## 错题清单（' + p.wrongBook.length + '）')
+      lines.push('')
+      p.wrongBook.forEach(function (w, i) {
+        let ai = (typeof w.answer === 'number' && w.answer >= 0) ? w.answer : -1
+        let ans = (ai >= 0 && w.options && w.options[ai]) ? letters[ai] + '. ' + w.options[ai] : '（无选项）'
+        lines.push((i + 1) + '. ' + String(w.stem || '').replace(/\n/g, ' '))
+        lines.push('   - 正确答案：' + ans + (w.topic ? '　主题：' + w.topic : ''))
+        if (w.explain) lines.push('   - 解析：' + String(w.explain).replace(/\n/g, ' '))
+      })
+      lines.push('')
+    } else {
+      lines.push('_错题清单是空的 —— 继续保持。_')
+      lines.push('')
+    }
+    lines.push('> 由「对决场」插件 v' + VERSION + ' 导出')
+    return lines.join('\n')
   }
 
   /* 赛后评估成就：返回新解锁 id 列表（不改动入参 profile） */
@@ -949,6 +1015,10 @@
       })()
       + sparkSVG(eloSeries(p))
       + '<div style="margin-top:11px">' + histList(p) + '</div>'
+      /* 导出：没战绩也能点（导出的是一份"还没打过"的报告，用户拿去存档/贴笔记都成立），
+       * 但置灰更诚实 —— 空报告没有信息量。 */
+      + '<div style="margin-top:11px"><button class="du-btn sm" data-act="export"' + (p.history.length ? '' : ' disabled') + '>'
+      + I('cpDownload') + '导出战绩（Markdown）</button></div>'
       + '</div>'
     /* 每日挑战 + 错题复仇 */
     s += '<div class="du-card" style="--i:1">'
@@ -1606,6 +1676,14 @@
 
     let actions = {
       pick: function (t) { tryPick(t.dataset.oid) },
+      export: function () {
+        try {
+          ctx.api.download('duel-arena-' + dkey() + '.md', exportMarkdown(ctx), 'text/markdown;charset=utf-8')
+          ctx.log('导出战绩（' + profileGet(ctx).history.length + ' 场）')
+        } catch (e) {
+          ctx.Toast.show('导出失败：' + ((e && e.message) || e), 'warn', 2600)
+        }
+      },
       friendly: function (t) {
         let cell = ladderState(ctx).filter(function (c) { return c.opp.id === t.dataset.oid })[0]
         if (!cell || cell.locked) return

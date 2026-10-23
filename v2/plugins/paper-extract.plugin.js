@@ -53,7 +53,7 @@
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。
    * 走「主.次」而不是补丁位：市场条目只记两位（见 paper-extract-plugin-1-1.test.ts
    * 那条"市场版本必须等于源码 VERSION 的前两段"），补丁位留给不改变对外行为的修。 */
-  let VERSION = '1.7.0'
+  let VERSION = '1.7.1'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
@@ -163,7 +163,19 @@
     })
   }
   function flat(s) { return String(s == null ? '' : s).replace(/\s+/g, '') }
-  function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
+  /* 【2026-10-23 第 26 轮】截断时别把公式切一半：`$…$` 成对出现，切点落在一对里面时收尾的 `$` 被切掉
+   * → 站点渲染器认不出完整公式，整段按原文显示（用户截图里那条 `$\lim\limits_{x\to…`）。
+   * 判据：切点前 `$` 个数为奇数 = 正切在公式里 → 退到那个 `$` 之前。尾部残留反斜杠同样退一格。
+   * 注意：这个助手在六件插件里各自拷了一份（单文件插件无法共享模块），改一处必须六处同步 ——
+   *   `tests/ui/plugin-trunc-math-2026-10-23.test.ts` 会把六份源码全扫一遍。 */
+  function trunc(s, n) {
+    s = String(s || '')
+    if (!(s.length > n)) return s          /* 没传 n 时保持原行为（不截断） */
+    let cut = s.slice(0, n)
+    if ((cut.match(/\$/g) || []).length % 2 === 1) cut = cut.slice(0, cut.lastIndexOf('$'))
+    if (cut.endsWith('\\')) cut = cut.slice(0, -1)
+    return cut + '…'
+  }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
 
@@ -2368,12 +2380,39 @@
     /* 订阅：后台任务每次改状态都会推到这里（页面重挂也能接上，因为状态是唯一事实源） */
     let offJob = kp.on(JOB_KEY, function (j) { try { paint(j) } catch (e) { } })
 
+    /* 【2026-10-23 第 26 轮】键盘快捷键：Ctrl/⌘+Enter 开始、Esc 取消、Ctrl/⌘+O 选文件。
+     * 六件插件里只有这一件没有快捷键，而它的主流程是「选文件 → 等几十秒 → 看结果」，
+     * 长流程最需要手不离键盘。三个约定：
+     *   · 只在**主视图挂载期**生效，destroy 里解绑（切子页不留全局监听）；
+     *   · 输入框里只放行 Esc（取消长任务），其余按键交给输入框自己，别抢用户的删除键；
+     *   · 一律"代点按钮"而不是直接调内部函数 —— 按钮的 disabled 状态就是"现在能不能做"的
+     *     唯一事实源，快捷键绕过去就会出现"运行中又按了一次开始"。 */
+    function onKey(ev) {
+      let tag = (ev.target && ev.target.tagName) || ''
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        if (ev.key !== 'Escape') return
+      }
+      let mod = ev.ctrlKey || ev.metaKey
+      if (mod && ev.key === 'Enter') {
+        let b = $('[data-run]')
+        if (b && !b.disabled) { ev.preventDefault(); b.click() }
+      } else if (mod && (ev.key === 'o' || ev.key === 'O')) {
+        let inp = $('[data-file]')
+        if (inp) { ev.preventDefault(); inp.click() }
+      } else if (ev.key === 'Escape') {
+        let c = $('[data-cancel]')
+        if (c && !c.disabled) { ev.preventDefault(); c.click() }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+
     return function destroy() {
       /* 【别再掐任务】旧版这里 `state.cancelled = true` + abort ——
        * 用户切去别的模块看两眼，回来半天的活就没了。destroy 只负责断开 UI：
        * 任务自己继续跑，状态继续写 ctx.keep，跑完用通知卡告诉用户。 */
       alive = false
       try { offJob() } catch (e) { }
+      try { window.removeEventListener('keydown', onKey) } catch (e) { }
       try {
         let j = jobGet(ctx)
         if (j && j.state === 'running') {

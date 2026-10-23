@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.3.0'
+  let VERSION = '1.4.0'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -90,7 +90,19 @@
     })
   }
   function flat(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim() }
-  function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s }
+  /* 【2026-10-23 第 26 轮】截断时别把公式切一半：`$…$` 成对出现，切点落在一对里面时收尾的 `$` 被切掉
+   * → 站点渲染器认不出完整公式，整段按原文显示（用户截图里那条 `$\lim\limits_{x\to…`）。
+   * 判据：切点前 `$` 个数为奇数 = 正切在公式里 → 退到那个 `$` 之前。尾部残留反斜杠同样退一格。
+   * 注意：这个助手在六件插件里各自拷了一份（单文件插件无法共享模块），改一处必须六处同步 ——
+   *   `tests/ui/plugin-trunc-math-2026-10-23.test.ts` 会把六份源码全扫一遍。 */
+  function trunc(s, n) {
+    s = String(s || '')
+    if (!(s.length > n)) return s          /* 没传 n 时保持原行为（不截断） */
+    let cut = s.slice(0, n)
+    if ((cut.match(/\$/g) || []).length % 2 === 1) cut = cut.slice(0, cut.lastIndexOf('$'))
+    if (cut.endsWith('\\')) cut = cut.slice(0, -1)
+    return cut + '…'
+  }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)) }
   function num(v, d) { let n = Number(v); return isFinite(n) ? n : d }
 
@@ -1540,6 +1552,10 @@
     let dailyReview = clamp(num(ctx.config('dailyReview'), 80), 0, 500)
 
     let S = null   /* 会话状态；null=未开始 */
+    /* 【2026-10-23 第 26 轮】手滑回收站：只留**最近一次**评分的现场快照。
+     * 为什么不做无限撤销：要么把 SM-2 每次中间态都落库（体积换不回多少价值），
+     * 要么在内存里堆整份牌库副本 —— 而真实需求是"刚点错了，让我改一下"，一次就够。 */
+    let last = null
 
     /* —— 态 A：待开始 —— */
     function idleHtml() {
@@ -1594,10 +1610,13 @@
       let card = cardById(S.deck, S.order[S.ptr])
       let total = S.order.length
       let done = S.answered
-      let pct = total ? Math.round((done / (total + S.requeueCount)) * 100) : 0
+      /* 【2026-10-23 第 26 轮】分母只能是 order 的长度：回队的卡已经被 `order.splice` 插回队列里了，
+       * 再加 `S.requeueCount` 就是**重复计数**——实测评一张「重来」后进度条变成 1 / 5（实际只有 4 项）。
+       * 「本场回队 N」那行仍然单独报 requeueCount，所以信息不丢。 */
+      let pct = total ? Math.round((done / total) * 100) : 0
       /* 进度环：r=54 → 周长 ≈ 339.3 */
       let C = 2 * Math.PI * 54
-      let off = C * (1 - clamp(done / Math.max(1, total + S.requeueCount), 0, 1))
+      let off = C * (1 - clamp(done / Math.max(1, total), 0, 1))
       let cardInner = card
         ? '<div class="md-bigcard' + (S.flipped ? ' flipped' : '') + '" data-act="flip">'
           + '<div class="md-bigcard-in">'
@@ -1627,10 +1646,13 @@
         + '<defs><linearGradient id="mdgrad" x1="0" y1="0" x2="1" y2="1">'
         + '<stop offset="0" stop-color="var(--md-acc)"/><stop offset="1" stop-color="var(--md-acc2)"/></linearGradient></defs>'
         + '</svg>'
-        + '<div class="md-ring-t"><b>' + pct + '%</b><span>' + done + ' / ' + (total + S.requeueCount) + '</span></div>'
+        + '<div class="md-ring-t"><b>' + pct + '%</b><span>' + done + ' / ' + total + '</span></div>'
         + '</div>'
         + '<div class="md-desc" style="text-align:center;margin-bottom:10px">剩余 ' + (total - S.ptr) + ' 张 · 本场回队 ' + S.requeueCount + '</div>'
         + '<div style="text-align:center"><button class="md-btn sm" data-act="quit">结束本场（进度已计入）</button></div>'
+        /* 手滑回收：没有可撤的就置灰（而不是藏起来 —— 藏起来用户不知道有这功能） */
+        + '<div style="text-align:center;margin-top:7px"><button class="md-btn sm" data-act="undo"' + (last ? '' : ' disabled') + '>'
+        + I('cpRefresh') + '撤销上一次评分<k style="opacity:.55;margin-left:6px">Ctrl+Z</k></button></div>'
         + '</aside>'
         + '<div>' + cardInner + grades + '</div>'
         + '</div></section>'
@@ -1651,6 +1673,8 @@
         + '</div>'
         + '<div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:6px">'
         + '<button class="md-btn primary" data-act="again2">' + I('cpBolt') + '再学一轮（到期才排）</button>'
+        /* 结算页也要能撤：最容易出事的恰恰是"最后一张点快了" */
+        + '<button class="md-btn" data-act="undo"' + (last ? '' : ' disabled') + '>' + I('cpRefresh') + '撤销最后一评</button>'
         + '<button class="md-btn" data-act="gostats">' + I('trendingUp') + '看记忆曲线</button>'
         + '<button class="md-btn" data-act="godeck">' + I('list') + '回牌库</button>'
         + '</div></section>'
@@ -1686,6 +1710,18 @@
       if (!S || S.done) return
       let card = cardById(S.deck, S.order[S.ptr])
       if (!card) { S.ptr++; next(); return }
+      /* 快照必须覆盖**五处**会变的状态，少一处就会出"卡回去了、进度/统计没回去"的鬼影：
+       *   ① 卡本身（box/due/ease/reps/lapses/ivl）② order（本场回队会 splice 到后面）
+       *   ③ ptr ④ 五个计数 ⑤ 复习日志长度（下面 logPush 会立刻把缓冲写进库） */
+      last = {
+        id: card.id,
+        card: Object.assign({}, card),
+        ptr: S.ptr,
+        order: S.order.slice(),
+        counts: { answered: S.answered, graded: S.graded, again: S.again, newLearned: S.newLearned, requeueCount: S.requeueCount },
+        logLen: logGet(ctx).length,
+        flipped: S.flipped,
+      }
       let wasNew = !card.studied
       let r = schedule(card, q, Date.now())
       /* 写回主库 */
@@ -1707,7 +1743,42 @@
       }
       S.answered++
       S.flipped = false
+      /* 【2026-10-23 第 26 轮】评完一张必须**前进指针** —— 这里原来漏了 `S.ptr++`，
+       * 于是 next() 的 while 只会跳过"缺失/暂停"的卡，当前这张永远合法 → 原地打转：
+       * 评完一张又出同一张，进度环永远 1 张、卡片的 SM-2 被同一场重复刷（实测 reps 1→2）。
+       * 顺序不能挪：上面的回队 splice 用的是**前进前**的 ptr（插到"剩余 4 张之后"）。 */
+      S.ptr++
       next()
+    }
+
+    /* 撤销上一次评分（手滑回收）。返回是否真的撤了 —— 调用方据此决定要不要吞掉快捷键。
+     * 五处状态一起还原（见 grade 里快照的注释）；另外两件容易被忘掉的事：
+     *   · 已经评到**最后一张**时 next() 会把会话收尾（done=true、删 keep 槽、放彩带）
+     *     → 撤销要顺手把会话重新打开，否则用户只能盯着结算页干瞪眼；
+     *   · 日志是"先落库再清缓冲"，撤销必须把库里的条数截回评分前，否则统计里留着一次幽灵复习。 */
+    function undoGrade() {
+      if (!S || !last) return false
+      let s = last
+      last = null
+      for (let i = 0; i < S.deck.length; i++) if (S.deck[i].id === s.id) { S.deck[i] = s.card; break }
+      S.order = s.order
+      S.ptr = s.ptr
+      S.answered = s.counts.answered
+      S.graded = s.counts.graded
+      S.again = s.counts.again
+      S.newLearned = s.counts.newLearned
+      S.requeueCount = s.counts.requeueCount
+      let log = logGet(ctx)
+      if (log.length > s.logLen) ctx.data('log', log.slice(0, s.logLen))
+      if (S.done) {
+        S.done = false; S.endAt = 0
+        ctx.keep.set('session', { open: true, at: Date.now() })
+      }
+      S.flipped = s.flipped
+      deckSave(ctx, S.deck)
+      ctx.Toast.show('已撤销评分：' + trunc(s.card.front, 16), 'info', 1500)
+      paint()
+      return true
     }
 
     function next() {
@@ -1751,6 +1822,7 @@
       start: start,
       flip: function () { if (S && !S.done) { S.flipped = !S.flipped; paint() } },
       grade: function (a) { grade(num(a.dataset.q, 4)) },
+      undo: function () { undoGrade() },
       quit: quit,
       again2: function () { S = null; paint() },
       godeck: function () { env.go(T_DECK) },
@@ -1758,11 +1830,18 @@
     })
     paint()
 
-    /* 键盘：空格翻面、1-4 评分（仅本页签存活时生效，切签/离开自动解绑） */
+    /* 键盘：空格翻面、1-4 评分、Ctrl/⌘+Z 撤销（仅本页签存活时生效，切签/离开自动解绑）
+     * 撤销必须**排在 `S.done` 早退之前**：最后一张评完就进结算页了，而"最后一张点快了"
+     * 恰恰是最需要撤销的场景 —— 放在早退后面等于把最该救的那次挡在门外。 */
     function onKey(ev) {
-      if (!S || S.done) return
+      if (!S) return
       let tag = (ev.target && ev.target.tagName) || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && (ev.key === 'z' || ev.key === 'Z')) {
+        if (undoGrade()) ev.preventDefault()
+        return
+      }
+      if (S.done) return
       if (ev.code === 'Space') { ev.preventDefault(); S.flipped = !S.flipped; paint() }
       else if (S.flipped && ev.key >= '1' && ev.key <= '4') { grade(GRADES[num(ev.key, 4) - 1].q) }
     }

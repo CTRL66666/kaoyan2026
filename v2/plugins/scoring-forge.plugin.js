@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.3'
+  let VERSION = '1.3.1'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -89,7 +89,16 @@
   function shortTitle(s, n) {
     s = String(s || '').replace(/\s+/g, ' ').trim()
     n = n || 16
-    return s.length > n ? s.slice(0, n) + '…' : s
+    if (s.length <= n) return s
+    /* 【2026-10-23 第 26 轮】别把公式切一半：`$…$` 成对出现，切点落在一对里面时
+     * 收尾的 `$` 被切掉 → 站点渲染器认不出完整公式，整段按原文显示
+     * （用户截图里那条 `$\lim\limits_{x\to…` 就是这么来的，而 `$a,b$` 是完整的所以正常）。
+     * 判据：切点前 `$` 个数为奇数 = 正切在公式里 → 退到那个 `$` 之前再补省略号。
+     * 末尾残留的反斜杠（切在 `\lim` 中间）同样退一格。 */
+    let cut = s.slice(0, n)
+    if ((cut.match(/\$/g) || []).length % 2 === 1) cut = cut.slice(0, cut.lastIndexOf('$'))
+    if (cut.endsWith('\\')) cut = cut.slice(0, -1)
+    return cut + '…'
   }
 
   /* ============================================================
@@ -1175,7 +1184,11 @@
         let od = diffDays(q.due || today, today)
         out.push('<div class="sf-qrow">'
           + '<span class="sf-qdot" style="background:' + subjectColor(q.subject) + '"></span>'
-          + '<div class="sf-qmain"><b>' + esc(shortTitle(q.stem, 30)) + '</b>'
+          /* 【2026-10-23 第 26 轮】这里**不靠 JS 截断**来排版：`.sf-qmain b` 本身就是
+           * `overflow:hidden;text-overflow:ellipsis;white-space:nowrap`，视觉上的"一行截断"
+           * 由 CSS 完成；JS 再切一刀只会切进公式（用户截图里那条裸 `$\lim\limits_{x\to…`）。
+           * 所以这里只留一个**宽松的 DOM 体积上限**（120 字），公式完整性交给 shortTitle 的判据。 */
+          + '<div class="sf-qmain"><b>' + esc(shortTitle(q.stem, 120)) + '</b>'
           + '<span>' + esc(subjectLabel(q.subject)) + (q.topic ? ' · ' + esc(q.topic) : '')
           + ' · ' + q.points.length + ' 个点 · 第 ' + (q.box || 1) + ' 盒</span></div>'
           + (od > 0 ? '<span class="sf-od">逾期 ' + od + ' 天</span>' : '<span class="sf-od ok">今天</span>')
@@ -1873,7 +1886,14 @@
     'html[data-theme="night"] .sf-btn.danger,html[data-theme="night"] .sf-icobtn.danger{color:var(--danger,#ef6a63)}',
     '.sf-root *,.sf-root *::before,.sf-root *::after{box-sizing:border-box}',
     '.sf-root button{font-family:inherit;color:inherit}',
-    '.sf-aura{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;background-image:repeating-linear-gradient(90deg,color-mix(in srgb,var(--sf-ink) 4%,transparent) 0 1px,transparent 1px 96px);mask-image:linear-gradient(180deg,#000,transparent 72%);-webkit-mask-image:linear-gradient(180deg,#000,transparent 72%)}',
+    /* 【2026-10-23 第 26 轮】装饰底色必须**出血到视口边**（`inset` 取负的 `--vp-*`）。
+     * 原来 `inset:0` = 只铺到内容盒，而它的模糊色斑（`.sf-aura i`）与第一条竖向网格线
+     * 都被 `overflow:hidden` 裁在内容盒边界 → 导航栏和内容之间露出站点页面底色，
+     * 且那条 4% 的竖线正好落在裁切边上，看起来像一条"硬接缝"（用户截图指的就是这条带子）。
+     * 负 inset 让底色盖住 `.view` 的内边距带：不改变任何内容位置（内容列仍 1180 居中），
+     * 只是把装饰层扩到与 memo-deck / 面试间 / 对决场同一种"满幅"表现。
+     * 注意：与 `.sf-root` 的负 margin 出血是同一条约定：内边距数值只认 `--vp-*`，不写死。 */
+    '.sf-aura{position:absolute;inset:calc(var(--vp-t,16px) * -1) calc(var(--vp-x,16px) * -1) calc(var(--vp-b,24px) * -1);z-index:0;pointer-events:none;overflow:hidden;background-image:repeating-linear-gradient(90deg,color-mix(in srgb,var(--sf-ink) 4%,transparent) 0 1px,transparent 1px 96px);mask-image:linear-gradient(180deg,#000,transparent 72%);-webkit-mask-image:linear-gradient(180deg,#000,transparent 72%)}',
     '.sf-aura i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.26}',
     '.sf-aura i:nth-child(1){width:440px;height:440px;left:-150px;top:-200px;background:radial-gradient(circle,rgba(178,58,46,.45),transparent 68%);animation:sfFloat 32s ease-in-out infinite alternate}',
     '.sf-aura i:nth-child(2){width:360px;height:360px;right:-140px;top:-80px;background:radial-gradient(circle,rgba(138,90,43,.32),transparent 70%);animation:sfFloat 40s ease-in-out infinite alternate-reverse}',
