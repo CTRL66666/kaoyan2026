@@ -25,6 +25,29 @@
   let TOOL_ID = 'formula-vault'
   let VERSION = '1.0'
 
+  /* ══════════════ 0. 设计决策（改这个文件前先读这里） ══════════════
+   *
+   * ① 为什么"公式也要遮罩"：看懂 ≠ 记得住。公式要在考场上条件反射式调出来，
+   *    唯一被反复验证的办法是「先回忆、后对照」的检索练习（testing effect）。
+   *    所以自测台在揭示前**绝不渲染公式本体** —— 场景提示也只给章节/易错/线索。
+   *
+   * ② 为什么复测排期不自己算：站内 Spaced 已是成熟 SRS（间隔盒 + 质量分），
+   *    自己再写一套 = 两套遗忘曲线、两处 bug。插件只存 box/due，Spaced 挂了你才
+   *    退化到本地间隔盒（见 scheduleNext 的 try/catch）。
+   *
+   * ③ 为什么 LaTeX 走 ctx.Tex：自研渲染器处理过 AI 输出的各种破损形态
+   *    （管道符、漏花括号、转义），自己写必错。tex() 里带宿主缺失时的纯文本兜底。
+   *
+   * ④ 为什么"弹药箱"是独立概念而不只是筛选：它对应一个具体心理动作 ——
+   *    "老漏的那几条"。按 miss/slow 计数自动进箱，比"按掌握度<X 筛选"更贴合直觉。
+   *
+   * ⑤ 撤销为什么只留最近一次：连续撤销会让掌握度曲线出现"时间倒流"的假跳变。
+   *    一次就够（防手滑），要更多请去设置页清空重来。
+   *
+   * ⑥ 种子库为什么控制在 ~140 条：宁可少而准。一条错公式比没有更糟
+   *    （会以"权威"的姿态被记进脑子）。要更多用「自建公式」补。
+   * ══════════════════════════════════════════════════════════════ */
+
   /* ══════════════ 1. 小工具 ══════════════ */
   function esc(s) {
     return String(s == null ? '' : s)
@@ -144,7 +167,15 @@
     { id: 'c059', s: 'calc', c: '常微分方程', n: '伯努利方程', t: '$y^{\\prime}+P(x)y=Q(x)y^n$（$n\\ne0,1$）：令 $z=y^{1-n}$', p: '「除 $y^n$ 再换元」', w: '$n=0$ 就是线性，$n=1$ 可分离' },
     { id: 'c060', s: 'calc', c: '常微分方程', n: '可降阶二阶', t: '$y^{\\prime\\prime}=f(x)$：连积两次；$y^{\\prime\\prime}=f(x,y^{\\prime})$：令 $p=y^{\\prime}$', p: '「缺 y 就降一阶」', w: '令 $p=y^{\\prime}$ 后 $y^{\\prime\\prime}=p\\frac{dp}{dy}$，不是 $\\frac{dp}{dx}$ 就完事' },
     { id: 'c061', s: 'calc', c: '常微分方程', n: '二阶常系数齐次', t: '$r^2+pr+q=0$：两实根 $y=C_1e^{r_1x}+C_2e^{r_2x}$；重根 $y=(C_1+C_2x)e^{rx}$', p: '「特征方程定形式」', w: '复根 $\\alpha\\pm\\beta i\\to e^{\\alpha x}(C_1\\cos\\beta x+C_2\\sin\\beta x)$' },
-    { id: 'c062', s: 'calc', c: '常微分方程', n: '二阶常系数非齐次特解', t: '$f=e^{\\lambda x}P_m(x)$：设 $y^*=x^k e^{\\lambda x}Q_m$，$k$ = $\\lambda$ 是特征根重数', p: '「设同族，按重数乘 x」', w: 'λ 是单根乘 1 个 x，重根乘 $x^2$；别忘' }
+    { id: 'c062', s: 'calc', c: '常微分方程', n: '二阶常系数非齐次特解', t: '$f=e^{\\lambda x}P_m(x)$：设 $y^*=x^k e^{\\lambda x}Q_m$，$k$ = $\\lambda$ 是特征根重数', p: '「设同族，按重数乘 x」', w: 'λ 是单根乘 1 个 x，重根乘 $x^2$；别忘' },
+    { id: 'c063', s: 'calc', c: '极限与连续', n: '单调有界准则', t: '单调递增有上界 ⇒ 收敛（单调递减有下界同理）', p: '「单调 + 有界 = 收敛」，递推数列就靠它', w: '缺单调或有界都不行（如 $(-1)^n$）' },
+    { id: 'c064', s: 'calc', c: '极限与连续', n: '夹逼准则', t: '$g(x)\\le f(x)\\le h(x)$ 且 $\\lim g=\\lim h=A$ ⇒ $\\lim f=A$', p: '「两头夹住，中间投降」', w: '常用于 n 项和（放大缩小后两项可算）' },
+    { id: 'c065', s: 'calc', c: '一元函数微分学', n: '可导与连续的关系', t: '可导 ⇒ 连续；连续 ⇏ 可导', p: '「可导必连续，连续不一定可导」', w: '反例：$y=|x|$ 在 0 连续不可导' },
+    { id: 'c066', s: 'calc', c: '一元函数微分学', n: '指数与幂的衰减阶', t: '$x\\to\\infty$ 时 $e^{-x}$ 快于任何 $x^{-n}$ 趋于 0', p: '「指数衰减碾压幂衰减」', w: '比较阶数先认指数与幂的辈分' },
+    { id: 'c067', s: 'calc', c: '一元函数积分学', n: '定积分定义（黎曼和）', t: '$\\int_a^b f=\\lim_{\\lambda\\to0}\\sum f(\\xi_i)\\Delta x_i$', p: '「分割、近似、求和、取极限」四步', w: '证存在常用达布上下和趋于同值' },
+    { id: 'c068', s: 'calc', c: '一元函数积分学', n: '积分中值定理', t: '$\\int_a^b f=f(\\xi)(b-a)$，$\\xi\\in[a,b]$', p: '「平矩形等高」', w: '$f$ 必须连续才有这个 $\\xi$' },
+    { id: 'c069', s: 'calc', c: '中值定理与证明', n: '证明题的选刀口诀', t: '证 $f^{\\prime}(\\xi)=0$ → 罗尔；证增量=导数×区间 → 拉格朗日；证二阶 → 泰勒', p: '「结论长什么样，就选哪把刀」', w: '辅助函数（$F=f-g$、$F=xf$）是现造条件的标准手法' },
+    { id: 'c070', s: 'calc', c: '无穷级数', n: '交错级数莱布尼茨判别', t: '$u_n\\downarrow 0$ ⇒ $\\sum(-1)^{n-1}u_n$ 收敛', p: '「递减趋于零」四字足矣', w: '收敛但不一定绝对收敛（交错调和级数）' }
   ]
 
   const SEED_LINALG = [
@@ -169,7 +200,11 @@
     { id: 'l019', s: 'linalg', c: '特征值', n: '相似不变量', t: '相似矩阵有相同特征值、迹、行列式、秩', p: '「谱是相似不变量」', w: '反过来不成立（同谱不一定相似）' },
     { id: 'l020', s: 'linalg', c: '二次型', n: '二次型标准形', t: '$f=x^TAx$，$A$ 实对称；经可逆变换 $x=Cy$ 得 $f=\\sum d_i y_i^2$', p: '「配方或正交变换」', w: '正交变换保长度，一般可逆变换不保' },
     { id: 'l021', s: 'linalg', c: '二次型', n: '正定判别', t: '正定 ⇔ 所有顺序主子式 > 0；⇔ 特征值全正；⇔ $x^TAx>0$（$x\\ne0$）', p: '「主子式全正」最好算', w: '半正定是 ≥0 且允许等号，别混' },
-    { id: 'l022', s: 'linalg', c: '二次型', n: '合同与惯性', t: '$A\\simeq B$（合同）⇔ 秩与正负惯性指数相同', p: '「两正一负」就叫惯性指数', w: '合同不要求特征值相同' }
+    { id: 'l022', s: 'linalg', c: '二次型', n: '合同与惯性', t: '$A\\simeq B$（合同）⇔ 秩与正负惯性指数相同', p: '「两正一负」就叫惯性指数', w: '合同不要求特征值相同' },
+    { id: 'l023', s: 'linalg', c: '矩阵', n: '分块对角矩阵求逆', t: '$\\begin{pmatrix}A&0\\\\0&D\end{pmatrix}^{-1}=\begin{pmatrix}A^{-1}&0\\\\0&D^{-1}\end{pmatrix}$', p: '「对角块各自求逆」', w: '副对角块要两块互换位置' },
+    { id: 'l024', s: 'linalg', c: '矩阵', n: '矩阵方程', t: '$AX=B\\Rightarrow X=A^{-1}B$；$XA=B\\Rightarrow X=BA^{-1}$', p: '「左乘左逆，右乘右逆」', w: '$AX+XB=C$ 型不能直接逆，要提公因子' },
+    { id: 'l025', s: 'linalg', c: '向量', n: '秩的关系式', t: '$r(A+B)\\le r(A)+r(B)$；$r(AB)\\le\\min(r(A),r(B))$', p: '「和可加，积取小」', w: '$r(A+B)\\ge|r(A)-r(B)|$ 也常用' },
+    { id: 'l026', s: 'linalg', c: '特征值', n: '特征值反用', t: '$\\lambda\\ne0$ 是 A 的特征值 ⇒ $\\lambda^{-1}$ 是 $A^{-1}$ 的特征值', p: '「逆的特征值是倒数」', w: '$A+\\lambda E$ 的特征值是 $\\mu+\\lambda$（平移）' }
   ]
 
   const SEED_PROB = [
@@ -207,8 +242,49 @@
     { id: 'p032', s: 'prob', c: '数理统计', n: '最大似然估计', t: '$L(\\theta)=\\prod f(x_i;\\theta)$，取 $\\ln L$ 求导置 0', p: '「先取对数再求导」', w: '定义域与 θ 有关时（均匀分布）不能直接求导' },
     { id: 'p033', s: 'prob', c: '数理统计', n: '无偏性', t: '$E(\\hat\\theta)=\\theta$；$E(S^2)=\\sigma^2$，$E(\\frac1n\\sum(X_i-\\bar X)^2)\\ne\\sigma^2$', p: '「样本方差无偏，除以 n 的那个有偏」', w: '$S^2$ 分母是 $n-1$，这才是无偏的那个' },
     { id: 'p034', s: 'prob', c: '数理统计', n: '置信区间（单个正态 μ）', t: '$\\bar x\\pm z_{\\alpha/2}\\frac{\\sigma}{\\sqrt n}$（σ 已知）；σ 未知用 $t_{\\alpha/2}(n-1)\\frac{s}{\\sqrt n}$', p: '「点估计 ± 分位数 × 标准误」', w: 'σ 未知必须换 t，别用 z' },
-    { id: 'p035', s: 'prob', c: '数理统计', n: '假设检验两类错误', t: '第一类：弃真（概率 $\\alpha$）；第二类：取伪（概率 $\\beta$）', p: '「拒真 = 假阳性」', w: '$n$ 固定时 $\\alpha,\\beta$ 此消彼长' }
+    { id: 'p035', s: 'prob', c: '数理统计', n: '假设检验两类错误', t: '第一类：弃真（概率 $\\alpha$）；第二类：取伪（概率 $\\beta$）', p: '「拒真 = 假阳性」', w: '$n$ 固定时 $\\alpha,\\beta$ 此消彼长' },
+    { id: 'p036', s: 'prob', c: '随机事件', n: '抽签公平性', t: '不放回抽取中第 $k$ 次抽中的边缘概率均为 $\\frac{m}{n}$', p: '「先抽后抽一样公平」', w: '别被"前面没抽中我概率变大"误导——那是条件概率变了' },
+    { id: 'p037', s: 'prob', c: '一维分布', n: '超几何分布', t: '$P(X=k)=\\frac{C_M^kC_{N-M}^{n-k}}{C_N^n}$；$EX=n\\frac{M}{N}$', p: '「不放回的成功数」', w: '$N$ 很大时近似二项（$p=\\frac{M}{N}$）' },
+    { id: 'p038', s: 'prob', c: '二维分布', n: '二维均匀分布', t: '$f(x,y)=\\frac1{S_D}$（$(x,y)\\in D$，面积 $S_D$）', p: '「面积分之一」', w: '边缘一般是长度比，不再均匀' },
+    { id: 'p039', s: 'prob', c: '二维分布', n: '最大最小值分布', t: '$F_{max}(z)=F(z)^n$；$F_{min}(z)=1-[1-F(z)]^n$', p: '「最大取交，最小取补」', w: '求密度记得对分布函数求导' },
+    { id: 'p040', s: 'prob', c: '数字特征', n: '不相关的三条等价', t: '$\\rho=0\\Leftrightarrow\\mathrm{Cov}=0\\Leftrightarrow E(XY)=EX\\cdot EY$', p: '「常用第三条验算」', w: '只有正态分布 $\\rho=0$ 才等价独立' },
+    { id: 'p041', s: 'prob', c: '数理统计', n: '样本方差分布', t: '$\\frac1{\\sigma^2}\\sum(X_i-\\bar X)^2\\sim\\chi^2(n-1)$', p: '「除以 $\\sigma^2$ 才是卡方，自由度少 1」', w: '少的 1 个自由度是因为估了均值' }
   ]
+
+  /* ---- 3b. 易混对比：考研丢分往往不是不会，是分不清两个长得像的 ----
+   * 按 id 引用种子公式（不复制内容，保持单一事实源）。 */
+  const CONFUSE = [
+    { id: 'x1', a: 'c029', b: 'c030', note: '罗尔要求两端函数值相等，拉格朗日不要求；拉格朗日是"把函数掰弯之后"的罗尔。' },
+    { id: 'x2', a: 'c023', b: 'c024', note: '变上限求导是"被积函数代入上下限"，牛顿-莱布尼茨是"原函数增量"——一个是导数，一个是积分。' },
+    { id: 'x3', a: 'c014', b: 'c015', note: '极值第一法看一阶导变号（含不可导点），第二法只看驻点且要二阶导非零。' },
+    { id: 'x4', a: 'c047', b: 'c049', note: '格林是"平面闭曲线→二重积分"，高斯是"封闭曲面→三重积分"；维度各升一阶。' },
+    { id: 'x5', a: 'p001', b: 'p004', note: '条件概率问"已知 A 后 B 的概率"，贝叶斯问"看到 B 后 A 的概率"——因和果的方向别反。' },
+    { id: 'x6', a: 'p005', b: 'p019', note: '独立是"概率可乘"，不相关只是"协方差为 0"；独立 ⇒ 不相关，反之不成立。' },
+    { id: 'x7', a: 'p031', b: 'p032', note: '矩估计"样本矩替总体矩"，最大似然"让观测结果最可能发生"；同一题两法常给不同答案。' },
+    { id: 'x8', a: 'l004', b: 'l005', note: '克莱姆用法则解单个未知数，逆矩阵解整个向量；法则算一步、逆矩阵算一片。' },
+    { id: 'x9', a: 'l009', b: 'l017', note: '线性相关是"有没有多余向量"，可对角化是"特征向量够不够填成基"。' },
+    { id: 'x10', a: 'l021', b: 'l022', note: '正定要求 >0，半正定允许 =0；合同看的是秩与正负惯性指数，不是特征值。' },
+    { id: 'x11', a: 'c026', b: 'c042', note: '定积分对称看被积函数奇偶，二重积分对称还要看积分区域是否对称。' },
+    { id: 'x12', a: 'c013', b: 'c016', note: '单调性看一阶导符号，凹凸/拐点看二阶导符号——同一题两问常被混为一谈。' },
+    { id: 'x13', a: 'c002', b: 'c005', note: '等价替换只能换乘除因子，洛必达只吃 0/0 与 ∞/∞ —— 两个都不是万能钥匙。' },
+    { id: 'x14', a: 'p027', b: 'p028', note: '棣莫弗-拉普拉斯是二项专用，列维-林德伯格是任意同分布之和 —— 前者是后者的特例。' },
+    { id: 'x15', a: 'c021', b: 'c025', note: '不定积分换元换完要换回原变量；定积分换元**必须同时换上下限**。' },
+    { id: 'x16', a: 'l001', b: 'l008', note: '行列式是数（可拆可逆），伴随是矩阵（按代数余子式转置排）。' }
+  ]
+  /** 易混对渲染：两条并排 + 一句辨析（并排才看得出差别） */
+  function confuseRow(ctx, list, item) {
+    let fa = findF(list, item.a)
+    let fb = findF(list, item.b)
+    if (!fa || !fb) return ''
+    let side = function (f) {
+      return '<div class="fv-cside"><span class="fv-fsubj" style="--c:' + subjectColor(f.s) + '">' + esc((SUBJ[f.s] && SUBJ[f.s].short) || f.s) + '</span>'
+        + '<b>' + esc(f.n) + '</b>'
+        + '<div class="fv-ft">' + tex(ctx, f.t, true) + '</div></div>'
+    }
+    return '<div class="fv-crow"><span class="fv-vs" aria-hidden="true">VS</span>'
+      + side(fa) + side(fb)
+      + '<div class="fv-cnote">' + esc(item.note) + '</div></div>'
+  }
 
   /* ══════════════ 4. 判据（纯函数） ══════════════ */
   /** 自评三档 → 站点 Spaced 的质量分（4=秒想 / 3=想一下 / 1=没想起） */
@@ -341,10 +417,15 @@
   function aiOk(ctx) {
     try { return !!(ctx && ctx.ai && typeof ctx.ai.json === 'function') } catch (e) { return false }
   }
-  /** 让 AI 给一条公式编记忆线索（严格 JSON，失败返回 null —— 绝不编） */
+  /** 让 AI 给一条公式编记忆线索（严格 JSON，失败返回 null —— 绝不编）
+   *  三条防幻觉要求：① 只输出 JSON ② 联想必须挂在公式的**真实结构**上
+   *  （谐音/图像/推导链），不许编造不存在的性质 ③ 拿不准就空着，调用方会兜底。 */
   function aiMnemonic(ctx, f) {
     if (!aiOk(ctx)) return Promise.resolve(null)
-    let sys = '你是考研数学助教。为给定公式设计记忆线索。只输出 JSON：{"mnemonic":"口诀/联想（≤60字）","derivation":"一句话推导线索（≤80字）"}。不要解释，不要多余字段。'
+    let sys = '你是考研数学助教。为给定公式设计记忆线索。只输出 JSON：'
+      + '{"mnemonic":"口诀/联想（≤60字，必须挂在公式真实结构上，禁止编造性质）",'
+      + '"derivation":"一句话推导线索（≤80字）"}。'
+      + '不要解释、不要多余字段；没有把握就把对应字段留空字符串。'
     let usr = '公式名：' + f.n + '\n科目：' + subjectLabel(f.s) + '\n公式：' + f.t
       + '\n已有记忆要点：' + (f.p || '') + '\n易错点：' + (f.w || '')
     return ctx.ai.json(sys, usr, { temperature: 0.4 }).then(function (o) {
@@ -593,7 +674,53 @@
     '.fv-cfgrow em{font-style:normal;color:var(--fv-acc);font-family:Georgia,serif;font-size:14px;font-weight:700}',
     '.fv-cfgrow span{color:var(--fv-sub);font-size:11.5px;line-height:1.7}',
     '.fv-about p{margin:0 0 9px;font-size:12.5px;line-height:1.9;color:var(--fv-sub);padding-left:14px;border-left:1px solid var(--fv-line)}',
-    '.fv-about p b{color:var(--fv-ink)}'
+    '.fv-about p b{color:var(--fv-ink)}',
+    /* 易混对比：两条并排才看得出差别；VS 徽标浮在中间 */
+    '.fv-confuse{padding-bottom:10px}',
+    '.fv-crow{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:14px 0 12px;border-top:1px dashed var(--fv-line);animation:fvFade .4s both}',
+    '.fv-crow:first-of-type{border-top:0}',
+    '.fv-vs{position:absolute;left:50%;top:16px;transform:translateX(-50%);z-index:1;width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:var(--fv-bg);border:1px solid var(--fv-line2);font:700 9.5px/1 ui-monospace,Consolas,monospace;letter-spacing:.02em;color:var(--fv-sub)}',
+    '.fv-cside{display:flex;flex-direction:column;gap:3px;min-width:0}',
+    '.fv-cside>b{font-size:13px;font-weight:700}',
+    '.fv-cnote{grid-column:1/-1;margin-top:8px;padding:9px 0 9px 14px;border-left:2px solid var(--fv-acc);font-size:12px;line-height:1.8;color:var(--fv-sub)}',
+    /* 自建公式表单 */
+    '.fv-form{display:flex;flex-direction:column;gap:14px;min-width:320px}',
+    '.fv-form label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--fv-sub);letter-spacing:.04em;font-weight:600}',
+    '.fv-form label b{color:#b91c1c}',
+    '.fv-form select.fv-input{height:34px}',
+    '.fv-form textarea.fv-input{height:auto;padding:6px 2px;line-height:1.75;resize:vertical}',
+    /* 章节掌握度（站内 Charts.bar 容器） */
+    '.fv-chapbars{margin:6px 0 4px}',
+    /* 快捷键一览 */
+    '.fv-keys{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0 26px}',
+    '.fv-krow{display:flex;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid var(--fv-line);font-size:12px}',
+    '.fv-krow:last-child{border-bottom:0}',
+    '.fv-krow kbd{font-family:ui-monospace,Consolas,monospace;font-size:10px;padding:2px 7px;border:1px solid var(--fv-line2);border-radius:4px;background:var(--fv-soft);color:var(--fv-ink);flex:0 0 auto}',
+    '.fv-krow span{color:var(--fv-sub);font-size:11.5px}',
+    /* 未来 7 天复测计划 */
+    '.fv-plan{display:flex;flex-direction:column}',
+    '.fv-planrow{display:flex;align-items:center;gap:14px;padding:8px 0;border-bottom:1px solid var(--fv-line)}',
+    '.fv-planrow:last-child{border-bottom:0}',
+    '.fv-pland{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--fv-sub);min-width:52px;letter-spacing:.06em}',
+    '.fv-planbar{flex:1;height:2px;background:var(--fv-line2);overflow:hidden}',
+    '.fv-planbar b{display:block;height:100%;background:var(--fv-acc);transition:width .6s cubic-bezier(.22,1,.36,1)}',
+    '.fv-planrow em{font-style:normal;font-family:Georgia,serif;font-size:14px;font-weight:700;min-width:24px;text-align:right;font-variant-numeric:tabular-nums}',
+    /* 最近自测明细 */
+    '.fv-thin{display:flex;flex-direction:column}',
+    '.fv-thin-row{display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid var(--fv-line)}',
+    '.fv-thin-row:last-child{border-bottom:0}',
+    '.fv-thin-n{font-family:Georgia,serif;font-size:14px;width:16px;flex:0 0 16px;text-align:center}',
+    '.fv-thin-row>div{flex:1;min-width:0;display:flex;flex-direction:column}',
+    '.fv-thin-row b{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.fv-thin-row span{font-size:10.5px;color:var(--fv-sub)}',
+    '.fv-thinn{font-style:normal;font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--fv-sub);white-space:nowrap}',
+    /* 草稿纸：揭示前的作答区（稿纸质感：左竖线 + 淡底） */
+    '.fv-ta{width:100%;border:0;border-left:2px solid color-mix(in srgb,var(--fv-acc) 55%,transparent);border-radius:0;padding:12px 14px;background:color-mix(in srgb,var(--fv-ink) 2.5%,transparent);color:var(--fv-ink);font:13.5px/1.85 inherit;outline:none;resize:vertical;min-height:130px;transition:background .16s,border-color .16s}',
+    '.fv-ta:focus{background:color-mix(in srgb,var(--fv-acc) 4%,transparent);border-left-color:var(--fv-acc)}',
+    '.fv-draftprev{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--fv-sub);letter-spacing:.08em;margin-top:8px}',
+    '.fv-draftshow{margin:0 0 14px;padding:10px 0 10px 16px;border-left:2px dashed var(--fv-line2)}',
+    '.fv-draftshow b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:9.5px;letter-spacing:.14em;color:var(--fv-sub);text-transform:uppercase;margin-bottom:5px}',
+    '.fv-draftshow p{margin:0;font-size:12.5px;line-height:1.85;white-space:pre-wrap;color:var(--fv-sub)}'
   ].join('')
 
   /* ══════════════ 7. 视图 ══════════════ */
@@ -627,6 +754,14 @@
       + '</div></div>')
 
     let q = String(S.q || '').trim().toLowerCase()
+    /* 易混对比：搜索词为空且没按学科过滤时才显示（避免和列表抢注意力） */
+    if (!q && S.subj === 'all' && S.openChap.confuse !== false) {
+      out.push('<section class="fv-card fv-confuse"><div class="fv-card-h"><b>易混对比</b><em>分不清 = 做不对</em>'
+        + '<button class="fv-btn ghost sm" data-act="chap" data-k="confuse">收起</button></div>')
+      for (let i = 0; i < CONFUSE.length; i++) out.push(confuseRow(ctx, list, CONFUSE[i]))
+      out.push('</section>')
+    }
+
     let filtered = list.filter(function (f) {
       if (S.subj !== 'all' && f.s !== S.subj) return false
       if (!q) return true
@@ -654,7 +789,9 @@
       }
       out.push('</section>')
     }
-    out.push('<div class="fv-more">共 ' + filtered.length + ' 条公式（含自建 ' + S.customCount + ' 条）。数据存在浏览器本地，可随时导出备份。</div>')
+    out.push('<div class="fv-more">共 ' + filtered.length + ' 条公式（含自建 ' + S.customCount + ' 条）。'
+      + '<button class="fv-btn sm" data-act="newf" style="margin-left:10px">+ 自建公式</button>'
+      + '数据存在浏览器本地，可随时导出备份。</div>')
     return out.join('')
   }
 
@@ -679,9 +816,12 @@
       + '<button class="fv-btn sm' + (r && r.fav ? ' on' : '') + '" data-act="fav" data-id="' + esc(f.id) + '">' + (r && r.fav ? '已收藏' : '收藏') + '</button>'
       + '<button class="fv-btn sm ghost" data-act="ai-mnem" data-id="' + esc(f.id) + '">AI 助记</button>'
       + '</div>'
-      + (S.aiNote && S.aiNote.id === f.id ? '<div class="fv-ainote">'
-      + (S.aiNote.mnemonic ? '<b>口诀</b>' + esc(S.aiNote.mnemonic) : '')
-      + (S.aiNote.derivation ? '<b>线索</b>' + esc(S.aiNote.derivation) : '')
+      + ((S.aiNote && S.aiNote.id === f.id) || (S.aiNoteBatch && S.aiNoteBatch[f.id]) ? '<div class="fv-ainote">'
+      + (function () {
+        let n = (S.aiNote && S.aiNote.id === f.id) ? S.aiNote : (S.aiNoteBatch ? S.aiNoteBatch[f.id] : null)
+        if (!n) return ''
+        return (n.mnemonic ? '<b>口诀</b>' + esc(n.mnemonic) : '') + (n.derivation ? '<b>线索</b>' + esc(n.derivation) : '')
+      })()
       + '</div>' : '')
       + '</article>'
   }
@@ -729,10 +869,23 @@
       + '<span class="fv-qwhy">场景提示：' + esc(hintOf(f)) + '</span>'
       + '</div>')
     if (!revealed) {
+      /* 草稿纸：脑子里复现不如写下来。揭示前给出作答区，写过的推导会作为
+       * 「本轮草稿」跟着走，揭示后一并显示对照（不落库 —— 它是思考痕迹不是成绩）。 */
       out.push('<div class="fv-mask">'
         + '<button class="fv-mask-btn" data-act="reveal">揭示公式</button>'
-        + '<span>先在脑子里复现，再点开对照 —— 点太早就等于抄了一遍</span></div>')
+        + '<span>先在脑子里（或草稿上）复现，再点开对照 —— 点太早就等于抄了一遍</span>'
+        + '<button class="fv-btn ghost sm" data-act="draft">' + (run.draftOpen ? '收起草稿纸' : '展开草稿纸') + '</button>'
+        + '</div>')
+      if (run.draftOpen) {
+        out.push('<textarea class="fv-ta" data-fv="draft" placeholder="在这里复现公式 / 写推导过程（仅本轮有效，不影响判定）">'
+          + esc(run.draft || '') + '</textarea>')
+      } else if (run.draft) {
+        out.push('<div class="fv-draftprev">已写 ' + run.draft.length + ' 字草稿</div>')
+      }
     } else {
+      if (run.draft) {
+        out.push('<div class="fv-draftshow"><b>你刚才的草稿</b><p>' + esc(run.draft) + '</p></div>')
+      }
       out.push('<div class="fv-ft big">' + tex(ctx, f.t, true) + '</div>')
       if (f.p) out.push('<div class="fv-fp"><i>记</i>' + esc(f.p) + '</div>')
       if (f.w) out.push('<div class="fv-fw"><i>坑</i>' + esc(f.w) + '</div>')
@@ -750,10 +903,11 @@
 
   /** 场景提示：从章节名 + 记忆点里取最有信息量的一句（不能泄露公式本体） */
   function hintOf(f) {
-    let bits = []
-    if (f.w) bits.push('易错：' + shortTitle(f.w, 26))
-    if (f.p) bits.push('线索：' + shortTitle(f.p, 26))
-    if (!bits.length) bits.push('常考章节：' + f.c)
+    /* 章节名始终给出（定位感）；易错/线索做裁剪。**绝不包含公式本体** ——
+     * 提示泄露了公式，这一题就等于白练（抄写不是回忆）。 */
+    let bits = ['章节：' + f.c]
+    if (f.w) bits.push('易错：' + shortTitle(f.w, 24))
+    if (f.p) bits.push('线索：' + shortTitle(f.p, 24))
     return bits.join('　')
   }
 
@@ -765,7 +919,8 @@
     let rows = weak.concat(fav.filter(function (f) { return weak.indexOf(f) < 0 }))
     out.push('<section class="fv-card"><div class="fv-card-h"><b>弹药箱</b><em>'
       + weak.length + ' 个不熟 · ' + fav.length + ' 个收藏</em>'
-      + (rows.length ? '<button class="fv-btn primary sm" data-act="drill-ammo">全练一遍</button>' : '')
+      + (rows.length ? '<button class="fv-btn primary sm" data-act="drill-ammo">全练一遍</button>'
+      + '<button class="fv-btn sm" data-act="ai-batch">批量 AI 助记</button>' : '')
       + '</div>')
     if (!rows.length) {
       out.push('<div class="fv-empty"><div class="fv-empty-ic">' + U_icon('ammo') + '</div>'
@@ -789,6 +944,26 @@
       out.push('</div>')
     }
     out.push('</section>')
+
+    /* ---- 未来 7 天复测计划：提前知道哪天有几条，别被突然的到期打懵 ---- */
+    let plan = []
+    for (let i = 0; i < 7; i++) {
+      let d = new Date()
+      d.setDate(d.getDate() + i)
+      let k = todayKey(d)
+      let n = 0
+      for (let fid in S.recs) if (S.recs[fid] && S.recs[fid].nextAt === k) n++
+      plan.push({ k: k, label: i === 0 ? '今天' : (i === 1 ? '明天' : (d.getMonth() + 1) + '/' + d.getDate()), n: n })
+    }
+    let planMax = Math.max.apply(null, plan.map(function (x) { return x.n }).concat([1]))
+    out.push('<section class="fv-card"><div class="fv-card-h"><b>未来 7 天复测计划</b><em>按到期日</em></div>')
+    out.push('<div class="fv-plan">')
+    for (let i = 0; i < plan.length; i++) {
+      out.push('<div class="fv-planrow"><span class="fv-pland">' + plan[i].label + '</span>'
+        + '<i class="fv-planbar"><b style="width:' + Math.round(plan[i].n / planMax * 100) + '%"></b></i>'
+        + '<em>' + plan[i].n + '</em></div>')
+    }
+    out.push('</div></section>')
     return out.join('')
   }
 
@@ -848,6 +1023,46 @@
     }
     out.push('</section>')
 
+    /* 章节掌握度：走站内 Charts.bar —— 与洞察/复盘同一张图的口径 */
+    out.push('<section class="fv-card"><div class="fv-card-h"><b>章节掌握度</b><em>只统计测过的</em></div>')
+    let chapData = []
+    let chapGroups = chaptersOf(S.all, 'all')
+    for (let i = 0; i < chapGroups.length; i++) {
+      let tested = chapGroups[i].items.filter(function (f) { return S.recs[f.id] })
+      if (!tested.length) continue
+      let m = Math.round(tested.reduce(function (a, b) { return a + S.recs[b.id].mastery }, 0) / tested.length)
+      chapData.push({ label: shortTitle(chapGroups[i].chap, 6), value: m })
+    }
+    if (!chapData.length) {
+      out.push('<div class="fv-quiet">还没有任何章节被测过。从「军火库」点「自测这条」开始。</div>')
+    } else if (ctx.Charts && ctx.Charts.bar) {
+      out.push('<div class="fv-chapbars">' + ctx.Charts.bar(chapData, { height: 150, color: '#2f4bd8' }) + '</div>')
+    } else {
+      out.push('<div class="fv-quiet">站内 Charts 不可用，章节掌握度暂不显示。</div>')
+    }
+    out.push('</section>')
+
+    /* 最近自测明细：看出"最近在练什么、手感如何" */
+    let recent = S.logs.slice(-10).reverse()
+    out.push('<section class="fv-card"><div class="fv-card-h"><b>最近自测</b><em>最近 ' + recent.length + ' 次</em></div>')
+    if (!recent.length) out.push('<div class="fv-quiet">还没有自测记录。</div>')
+    else {
+      out.push('<div class="fv-thin">')
+      for (let i = 0; i < recent.length; i++) {
+        let l = recent[i]
+        let f = findF(S.all, l.fid)
+        let col = masteryColor(scoreOf(l.k))
+        out.push('<div class="fv-thin-row">'
+          + '<span class="fv-thin-n" style="color:' + col + '">' + (l.k === 'fast' ? '✓' : (l.k === 'slow' ? '~' : '✗')) + '</span>'
+          + '<div><b>' + esc(f ? f.n : '（已删除）') + '</b>'
+          + '<span>' + esc(f ? f.c : '') + ' · ' + fmtDate(dkey(l.at)) + ' · ' + fmtDur(l.ms) + '</span></div>'
+          + '<em class="fv-thinn">' + l.score + ' 分</em>'
+          + '</div>')
+      }
+      out.push('</div>')
+    }
+    out.push('</section>')
+
     /* 近 14 天自测量 */
     out.push('<section class="fv-card"><div class="fv-card-h"><b>近 14 天自测</b><em>条/天</em></div>')
     let rows = lastNDays(ctx, 14, function (dayKey) {
@@ -883,11 +1098,29 @@
     out.push('<section class="fv-card"><div class="fv-card-h"><b>数据</b><em>本地存储</em></div>')
     out.push('<div class="fv-acts">'
       + '<button class="fv-btn" data-act="export">导出 JSON</button>'
+      + '<button class="fv-btn" data-act="export-md">导出 Markdown</button>'
       + '<button class="fv-btn" data-act="import">导入合并</button>'
       + '<button class="fv-btn ghost" data-act="reset">清空自测记录</button>'
       + '</div>')
     out.push('<div class="fv-quiet">自测记录与弹药箱都在浏览器本地（插件云数据独立文件），不掺进站内 core 数据。'
       + '清空只删自测历史，公式库本身是插件内置资产，不受影响。</div>')
+    out.push('</section>')
+
+    out.push('<section class="fv-card"><div class="fv-card-h"><b>快捷键</b><em>键盘党</em></div>')
+    out.push('<div class="fv-keys">')
+    out.push(krow('1 - 5', '切换五个视图'))
+    out.push(krow('D', '直接开一轮（到期优先）'))
+    out.push(krow('R', '揭示公式'))
+    out.push(krow('1 / 2 / 3', '揭示后打分：没想起 / 想一下 / 秒想'))
+    out.push(krow('Z', '撤销上次自评'))
+    out.push(krow('Esc', '结束本轮 / 收起'))
+    out.push('</div></section>')
+
+    out.push('<section class="fv-card"><div class="fv-card-h"><b>怎么用最有效</b><em>方法论</em></div>')
+    out.push('<div class="fv-quiet">① <b>先回忆后揭示</b>：点开答案前必须在脑子里（或草稿上）复现一次，否则只是抄写；'
+      + '② <b>三档要诚实</b>：磕绊就选想一下，自评注水只会让排期失效；'
+      + '③ <b>每天 3 条胜过周末 30 条</b>：间隔效应比集中轰炸强得多；'
+      + '④ <b>弹药箱优先</b>：老漏的那几条，隔天就再拖出来一遍。</div>')
     out.push('</section>')
 
     out.push('<section class="fv-card fv-about"><div class="fv-card-h"><b>关于</b><em>v' + VERSION + '</em></div>')
@@ -898,6 +1131,9 @@
     return out.join('')
   }
 
+  function krow(key, desc) {
+    return '<div class="fv-krow"><kbd>' + esc(key) + '</kbd><span>' + esc(desc) + '</span></div>'
+  }
   function cfgRow(label, val, note) {
     return '<div class="fv-cfgrow"><b>' + esc(label) + '</b><em>' + esc(String(val)) + '</em><span>' + esc(note) + '</span></div>'
   }
@@ -1038,7 +1274,15 @@
     return { box: box, nextAt: todayKey(d) }
   }
 
-  /* ══════════════ 10. 挂载壳 ══════════════ */
+  /* ══════════════ 10. 挂载壳 ══════════════
+   * 契约（与另两个插件一致，宿主强制）：
+   *   · mount(el, ctx) 的 el 是 #view > .plugin-tool-body，宿主没有 overflow
+   *     → 本页 sticky 可用，但 z-index 要 > 站内状态栏的 20
+   *   · destroy 必须移除：window 监听 ×3、rAF、计时器、注入的 <style>、root 节点
+   *   · 切视图只改 class + moveInd，**不重建 dock DOM**（重建 = 指示器瞬移）
+   *   · 所有"写完数据"的路径都走 reload（读回真值）而不是 paint，
+   *     否则 S 里的旧副本会把新数据盖掉
+   * ══════════════════════════════════════════════════════════ */
   function mountShell(el, ctx) {
     let S = {
       view: 'vault',
@@ -1053,6 +1297,7 @@
       run: null,
       undo: null,
       aiNote: null,
+      aiNoteBatch: null,
       aiBusy: false,
       customCount: loadCustom(ctx).length,
       tick: 0
@@ -1180,6 +1425,10 @@
 
     /* 搜索框：重绘后还原焦点与光标（否则打一个字就丢焦点） */
     function bindSearch() {
+      let dr = stage.querySelector('[data-fv="draft"]')
+      if (dr) {
+        dr.addEventListener('input', function () { if (S.run) S.run.draft = String(dr.value || '') })
+      }
       let sq = stage.querySelector('[data-fv="q"]')
       if (!sq) return
       sq.addEventListener('input', function () {
@@ -1240,7 +1489,7 @@
       let queue = onlyId ? [findF(S.all, onlyId)] : buildQueue(mode)
       queue = queue.filter(Boolean)
       if (!queue.length) { toast(mode === 'weak' ? '弹药箱是空的' : '没有可练的公式', 'info'); return }
-      S.run = { queue: queue, idx: 0, t0: Date.now(), ms: 0, revealed: false, mode: onlyId ? 'one' : mode }
+      S.run = { queue: queue, idx: 0, t0: Date.now(), ms: 0, revealed: false, draft: '', draftOpen: false, mode: onlyId ? 'one' : mode }
       S.view = 'drill'
       syncDock()
       paint()
@@ -1255,6 +1504,9 @@
 
     function reveal() {
       if (!S.run || S.run.revealed) return
+      /* 收一下草稿文本（input 事件是实时的，这里兜底防时序漏更） */
+      let d = stage.querySelector('[data-fv="draft"]')
+      if (d && S.run) S.run.draft = String(d.value || '')
       S.run.revealed = true
       paint()
     }
@@ -1339,12 +1591,25 @@
       if (act === 'drill-one') { startDrill(null, id); return }
       if (act === 'drill-start') { startDrill(k || 'mixed'); return }
       if (act === 'drill-ammo') { startDrill('weak'); return }
+      if (act === 'ai-batch') {
+        let items = S.all.filter(function (f) { return isWeak(S.recs[f.id]) })
+        aiMnemonicBatch(ctx, items.slice(0, 12))
+        return
+      }
+      if (act === 'newf') { openNewFormula(ctx, reload); return }
       if (act === 'drill-quick') {
         let due = dueList(S.recs, S.today)
         startDrill(due.length ? 'due' : 'mixed')
         return
       }
       if (act === 'reveal') { reveal(); return }
+      if (act === 'draft') {
+        if (S.run) S.run.draftOpen = !S.run.draftOpen
+        paint()
+        let d = stage.querySelector('[data-fv="draft"]')
+        if (d) d.focus()
+        return
+      }
       if (act === 'grade') { grade(k); return }
       if (act === 'drill-abort') { S.run = null; stopTick(); paint(); return }
       if (act === 'fav') {
@@ -1371,8 +1636,122 @@
         return
       }
       if (act === 'export') { doExport(ctx); return }
+      if (act === 'export-md') { exportMarkdown(ctx); return }
       if (act === 'import') { doImport(ctx); return }
       if (act === 'reset') { doReset(ctx); return }
+    }
+
+    /* ---- 导出 Markdown：可打印、可喂 Anki ----
+     * 为什么不是只给 JSON：JSON 是机器备份用的，Markdown 才是"贴进笔记软件/打印"用的。 */
+    function exportMarkdown(ctx) {
+      try {
+        let groups = chaptersOf(S.all, S.subj)
+        let lines = ['# 公式军火库导出（' + todayKey() + '）', '']
+        let total = 0
+        for (let i = 0; i < groups.length; i++) {
+          lines.push('## ' + groups[i].chap)
+          lines.push('')
+          for (let j = 0; j < groups[i].items.length; j++) {
+            let f = groups[i].items[j]
+            let r = S.recs[f.id]
+            total++
+            lines.push('### ' + f.n + '　*(' + subjectLabel(f.s) + ')*')
+            lines.push('')
+            lines.push('```latex')
+            lines.push(String(f.t || '').replace(/^\$+|\$+$/g, '').trim())
+            lines.push('```')
+            lines.push('')
+            if (f.p) lines.push('- 记忆：' + f.p)
+            if (f.w) lines.push('- 易错：' + f.w)
+            if (r && r.nextAt) lines.push('- 掌握度：' + r.mastery + '（下次复测 ' + fmtDate(r.nextAt) + '）')
+            lines.push('')
+          }
+        }
+        lines.push('---')
+        lines.push('共 ' + total + ' 条。由「公式军火库 v' + VERSION + '」导出。')
+        let blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+        let a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = 'formula-vault-' + todayKey() + '.md'
+        a.click()
+        setTimeout(function () { URL.revokeObjectURL(a.href) }, 4000)
+        toast('已导出 ' + total + ' 条为 Markdown', 'ok')
+      } catch (e) { toast('导出失败：' + (e && e.message), 'error') }
+    }
+
+    /* ---- 批量 AI 助记：弹药箱里老漏的公式，一键全问 ----
+     * 进度实时 toast（等待要有可见进度，不能干转）；
+     * 单个失败不影响整体（跳过继续），结果逐条落到公式卡上。 */
+    function aiMnemonicBatch(ctx, items) {
+      if (!items.length) { toast('弹药箱是空的', 'info'); return }
+      if (!aiOk(ctx)) { toast('AI 未配置', 'info'); return }
+      if (S.aiBusy) { toast('正在跑上一批', 'info'); return }
+      S.aiBusy = true
+      let idx = 0
+      let ok = 0
+      let notes = {}
+      function step() {
+        if (idx >= items.length) {
+          S.aiBusy = false
+          S.aiNoteBatch = notes
+          paint()
+          toast('批量助记完成：' + ok + ' / ' + items.length + ' 条拿到内容', ok ? 'ok' : 'info', 2600)
+          return
+        }
+        let f = items[idx]
+        toast('正在想第 ' + (idx + 1) + ' / ' + items.length + ' 条：' + shortTitle(f.n, 10) + '…', 'info', 0)
+        aiMnemonic(ctx, f).then(function (o) {
+          if (o) { notes[f.id] = o; ok++ }
+          idx++
+          step()
+        }).catch(function () { idx++; step() })
+      }
+      step()
+    }
+
+    /* ---- 自建公式 ---- */
+    function openNewFormula(ctx, done) {
+      let draft = { s: S.subj === 'all' ? 'calc' : S.subj, c: '', n: '', t: '', p: '', w: '' }
+      try {
+        if (ctx.Modal && typeof ctx.Modal.open === 'function') {
+          ctx.Modal.open({
+            title: '自建公式',
+            body: '<div class="fv-form">'
+              + '<label>名称<b>*</b><input class="fv-input" id="fv-nf-n" maxlength="40" placeholder="如：柯西积分公式"></label>'
+              + '<label>科目<select class="fv-input" id="fv-nf-s">'
+              + SUBJ_ORDER.map(function (k) { return '<option value="' + k + '"' + (k === draft.s ? ' selected' : '') + '>' + subjectLabel(k) + '</option>' }).join('')
+              + '</select></label>'
+              + '<label>章节<input class="fv-input" id="fv-nf-c" maxlength="24" placeholder="如：复变函数（自建章节名）"></label>'
+              + '<label>公式（LaTeX）<b>*</b><textarea class="fv-input" id="fv-nf-t" rows="3" placeholder="$\\int_{-\\infty}^{\\infty} f$"></textarea></label>'
+              + '<label>记忆要点<input class="fv-input" id="fv-nf-p" maxlength="80"></label>'
+              + '<label>易错点<input class="fv-input" id="fv-nf-w" maxlength="80"></label>'
+              + '<div class="fv-quiet">LaTeX 用 $...$ 包起来；不会写就填纯文本，也能存能看（渲染会退化成等宽文本）。</div>'
+              + '</div>',
+            actions: [
+              { key: 'cancel', label: '取消' },
+              {
+                key: 'ok', label: '保存', primary: true, fn: function () {
+                  let n = String((document.getElementById('fv-nf-n')).value || '').trim()
+                  let t = String((document.getElementById('fv-nf-t')).value || '').trim()
+                  if (!n || !t) { toast('名称和公式不能空', 'error'); return false }
+                  let arr = loadCustom(ctx)
+                  arr.push({
+                    id: uid(), s: String((document.getElementById('fv-nf-s')).value || 'calc'),
+                    c: String((document.getElementById('fv-nf-c')).value || '').trim() || '自建',
+                    n: n.slice(0, 60), t: t.slice(0, 500),
+                    p: String((document.getElementById('fv-nf-p')).value || '').slice(0, 120),
+                    w: String((document.getElementById('fv-nf-w')).value || '').slice(0, 120)
+                  })
+                  saveCustom(ctx, arr)
+                  S.customCount = arr.length
+                  done()
+                  toast('已加入公式库（可立即自测）', 'ok')
+                }
+              }
+            ]
+          })
+        }
+      } catch (e) { toast('弹窗打开失败', 'error') }
     }
 
     /* ---- 数据进出 ---- */
@@ -1463,6 +1842,12 @@
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       if (e.key === 'Escape') {
         if (S.run) { S.run = null; stopTick(); paint() }
+        return
+      }
+      /* 自测中且已揭示：1/2/3 = 打分（**优先于视图切换**）。
+       * 否则揭示后按 1 会跳去军火库，手在键盘上时最顺的路径反而不通。 */
+      if (S.run && S.run.revealed && (e.key === '1' || e.key === '2' || e.key === '3')) {
+        grade(e.key === '1' ? 'miss' : (e.key === '2' ? 'slow' : 'fast'))
         return
       }
       if (e.key === '1') { setView('vault'); return }

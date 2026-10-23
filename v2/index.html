@@ -262,10 +262,20 @@
         return L.join('\n');
       }
 
+      function appLooksMounted() {
+        /* 兜底判据：入口挂上 #app 就算起来了。曾出现"应用已渲染、__BOOT_READY 没被调"，
+         * 15 秒后给正常用户盖上一张"启动失败"面板 —— 比不显示更糟。 */
+        try {
+          var host = document.getElementById('app');
+          return !!(host && host.children && host.children.length > 0);
+        } catch (e) { return false; }
+      }
+
       function showPanel(force) {
         // force=true（?boot=diag）时不因"已挂载"而退出：正常设备也能唤出面板做**对照基线**
         // （例如安卓正常、鸿蒙异常时，两张截图一比就知道差在内核哪一项）。
-        if ((G.booted && !force) || document.getElementById('boot-diag')) return;
+        if (!force && (G.booted || appLooksMounted())) { if (!G.booted) { try { ready(); } catch (e) { /* 忽略 */ } } return; }
+        if (document.getElementById('boot-diag')) return;
         G.forced = !!force;
         var d = document.createElement('div');
         d.id = 'boot-diag';
@@ -294,7 +304,14 @@
           + '</div>'
           + '<div style="color:#8b939c;margin-top:12px;line-height:1.7">若结论指向「内核过旧 / 不支持 ES 模块」：请升级系统 WebView，或直接用系统「浏览器」打开本页（内置浏览器正常即属此类）。把本页截图发我即可定位。</div>';
         d.appendChild(el2);
-        document.body.appendChild(d);
+        /* 【2026-10-23】原来直接 document.body.appendChild：若脚本早于 <body> 或 body 已被替换，
+         * 这里抛 "appendChild of null"，护栏自己先崩 —— 用户看到的是一屏白 + 控制台红字。
+         * 兜底挂到 documentElement 上，最差也能显示诊断。 */
+        try {
+          if (document.body) document.body.appendChild(d);
+          else if (document.documentElement) document.documentElement.appendChild(d);
+          else return;
+        } catch (eAppend) { return; }
         try {
           var box = document.getElementById('boot-diag-errs');
           var lines = [];
@@ -473,7 +490,7 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-BWFpQdKu.js"></script>
+  <script type="module" crossorigin src="./assets/index-BUvfWAG_.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-BjOm120o.js">
   <link rel="modulepreload" crossorigin href="./assets/vendor-D7y6Ep76.js">
   <link rel="modulepreload" crossorigin href="./assets/utils-C8LXaZ-r.js">
@@ -482,7 +499,7 @@
   <link rel="modulepreload" crossorigin href="./assets/chatFloat-CU_NjmpH.js">
   <link rel="modulepreload" crossorigin href="./assets/ai-DDmYkAiQ.js">
   <link rel="modulepreload" crossorigin href="./assets/engDrill-DmhxbZ1D.js">
-  <link rel="modulepreload" crossorigin href="./assets/engProfile-BQI7_DPD.js">
+  <link rel="modulepreload" crossorigin href="./assets/engProfile-DGLM-qNC.js">
   <link rel="modulepreload" crossorigin href="./assets/quizIntent-P943mtJO.js">
   <link rel="modulepreload" crossorigin href="./assets/playbook-BRpkmjY6.js">
   <link rel="modulepreload" crossorigin href="./assets/inkStore-RlnvUESn.js">
@@ -501,7 +518,7 @@
       <div class="boot-tip" id="boot-tip">正在唤醒作战系统…</div>
     </div>
   </div>
-  <div id="app"></div>
+  <div id="app"></div>
   <!-- 【轮19】nomodule 兜底：仅当内核**不支持** ES 模块时执行（模块脚本在本类环境里
        根本不会跑，必须由经典脚本把话说清楚，否则用户只看到一条爬不动的进度条）。 -->
   <script nomodule>
