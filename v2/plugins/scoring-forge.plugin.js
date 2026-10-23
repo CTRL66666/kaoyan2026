@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.3.1'
+  let VERSION = '1.4.0'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -219,6 +219,75 @@
     out.sort(function (a, b) { return b.rate - a.rate || b.missed - a.missed })
     return out
   }
+  /** 漏得最多的具体点（Top N）。抽成纯函数是因为"漏点 → 闪卡"也要用同一份结果 ——
+   *  两处各算一遍迟早会算出不一样的东西（页面显示 5 条、制卡用了 4 条这种）。 */
+  function topMissed(questions, attempts, limit) {
+    let missCount = {}
+    let byQ = {}
+    for (let i = 0; i < questions.length; i++) byQ[questions[i].id] = questions[i]
+    for (let i = 0; i < attempts.length; i++) {
+      let a = attempts[i]
+      let q = byQ[a.qid]
+      if (!q) continue
+      let hit = {}
+      for (let j = 0; j < a.hits.length; j++) hit[a.hits[j]] = 1
+      for (let j = 0; j < q.points.length; j++) {
+        let pt = q.points[j]
+        if (hit[pt.id]) continue
+        let key = pt.text
+        if (!missCount[key]) missCount[key] = { text: pt.text, kind: pt.kind, n: 0, qid: q.id, subject: q.subject }
+        missCount[key].n++
+      }
+    }
+    let top = []
+    for (let k in missCount) if (Object.prototype.hasOwnProperty.call(missCount, k)) top.push(missCount[k])
+    top.sort(function (a, b) { return b.n - a.n })
+    return top.slice(0, limit || 8)
+  }
+
+  /* ============================================================
+   * 漏点 → 闪卡（跨插件联动，2026-10-23 第 26 轮）
+   * ------------------------------------------------------------
+   * 为什么这件事值得做：漏点画像回答的是"我总漏哪一类点"，但用户看完只能自己想办法记 ——
+   * 而记忆宫殿已经有完整的 SM-2 排期。把"今天复盘出来的漏点"直接变成"明天的记忆任务"，
+   * 才是闭环。调用路径走插件总线：ctx.PluginBus.call('memo-deck', 'addCards', cards)。
+   * 为什么不在这里再调一次 AI：这一类点的判据本来就在 KINDS.tip 里，把用户**真实漏掉的原文**
+   * 附上就够用了；多一次调用只是多一个失败点，卡片内容并不会更好。
+   * ============================================================ */
+  function leakCardsFor(prof, top, kind) {
+    let kinds = []
+    if (kind && kind !== 'all') {
+      kinds = [kind]
+    } else {
+      for (let i = 0; i < prof.length; i++) {
+        if (prof[i].seen > 0 && prof[i].missed > 0) kinds.push(prof[i].k)
+      }
+    }
+    let out = []
+    for (let i = 0; i < kinds.length; i++) {
+      let k = kinds[i]
+      let meta = kindMeta(k)
+      let rows = []
+      for (let j = 0; j < top.length && rows.length < 3; j++) if (top[j].kind === k) rows.push(top[j])
+      if (!rows.length) continue          /* 没有具体漏点原文 → 不成卡（空泛的卡背没法学） */
+      let p = null
+      for (let j = 0; j < prof.length; j++) if (prof[j].k === k) p = prof[j]
+      out.push({
+        front: '「' + meta.t + '」这类采分点，我为什么总漏？',
+        back: meta.tip + '。'
+          + '\n\n我漏过的原话：\n' + rows.map(function (r, idx) { return (idx + 1) + '. ' + r.text }).join('\n')
+          + (p && p.seen ? '\n\n（这类点你漏了 ' + p.missed + ' / ' + p.seen + ' 次）' : '')
+          + '\n\n动笔前先默念这一类的判据。',
+        subject: subjectLabel(rows[0].subject),
+        tags: ['漏点', meta.t],
+        srcRef: 'sf:leak:' + k,
+        srcLabel: '采分点熔炉 · 漏点'
+      })
+    }
+    return out
+  }
+
+
   /** 科目命中率 */
   function subjectHitRate(questions, attempts) {
     let byQ = {}
@@ -1056,6 +1125,8 @@
       }
       if (act === 'import-mistakes') { importMistakes(ctx, reload); return }
       if (act === 'to-task') { makeTask(ctx, findQ(S.qs, id), S); return }
+      if (act === 'leak-cards') { makeLeakCards(ctx, S, 'all'); return }
+      if (act === 'leak-card') { makeLeakCards(ctx, S, btn.getAttribute('data-k') || 'all'); return }
       if (act === 'goto-mistakes') { try { ctx.api.go('mistakes') } catch (e) { toast(ctx, '跳转失败', 'warn') } return }
       if (act === 'lib-subj') { S.libSubj = btn.getAttribute('data-k') || 'all'; paint(); return }
       if (act === 'leak-kind') { S.leakKind = btn.getAttribute('data-k') || 'all'; paint(); return }
@@ -1547,18 +1618,28 @@
       out.push('<div class="sf-quiet">练过一次之后，这里会告诉你"哪一类采分点总漏"—— 那比分数有用得多。</div>')
     } else {
       out.push('<div class="sf-leaklist">')
+      let cardable = 0
       for (let i = 0; i < prof.length; i++) {
         let p = prof[i]
         if (!p.seen) continue
+        if (p.missed > 0) cardable++
         let col = p.rate >= 60 ? '#b91c1c' : p.rate >= 30 ? '#b45309' : '#0f766e'
         out.push('<div class="sf-leakrow">'
           + '<span class="sf-leakname" style="--c:' + kindColor(p.k) + '">' + esc(p.label) + '</span>'
           + '<i class="sf-leakbar"><b style="width:' + p.rate + '%;background:' + col + '"></b></i>'
           + '<em>' + p.rate + '%</em>'
           + '<span class="sf-leakn">漏 ' + p.missed + ' / ' + p.seen + '</span>'
+          /* 逐类"做卡"：只给真有漏点的类型（漏 0 次的做出来是空卡） */
+          + (p.missed > 0 ? '<button class="sf-btn ghost sm" data-act="leak-card" data-k="' + esc(p.k) + '" title="把这一类漏点做成闪卡">' + icon(ctx, 'thought') + '做卡</button>' : '')
           + '</div>')
       }
       out.push('</div>')
+      /* 一键全做：复盘结论 → 明天的记忆任务（跨插件写入记忆宫殿） */
+      if (cardable) {
+        out.push('<div class="sf-acts"><button class="sf-btn primary" data-act="leak-cards">'
+          + icon(ctx, 'thought') + '把 ' + cardable + ' 类漏点做成闪卡</button>'
+          + '<span class="sf-hint">生成到「记忆宫殿」，按 SM-2 排期复习 —— 复盘结论直接变成明天的记忆任务。重复点不会重复建卡。</span></div>')
+      }
       let worst = null
       for (let i = 0; i < prof.length; i++) if (prof[i].seen >= 2 && prof[i].rate >= 40) { worst = prof[i]; break }
       if (worst) {
@@ -1584,28 +1665,8 @@
     }
     out.push('</section>')
 
-    /* 具体漏得最多的点 */
-    let missCount = {}
-    let byQ = {}
-    for (let i = 0; i < S.qs.length; i++) byQ[S.qs[i].id] = S.qs[i]
-    for (let i = 0; i < S.as.length; i++) {
-      let a = S.as[i]
-      let q = byQ[a.qid]
-      if (!q) continue
-      let hit = {}
-      for (let j = 0; j < a.hits.length; j++) hit[a.hits[j]] = 1
-      for (let j = 0; j < q.points.length; j++) {
-        let pt = q.points[j]
-        if (hit[pt.id]) continue
-        let key = pt.text
-        if (!missCount[key]) missCount[key] = { text: pt.text, kind: pt.kind, n: 0, qid: q.id, subject: q.subject }
-        missCount[key].n++
-      }
-    }
-    let top = []
-    for (let k in missCount) if (Object.prototype.hasOwnProperty.call(missCount, k)) top.push(missCount[k])
-    top.sort(function (a, b) { return b.n - a.n })
-    top = top.slice(0, 8)
+    /* 具体漏得最多的点（Top 8） */
+    let top = topMissed(S.qs, S.as, 8)
     out.push('<section class="sf-card"><div class="sf-card-h"><b>漏得最多的点</b><em>Top ' + top.length + '</em></div>')
     if (!top.length) out.push('<div class="sf-quiet">没有漏点记录 —— 要么没练过，要么全踩到了。</div>')
     else {
@@ -1771,6 +1832,40 @@
         toast(ctx, '导入了 ' + added + ' 道（跳过 ' + (cands.length - added) + ' 道重复）', 'success', 2600)
       })
   }
+  /* 漏点 → 记忆宫殿（跨插件制卡）。三种失败路径都给"人话"，不假装成功：
+   *  · 没装/没启用记忆宫殿 → 告诉用户去哪装
+   *  · 没有可成卡的漏点     → 说清"先练一次"（空泛的卡背没法学）
+   *  · 牌库满 / 全重复      → 如实回报，并说明是跳过还是塞不进 */
+  function makeLeakCards(ctx, S, kind) {
+    let prof = leakProfile(S.qs, S.as)
+    let top = topMissed(S.qs, S.as, 8)
+    let cards = leakCardsFor(prof, top, kind)
+    if (!cards.length) {
+      toast(ctx, kind === 'all' ? '还没有漏点可以成卡 —— 先练一次' : '这一类还没漏过，做卡没意义', 'warn', 2600)
+      return
+    }
+    let r = null
+    try {
+      r = (ctx.PluginBus && typeof ctx.PluginBus.call === 'function')
+        ? ctx.PluginBus.call('memo-deck', 'addCards', cards)
+        : null
+    } catch (e) {
+      toast(ctx, '记忆宫殿没装或未启用 —— 去插件中心装「记忆宫殿 · 闪卡」再回来点', 'warn', 3800)
+      return
+    }
+    if (!r) { toast(ctx, '制卡失败（记忆宫殿没有回应）', 'warn', 2600); return }
+    if (r.added) {
+      toast(ctx, '已加入 ' + r.added + ' 张闪卡' + (r.dup ? '（' + r.dup + ' 张已有，跳过）' : '') + ' —— 去「记忆宫殿」复习', 'ok', 3400)
+      ctx.log('漏点制卡：+' + r.added + (r.dup ? ' 重复 ' + r.dup : '') + (r.full ? ' 牌库已满' : ''))
+    } else if (r.dup) {
+      toast(ctx, '这些漏点已经做成闪卡了（' + r.dup + ' 张，跳过）', 'info', 2800)
+    } else if (r.full) {
+      toast(ctx, '记忆宫殿的牌库满了（上限 4000 张）—— 先清理再导入', 'warn', 3400)
+    } else {
+      toast(ctx, '没能成卡：卡片内容为空', 'warn', 2600)
+    }
+  }
+
   function makeTask(ctx, q, S) {
     if (!q) { toast(ctx, '找不到这道题', 'warn'); return }
     let miss = []
@@ -1953,6 +2048,8 @@
     '.sf-quiet{font-size:12.5px;line-height:1.9;color:var(--sf-sub)}',
     '.sf-more{font-size:12px;color:var(--sf-sub);margin-top:9px;padding-top:9px;border-top:1px dashed var(--sf-line)}',
     '.sf-acts{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}',
+    /* 动作条旁的说明文字：12px 弱化色，和按钮同一行但不抢视觉 */
+    '.sf-hint{font-size:12px;color:var(--sf-sub);line-height:1.7;max-width:52ch}',
     '.sf-hint{font-size:11.5px;color:var(--sf-sub);letter-spacing:.02em}',
     '.sf-goalline{display:flex;align-items:baseline;gap:12px;margin:0 0 14px;font-size:12px;color:var(--sf-sub)}',
     '.sf-goalline>b{font-family:Georgia,serif;font-size:14px;color:var(--sf-ink);font-weight:700}',
@@ -2270,6 +2367,8 @@
       scoreAttempt: scoreAttempt,
       verdictOf: verdictOf,
       leakProfile: leakProfile,
+      topMissed: topMissed,
+      leakCardsFor: leakCardsFor,
       subjectHitRate: subjectHitRate,
       streakOf: streakOf,
       guessKind: guessKind,

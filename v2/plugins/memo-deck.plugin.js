@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.0'
+  let VERSION = '1.5.0'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -612,6 +612,8 @@
     '.md-fmeta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--md-sub)}',
     '.md-tag{display:inline-block;font-size:10.5px;border-radius:999px;padding:1px 8px;background:var(--md-soft);'
       + 'color:var(--md-ink2);border:1px solid var(--md-line)}',
+    /* 来源标记：和 #标签 区分开（虚线边 + 强调色文字），一眼看出"这张卡是别的插件塞进来的" */
+    '.md-tag.md-from{background:transparent;border-style:dashed;color:var(--md-acc-text);font-weight:700}',
     '.md-due{font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid transparent}',
     '.md-due.new{background:color-mix(in oklab,var(--md-acc) 10%,transparent);color:var(--md-acc-text);border-color:color-mix(in oklab,var(--md-acc) 28%,transparent)}',
     '.md-due.now{background:color-mix(in oklab,var(--md-warn) 12%,transparent);color:var(--md-warn);border-color:color-mix(in oklab,var(--md-warn) 30%,transparent)}',
@@ -1047,6 +1049,9 @@
   /* manage=true 时卡角加勾选框（批量操作模式）；勾选状态由 picked 传入 */
   function cardHtml(card, now, i, manage, picked) {
     let tags = card.tags.map(function (t) { return '<span class="md-tag">#' + esc(t) + '</span>' }).join('')
+    /* 【2026-10-23 第 26 轮】来源标记：跨插件塞进来的卡（漏点/题目）标出来源，
+     * 用户才知道"这叠卡是谁给我生成的"，也才敢按来源批量清理。手打/AI 卡没有 srcLabel。 */
+    let from = card.srcLabel ? '<span class="md-tag md-from" title="来自 ' + esc(card.srcLabel) + '">' + esc(card.srcLabel) + '</span>' : ''
     let facts = '<div class="md-facts">'
       + '<button class="md-iconbtn" data-act="edit" data-id="' + card.id + '" title="编辑">' + I('cpPencil') + '</button>'
       + '<button class="md-iconbtn" data-act="suspend" data-id="' + card.id + '" title="' + (card.suspended ? '恢复' : '暂停（不再排期）') + '">' + (card.suspended ? I('cpPlay') : I('pause')) + '</button>'
@@ -1057,7 +1062,7 @@
       : ''
     return '<div class="md-fcard' + (picked ? ' picked' : '') + '" data-act="flip" style="--i:' + Math.min(i || 0, 12) + '">'
       + '<div class="md-fcard-in">'
-      + '<div class="md-face"><div class="md-fmeta" style="margin-bottom:0">' + pick + dueBadge(card, now) + '<span>' + esc(card.subject) + '</span>' + tags + '</div>'
+      + '<div class="md-face"><div class="md-fmeta" style="margin-bottom:0">' + pick + dueBadge(card, now) + '<span>' + esc(card.subject) + '</span>' + from + tags + '</div>'
       + '<div class="md-ftext">' + esc(card.front) + '</div><div class="md-fmeta">' + facts + '</div></div>'
       + '<div class="md-face back"><div class="md-ftext">' + esc(card.back) + '</div>'
       + (card.hint ? '<div class="md-bighint" style="margin-top:auto">' + I('bulb') + esc(card.hint) + '</div>' : '')
@@ -2207,13 +2212,43 @@
        * 插件日志区（有条数上限）会被事件流挤满，真正该留的记录（「AI 制卡 12 张」「复习完成 30 张」）
        * 反而被冲掉、用户查不到。事件流是调试资产，但不该由每个插件无脑复读。 */
     },
-    /* 其它插件可调：ctx.call('memo-deck', 'dueCount') / 'deckSize' */
+    /* 其它插件可调：ctx.call('memo-deck', 'dueCount') / 'deckSize' / 'addCards'
+     * 【2026-10-23 第 26 轮】addCards 是**跨插件制卡入口**：任何插件（采分点熔炉的漏点、
+     * 试卷提取的题目、以后的错题/作文）都能把自己的产出塞进牌库，用户不必复制粘贴。
+     * 三条硬约定：
+     *   ① 幂等：带 srcRef 的卡按 srcRef 去重（同一批漏点点两次不会翻倍）；
+     *   ② 容量闸：DECK_MAX_CARDS 是云同步的护栏，满了就如实回报 full（不静默丢）；
+     *   ③ 只收"能答的卡"：front/back 任一为空直接计 bad，避免空卡混进复习队列。
+     * 返回值 {added, dup, bad, full} —— 调用方据此给用户一句准确的反馈。 */
     services: {
       dueCount: function (ctx) {
         let q = dueQueue(deckGet(ctx).filter(function (c) { return !c.suspended }), Date.now(), 9999, 9999)
         return { due: q.due.length, fresh: q.fresh.length }
       },
-      deckSize: function (ctx) { return deckGet(ctx).length }
+      deckSize: function (ctx) { return deckGet(ctx).length },
+      addCards: function (ctx, list) {
+        let deck = deckGet(ctx)
+        let have = {}
+        deck.forEach(function (c) { if (c.srcRef) have[c.srcRef] = 1 })
+        let added = 0, dup = 0, bad = 0, full = false
+        ;(Array.isArray(list) ? list : []).forEach(function (raw) {
+          let front = flat(raw && raw.front).slice(0, FRONT_MAX)
+          let back = flat(raw && raw.back).slice(0, BACK_MAX)
+          if (!front || !back) { bad++; return }
+          let ref = flat(raw && raw.srcRef)
+          if (ref && have[ref]) { dup++; return }
+          if (deck.length >= DECK_MAX_CARDS) { full = true; return }
+          let c = newCard(front, back, { subject: raw && raw.subject, tags: raw && raw.tags, hint: raw && raw.hint })
+          if (ref) { c.srcRef = ref; have[ref] = 1 }
+          c.srcLabel = flat(raw && raw.srcLabel).slice(0, 24)
+          deck.unshift(c); added++
+        })
+        if (added) {
+          deckSave(ctx, deck)
+          ctx.log('跨插件制卡：+' + added + ' 张' + (dup ? '（重复 ' + dup + '）' : '') + (full ? '（牌库已满）' : ''))
+        }
+        return { added: added, dup: dup, bad: bad, full: full }
+      }
     },
     /* 教练记忆注入：让 AI 知道用户有这套闪卡体系 */
     memory: '用户装有「记忆宫殿 · 闪卡」插件（工具抽屉 → 记忆宫殿 · 闪卡，内部四页签：牌库/复习/统计/设置）。'
