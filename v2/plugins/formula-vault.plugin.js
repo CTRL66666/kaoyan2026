@@ -26,6 +26,10 @@
 
   let TOOL_ID = 'formula-vault'
   let VERSION = '1.0'
+  /* AI 场景 ctx：必须与 src/core/ai.ts 的 AI_REGISTRY 条目同名 —— 缺条目时
+   * 思考模式/maxTokens/提示词增强会**静默失效**（不报错，只按默认跑），
+   * Token 用量也归不进配置中心。这条 ctx 已在注册表登记（2026-10-24）。 */
+  let AI_CTX_MNEMONIC = 'plugin.vault.mnemonic'
 
   /* ══════════════ 0. 设计决策（改这个文件前先读这里） ══════════════
    *
@@ -95,9 +99,20 @@
   let katexLoad = null
   let katexRepaintHooks = []
 
+  /** 是否跑在 jsdom（vitest）里：那里**不会执行外部 script**，
+   *  注入 + 轮询纯属白等 —— 全量测试时每个用例等满 3s，能把市场重放用例拖到 25s+（实测）。
+   *  真机 Chromium 的 UA 不含 jsdom，正常走加载。 */
+  function isHeadlessDom() {
+    try { return /jsdom/i.test(String((window.navigator && window.navigator.userAgent) || '')) } catch (e) { return false }
+  }
+
   function loadKatex() {
     if (window.katex && typeof window.katex.renderToString === 'function') return Promise.resolve(window.katex)
     if (katexLoad) return katexLoad
+    if (isHeadlessDom()) {
+      /* 直接失败退纯文本兜底，不占任何等待时间 */
+      return Promise.reject(new Error('jsdom 不执行外部脚本，跳过 KaTeX 加载'))
+    }
     katexLoad = new Promise(function (resolve, reject) {
       let done = false
       function finish(ok) {
@@ -523,7 +538,7 @@
       + '不要解释、不要多余字段；没有把握就把对应字段留空字符串。'
     let usr = '公式名：' + f.n + '\n科目：' + subjectLabel(f.s) + '\n公式：' + f.t
       + '\n已有记忆要点：' + (f.p || '') + '\n易错点：' + (f.w || '')
-    return ctx.ai.json(sys, usr, { temperature: 0.4 }).then(function (o) {
+    return ctx.ai.json(sys, usr, { temperature: 0.4, ctx: AI_CTX_MNEMONIC }).then(function (o) {
       if (!o || typeof o !== 'object') return null
       let m = String(o.mnemonic || '').slice(0, 120)
       let d = String(o.derivation || '').slice(0, 160)
@@ -824,12 +839,14 @@
   ].join('')
 
   /* ══════════════ 7. 视图 ══════════════ */
+  /* ic = 本插件自绘的 dock 图标键（见 dockIcon 的路径表），与宿主 U.icon 的语义键
+   * 是两套东西 —— 所以字段名故意不叫 icon（feynman 里也叫 ic，保持一致）。 */
   const VIEWS = [
-    { k: 'vault', n: '军火库', icon: 'vault' },
-    { k: 'drill', n: '自测', icon: 'drill' },
-    { k: 'ammo', n: '弹药箱', icon: 'ammo' },
-    { k: 'stats', n: '统计', icon: 'stats' },
-    { k: 'setup', n: '设置', icon: 'setup' }
+    { k: 'vault', n: '军火库', ic: 'vault' },
+    { k: 'drill', n: '自测', ic: 'drill' },
+    { k: 'ammo', n: '弹药箱', ic: 'ammo' },
+    { k: 'stats', n: '统计', ic: 'stats' },
+    { k: 'setup', n: '设置', ic: 'setup' }
   ]
 
   /* ---- 7.1 军火库：分科 + 章节手风琴 ---- */
@@ -1098,7 +1115,9 @@
       + '<button class="fv-btn sm" data-act="ai-batch">批量 AI 助记</button>' : '')
       + '</div>')
     if (!rows.length) {
-      out.push('<div class="fv-empty"><div class="fv-empty-ic">' + U_icon('ammo') + '</div>'
+      /* 图标键必须在 SPEC 里：'ammo' 是 dockIcon 自绘表的键，U_icon 认不到（会退化成通用圆圈）。
+       * 弹药箱语义 = 收藏/储备 → archive。 */
+      out.push('<div class="fv-empty"><div class="fv-empty-ic">' + U_icon('archive') + '</div>'
         + '<b>弹药箱是空的</b><span>自评「没想起」或「想一下」的公式会自动进这里；也可以在任何公式卡上点「收藏」手动加。</span></div>')
     } else {
       out.push('<div class="fv-plist">')
@@ -1534,7 +1553,7 @@
         + '<span class="fv-dock-ind" data-fv="ind"></span>'
         + VIEWS.map(function (v) {
           return '<button class="fv-dock-item" data-view="' + v.k + '" title="' + v.n + '">'
-            + dockIcon(v.icon) + '<em>' + v.n + '</em>'
+            + dockIcon(v.ic) + '<em>' + v.n + '</em>'
             + (v.k === 'drill' ? '<span class="fv-dot" data-fv="dot"></span>' : '')
             + '</button>'
         }).join('')
