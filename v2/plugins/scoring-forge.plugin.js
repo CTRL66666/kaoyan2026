@@ -1316,7 +1316,7 @@
       out.push('<textarea class="sf-ta" data-sf="answer" rows="10" placeholder="按点写：先列骨架（①②③），再每点补一句术语或材料。Ctrl/⌘+Enter 提交判定。">' + esc(run.answer || '') + '</textarea>')
       out.push('<div class="sf-acts"><button class="sf-btn primary" data-act="submit">提交判定</button>'
         + '<button class="sf-btn ghost" data-act="abort">放弃这次</button>'
-        + '<span class="sf-hint">' + (aiOk(ctx) ? 'AI 先判，你再复核' : '未配置 AI：提交后逐点自己勾') + '</span></div></section>')
+        + '<span class="sf-hint-sm">' + (aiOk(ctx) ? 'AI 先判，你再复核' : '未配置 AI：提交后逐点自己勾') + '</span></div></section>')
       return out.join('')
     }
 
@@ -2050,7 +2050,7 @@
     '.sf-acts{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}',
     /* 动作条旁的说明文字：12px 弱化色，和按钮同一行但不抢视觉 */
     '.sf-hint{font-size:12px;color:var(--sf-sub);line-height:1.7;max-width:52ch}',
-    '.sf-hint{font-size:11.5px;color:var(--sf-sub);letter-spacing:.02em}',
+    '.sf-hint-sm{font-size:11.5px;color:var(--sf-sub);letter-spacing:.02em}',
     '.sf-goalline{display:flex;align-items:baseline;gap:12px;margin:0 0 14px;font-size:12px;color:var(--sf-sub)}',
     '.sf-goalline>b{font-family:Georgia,serif;font-size:14px;color:var(--sf-ink);font-weight:700}',
     '.sf-goalline.ok>b{color:#0f766e}',

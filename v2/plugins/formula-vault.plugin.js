@@ -6,8 +6,10 @@
  * 这个插件补上：分科分章浏览（LaTeX 真渲染）+ 遮罩自测（先回忆后揭示）
  * + 站点 SRS 排复测 + 掌握度写回热力图 + 教练可查「哪些公式总想不起来」。
  *
- * 背靠的站点接口（不另造轮子）：
- *   · ctx.Tex.render          —— 公式渲染。**不自己写渲染器**（自写必错花括号/转义）
+ * 背靠的站点资产（不另造轮子）：
+ *   · plugins/vendor/formula-vault —— KaTeX 0.16.47 全套（js/css/woff2，插件专属目录），
+ *     与站内 docRender 同一版本；运行时按需注入，**不走站内自研 tex 渲染器**。
+ *     （用户 2026-10-23 明确要求：公式一律走 KaTeX。）
  *   · ctx.Spaced.grade/dueKey —— 复测排期，插件只存 box
  *   · ctx.Mastery.recordAnswer—— 自测结果写站内掌握度（topicId = 公式 id）
  *   · ctx.queries             —— 教练可查「总想不起来的公式」
@@ -35,8 +37,9 @@
    *    自己再写一套 = 两套遗忘曲线、两处 bug。插件只存 box/due，Spaced 挂了你才
    *    退化到本地间隔盒（见 scheduleNext 的 try/catch）。
    *
-   * ③ 为什么 LaTeX 走 ctx.Tex：自研渲染器处理过 AI 输出的各种破损形态
-   *    （管道符、漏花括号、转义），自己写必错。tex() 里带宿主缺失时的纯文本兜底。
+   * ③ 为什么 LaTeX 走 KaTeX（用户 2026-10-23 指定）：站内 docRender 用的就是
+   *    KaTeX 0.16.47，公式产物与站点其它地方同源；资产放 public/vendor/katex 按需注入，
+   *    加载失败有纯文本兜底（页面照常能用）。
    *
    * ④ 为什么"弹药箱"是独立概念而不只是筛选：它对应一个具体心理动作 ——
    *    "老漏的那几条"。按 miss/slow 计数自动进箱，比"按掌握度<X 筛选"更贴合直觉。
@@ -73,15 +76,107 @@
   }
   function clamp(v, a, b) { v = Number(v); if (!isFinite(v)) v = a; return Math.max(a, Math.min(b, v)) }
   function uid() { return 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
-  /** 安全渲染 LaTeX：宿主 Tex 在就用（背靠接口），不在就转义纯文本展示，绝不让页面炸 */
-  function tex(ctx, s, display) {
-    let src = String(s == null ? '' : s)
-    try {
-      if (ctx && ctx.Tex && typeof ctx.Tex.render === 'function') {
-        return display ? ctx.Tex.render(src) : ctx.Tex.renderInline(src)
+  /* ---- KaTeX 渲染层 ----
+   * 用户要求不走站内自研 tex 渲染器，一律用 KaTeX。资产在 public/vendor/katex
+   * （与站内 docRender 同版本 0.16.47），运行时按需注入：
+   *   · 只注入一次（katexLoad 缓存 Promise，重复调用返回同一个）
+   *   · 站点里已有 katex（别人注入过）就直接复用，不重复下 272KB
+   *   · 加载失败 → 纯文本兜底，页面照常能用（绝不白屏）
+   * 渲染参数：throwOnError:false（破损 LaTeX 不炸页面，由 CSS 把错误色压成中性）、
+   *           strict:false（宽容未知命令）、trust:false（禁 \href 等，防 XSS）。
+   *
+   * **用 renderToString 不是 render**：render(tex, baseNode, options) 的第二个参数是
+   * **目标 DOM 节点**，把 options 传进去会得到 "t.appendChild is not a function"
+   * （真机抓到：公式整排静默变纯文本兜底，页面不报错）。 */
+  /* KaTeX 资产在**插件自己的目录**下（public/plugins/vendor/formula-vault/）：
+   * 卸载这个插件 = 删掉它自己的 vendor 目录，不会在站点根留死文件。
+   * 不用 CDN：国内访问 jsdelivr 不稳，公式是核心功能不能赌网络。 */
+  const KATEX_BASE = 'plugins/vendor/formula-vault'
+  let katexLoad = null
+  let katexRepaintHooks = []
+
+  function loadKatex() {
+    if (window.katex && typeof window.katex.renderToString === 'function') return Promise.resolve(window.katex)
+    if (katexLoad) return katexLoad
+    katexLoad = new Promise(function (resolve, reject) {
+      let done = false
+      function finish(ok) {
+        if (done) return
+        done = true
+        if (ok && window.katex && typeof window.katex.renderToString === 'function') resolve(window.katex)
+        else { katexLoad = null; reject(new Error('katex load failed')) }
       }
-    } catch (e) { /* 宿主字段变了就退化成纯文本 */ }
-    return '<code class="fv-fallback">' + esc(src) + '</code>'
+      /* CSS 只注入一次（link[data-fv-katex] 做幂等标记） */
+      if (!document.querySelector('link[data-fv-katex]')) {
+        let link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = KATEX_BASE + '/katex.min.css'
+        link.setAttribute('data-fv-katex', '1')
+        document.head.appendChild(link)
+      }
+      if (document.querySelector('script[data-fv-katex]')) {
+        /* script 在（可能是别人刚注入、还没执行完）→ 轮询等 window.katex。
+         * 上限 3s：jsdom/无脚本执行环境里 script 永远不 onload，
+         * 等满 8s 会让批量重放测试白等 8s×N（真机抓到的性能坑）。 */
+        let t0 = Date.now()
+        let poll = setInterval(function () {
+          if (window.katex && typeof window.katex.renderToString === 'function') { clearInterval(poll); finish(true) }
+          else if (Date.now() - t0 > 3000) { clearInterval(poll); finish(false) }
+        }, 120)
+        return
+      }
+      let sc = document.createElement('script')
+      sc.src = KATEX_BASE + '/katex.min.js'
+      sc.async = true
+      sc.setAttribute('data-fv-katex', '1')
+      sc.onload = function () { finish(true) }
+      sc.onerror = function () { finish(false) }
+      document.head.appendChild(sc)
+    }).catch(function (e) {
+      /* 失败不缓存：下次 paint 还会再试一次（可能是网络抖动） */
+      katexLoad = null
+      throw e
+    })
+    return katexLoad
+  }
+
+  /** 剥掉 $ / $$ 定界符（KaTeX 只吃裸 TeX，见下方注释） */
+  function stripDelims(s) {
+    let t = String(s == null ? '' : s).trim()
+    if (t.length > 4 && t.slice(0, 2) === '$$' && t.slice(-2) === '$$') return t.slice(2, -2)
+    if (t.length > 2 && t[0] === '$' && t[t.length - 1] === '$') return t.slice(1, -1)
+    return t
+  }
+  /** 渲染一段 LaTeX。已加载 → 同步出 HTML；未加载 → 纯文本兜底 + 后台加载完重绘
+   *
+   * **定界符必须自己剥**：KaTeX.render 的输入是裸 TeX，传 `$x$` 会报
+   * "Can't use function '$' in math mode"（真机抓到：公式整排变成纯文本兜底，
+   * 页面不报错、只是"公式没渲染"）。站内自研 tex.js 会自己吃定界符，换引擎就得自己管。 */
+  function katexTex(s, display) {
+    let src = String(s == null ? '' : s).trim()
+    let wantDisplay = !!display
+    if (src.length > 4 && src.slice(0, 2) === '$$' && src.slice(-2) === '$$') { src = src.slice(2, -2); wantDisplay = true }
+    else if (src.length > 2 && src[0] === '$' && src[src.length - 1] === '$') { src = src.slice(1, -1) }
+    if (window.katex && typeof window.katex.renderToString === 'function') {
+      try {
+        return '<span class="fv-katex">' + window.katex.renderToString(src, {
+          displayMode: wantDisplay,
+          throwOnError: false,
+          strict: false,
+          trust: false
+        }) + '</span>'
+      } catch (e) { /* 极端情况也别炸 */ }
+    }
+    if (katexLoad) {
+      katexLoad.then(function () {
+        for (let i = 0; i < katexRepaintHooks.length; i++) katexRepaintHooks[i]()
+      }).catch(function () { /* 兜底文本已经显示了 */ })
+    } else {
+      loadKatex().then(function () {
+        for (let i = 0; i < katexRepaintHooks.length; i++) katexRepaintHooks[i]()
+      }).catch(function () { /* 忽略：保持纯文本 */ })
+    }
+    return '<code class="fv-fallback">' + esc(String(s == null ? '' : s)) + '</code>'
   }
 
   /* ══════════════ 2. 科目与章节 ══════════════ */
@@ -279,7 +374,7 @@
     let side = function (f) {
       return '<div class="fv-cside"><span class="fv-fsubj" style="--c:' + subjectColor(f.s) + '">' + esc((SUBJ[f.s] && SUBJ[f.s].short) || f.s) + '</span>'
         + '<b>' + esc(f.n) + '</b>'
-        + '<div class="fv-ft">' + tex(ctx, f.t, true) + '</div></div>'
+        + '<div class="fv-ft">' + katexTex(f.t, true) + '</div></div>'
     }
     return '<div class="fv-crow"><span class="fv-vs" aria-hidden="true">VS</span>'
       + side(fa) + side(fb)
@@ -535,6 +630,11 @@
     '.fv-fstars i.on{background:var(--fv-acc)}',
     '@keyframes fvReveal{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}',
     '.fv-fallback{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--fv-sub)}',
+    /* KaTeX 容器：破损 LaTeX 的错误色压成中性（throwOnError:false 时它会渲染红字），
+     * 行间公式允许横向滚动（长公式在小屏上不该把卡片撑破） */
+    '.fv-katex{display:inline-block;max-width:100%}',
+    '.fv-katex .katex-error{color:var(--fv-sub)}',
+    '.fv-katex .katex-display{margin:0;overflow-x:auto;overflow-y:hidden;padding:1px 0}',
     '.fv-fp,.fv-fw{font-size:12px;line-height:1.8;color:var(--fv-sub);display:flex;gap:8px}',
     '.fv-fp i,.fv-fw i{font-style:normal;flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.08em;padding-top:2px}',
     '.fv-fp i{color:var(--fv-acc)}',
@@ -807,9 +907,9 @@
       + '<b>' + esc(f.n) + '</b>'
       + '<em class="fv-fstars" title="掌握度 ' + (r ? r.mastery : 0) + '">' + stars + '</em>'
       + '</div>'
-      + '<div class="fv-ft">' + tex(ctx, f.t, true) + '</div>'
-      + (f.p ? '<div class="fv-fp"><i>记</i>' + esc(f.p) + '</div>' : '')
-      + (f.w ? '<div class="fv-fw"><i>坑</i>' + esc(f.w) + '</div>' : '')
+      + '<div class="fv-ft">' + katexTex(f.t, true) + '</div>'
+      + (f.p ? '<div class="fv-fp"><i>记</i>' + katexTex(f.p) + '</div>' : '')
+      + (f.w ? '<div class="fv-fw"><i>坑</i>' + katexTex(f.w) + '</div>' : '')
       + '<div class="fv-fcard-f">'
       + '<span class="fv-fnext">' + (r && r.nextAt ? (overdue(S.today, r.nextAt) ? '<b class="hot">已到期</b>' : fmtDate(r.nextAt) + ' 复测') : '未测') + '</span>'
       + '<button class="fv-btn sm" data-act="drill-one" data-id="' + esc(f.id) + '">自测这条</button>'
@@ -886,9 +986,9 @@
       if (run.draft) {
         out.push('<div class="fv-draftshow"><b>你刚才的草稿</b><p>' + esc(run.draft) + '</p></div>')
       }
-      out.push('<div class="fv-ft big">' + tex(ctx, f.t, true) + '</div>')
-      if (f.p) out.push('<div class="fv-fp"><i>记</i>' + esc(f.p) + '</div>')
-      if (f.w) out.push('<div class="fv-fw"><i>坑</i>' + esc(f.w) + '</div>')
+      out.push('<div class="fv-ft big">' + katexTex(f.t, true) + '</div>')
+      if (f.p) out.push('<div class="fv-fp"><i>记</i>' + katexTex(f.p) + '</div>')
+      if (f.w) out.push('<div class="fv-fw"><i>坑</i>' + katexTex(f.w) + '</div>')
       out.push('<div class="fv-ask"><b>刚才复现得怎么样？</b>'
         + '<div class="fv-grades">'
         + '<button class="fv-grade g1" data-act="grade" data-k="miss"><b>没想起</b><em>完全没方向或记错</em></button>'
@@ -902,13 +1002,76 @@
   }
 
   /** 场景提示：从章节名 + 记忆点里取最有信息量的一句（不能泄露公式本体） */
+  /* ---- 章节专属的元认知提问 ----
+   * 为什么需要这张表：137 条公式里有 83 条的记忆要点/易错点含 LaTeX，
+   * 剥掉后剩下的文字不足以当提示，只能降级 —— 如果所有降级都给同一句通用提问，
+   * 用户连练三条就腻了（真机统计过：83/137 会走到降级分支）。
+   * 按章节给一句"这一章该问自己什么"，既不含公式本体，又能真的勾起回忆。 */
+  const CHAP_ASK = {
+    '极限与连续': '它处理的是哪种不定式？代换/夹逼/洛必达谁先上？',
+    '一元函数微分学': '它描述的是变化率、几何性质，还是高阶规律？',
+    '一元函数积分学': '它是算面积、找原函数，还是换一种算法？',
+    '中值定理与证明': '结论要的是"存在某点"还是"某个等式"？三个条件各是什么？',
+    '多元函数微分学': '它是一阶（方向导数/梯度）还是二阶（极值判别）？',
+    '重积分': '先看区域形状选坐标系，还是先定积分次序？',
+    '曲线曲面积分': '它是"带弧长/面积"（第一类）还是"带方向"（第二类）？',
+    '无穷级数': '判的是收敛还是求和？通项长什么样？',
+    '常微分方程': '先认型（可分离/线性/齐次/常系数），再套法',
+    '行列式': '它算的是一个数还是一堆数？哪条性质能化简？',
+    '矩阵': '它说的是运算律、可逆性还是秩的关系？',
+    '向量': '判的是线性相关性还是正交性？',
+    '方程组': '齐次还是非齐次？解的结构怎么拼？',
+    '特征值': '要的是特征值本身、特征向量还是对角化？',
+    '二次型': '标准形怎么化？正定怎么判？',
+    '随机事件': '求的是概率、条件概率还是独立性判断？',
+    '一维分布': '先认分布类型，再套它的期望与方差',
+    '二维分布': '要的是边缘分布、条件分布还是独立性？',
+    '数字特征': '用的是期望的线性，还是方差/协方差公式？',
+    '大数定律': '样本均值趋于什么？前提条件有几个？',
+    '中心极限定理': '标准化之后极限分布是什么？分母是什么？',
+    '数理统计': '它是估计（矩/最大似然）还是检验/区间估计？'
+  }
+  /** 这条线索"剥掉公式后还读得通吗"。
+   *  判据：① 剩下可读字 >= 6 ② 丢掉的字符不超过留下的
+   *  —— 否则句子会断裂（"换成 、 时…""配 ，1∞ 那个配"），比不给线索更糟。 */
+  function fragReadable(raw, frag) {
+    let keep = (String(frag).match(/[\u4e00-\u9fa5A-Za-z0-9]/g) || []).length
+    if (keep < 6) return false
+    let dropped = String(raw == null ? '' : raw).length - String(frag).length
+    return dropped <= keep
+  }
+  /** 剥掉 LaTeX 后剩下的文字碎片（连占位符一起去掉，只留能读的部分） */
+  function hintFrag(s) {
+    return String(s == null ? '' : s)
+      .replace(/\$\$[^$]*\$\$/g, ' ')
+      .replace(/\$[^$]*\$/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^[，。、；：\s]+|[，。、；：\s]+$/g, '')
+      .trim()
+  }
+
+  /** 剥掉文本里的 LaTeX 段（$...$ / $$...$$）——用于"不能泄露公式本体"的场景 */
+  function stripTex(s) {
+    return String(s == null ? '' : s)
+      .replace(/\$\$[^$]*\$\$/g, '（公式）')
+      .replace(/\$[^$]*\$/g, '（公式）')
+  }
   function hintOf(f) {
-    /* 章节名始终给出（定位感）；易错/线索做裁剪。**绝不包含公式本体** ——
-     * 提示泄露了公式，这一题就等于白练（抄写不是回忆）。 */
+    /* 章节名始终给出（定位感）；易错/线索做裁剪。
+     * **绝不包含公式本体** —— 提示泄露了公式，这一题就等于白练（抄写不是回忆）。
+     * 种子库的记忆要点里偶有 LaTeX 片段（如"配 $\\frac{\\sin ax}{ax}$"），统一剥掉。
+     * 但剥完可能只剩一串「（公式）」占位符（信息量为零）→ 此时退化成**元认知提问**：
+     * 问适用条件与联用，不碰任何形式细节，同样不泄露，且真的能勾起回忆。 */
+    /* 逐条判定：剥掉公式后还读得通的才保留，读不通的整条丢掉
+     * （半截句子比没有线索更误导）。两条都不可用 → 降级到本章专属提问。 */
     let bits = ['章节：' + f.c]
-    if (f.w) bits.push('易错：' + shortTitle(f.w, 24))
-    if (f.p) bits.push('线索：' + shortTitle(f.p, 24))
-    return bits.join('　')
+    let w = shortTitle(hintFrag(f.w), 24)
+    let p = shortTitle(hintFrag(f.p), 24)
+    if (w && fragReadable(f.w, w)) bits.push('易错：' + w)
+    if (p && fragReadable(f.p, p)) bits.push('线索：' + p)
+    if (bits.length > 1) return bits.join('　')
+    let ask = CHAP_ASK[f.c] || '它的适用条件是什么？常和哪条公式联用？'
+    return '章节：' + f.c + '　先问自己：' + ask
   }
 
   /* ---- 7.3 弹药箱（不熟的公式） ---- */
@@ -1053,7 +1216,7 @@
         let f = findF(S.all, l.fid)
         let col = masteryColor(scoreOf(l.k))
         out.push('<div class="fv-thin-row">'
-          + '<span class="fv-thin-n" style="color:' + col + '">' + (l.k === 'fast' ? '✓' : (l.k === 'slow' ? '~' : '✗')) + '</span>'
+          + '<span class="fv-thin-n" style="color:' + col + '">' + gradeGlyph(l.k) + '</span>'
           + '<div><b>' + esc(f ? f.n : '（已删除）') + '</b>'
           + '<span>' + esc(f ? f.c : '') + ' · ' + fmtDate(dkey(l.at)) + ' · ' + fmtDur(l.ms) + '</span></div>'
           + '<em class="fv-thinn">' + l.score + ' 分</em>'
@@ -1084,7 +1247,8 @@
     out.push('<section class="fv-card"><div class="fv-card-h"><b>AI 体检</b><em>' + (aiOk(ctx) ? '已就绪' : '未配置') + '</em></div>')
     out.push('<div class="fv-health">'
       + '<span class="fv-hcell ' + (aiOk(ctx) ? 'ok' : 'no') + '"><i></i>' + (aiOk(ctx) ? 'AI 可用（助记/补写都能用）' : 'AI 未配置 —— 手动模式：可浏览、可自测，AI 助记不可用') + '</span>'
-      + '<span class="fv-hcell ' + (ctx.Tex ? 'ok' : 'no') + '"><i></i>' + (ctx.Tex ? '公式渲染走站内 tex.js' : 'tex.js 不可用（纯文本兜底）') + '</span>'
+      + '<span class="fv-hcell ' + (window.katex ? 'ok' : 'no') + '"><i></i>'
+      + (window.katex ? '公式渲染走 KaTeX 0.16（本地资产）' : 'KaTeX 未就绪（先显示纯文本，就绪后自动重绘）') + '</span>'
       + '<span class="fv-hcell ' + (ctx.Spaced ? 'ok' : 'no') + '"><i></i>' + (ctx.Spaced ? '复测排期走站内 SRS' : 'SRS 不可用（本地简化排期）') + '</span>'
       + '</div></section>')
 
@@ -1154,6 +1318,11 @@
     let out = []
     for (let i = 0; i < 5; i++) out.push('<i' + (i < n ? ' class="on"' : '') + '></i>')
     return out.join('')
+  }
+  /** 三档的线性图标（不用 ✓/~/✗ 字符：字形随系统字体，Windows 上可能变豆腐块） */
+  function gradeGlyph(k) {
+    let p = k === 'fast' ? 'M3 12l5 5L21 6' : (k === 'slow' ? 'M4 12c2-3 4 3 6 0s4 3 6 0 4 3 4 0' : 'M5 5l14 14M19 5L5 19')
+    return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + p + '"/></svg>'
   }
   function overdue(today, nextAt) {
     return !!(nextAt && nextAt < today)
@@ -1240,13 +1409,15 @@
   function siteMastery(ctx, f, score) {
     try {
       if (!ctx.Mastery || typeof ctx.Mastery.recordAnswer !== 'function') return false
+      /* 字段照 RecordAnswerInput：topicId + score 必填，topicName 用于站内正确率历史与
+       * 错题描述（早期写成 topic → 站内这条记录没名字）。verdict/source 便于追溯来源。 */
       ctx.Mastery.recordAnswer({
         topicId: f.id,
+        topicName: f.n,
         subject: f.s,
-        chapter: f.c,
-        topic: f.n,
-        correct: score >= 80,
-        score: score
+        score: score,
+        verdict: score >= 80 ? 'pass' : 'weak',
+        source: TOOL_ID
       })
       return true
     } catch (e) { return false }
@@ -1255,13 +1426,17 @@
   function scheduleNext(ctx, rec, grade) {
     let box = rec.box
     try {
+      /* ⚠ Spaced.grade(card, **known: 布尔**, opts?) —— 第二参不是质量分。
+       * 早期版本传了 4/3/1 的数字：三个值都 truthy → 全被当"记住"，
+       * 自评"没想起"也升盒，间隔算法等于废掉（真机核对宿主签名才发现）。
+       * 站点只有升/降两态，所以：秒想升一盒、没想起回 1 盒、想一下原地按当前盒排期。 */
       if (ctx.Spaced && typeof ctx.Spaced.grade === 'function') {
-        let g = ctx.Spaced.grade({ box: box, ease: 2.5, reps: rec.fast + rec.slow + rec.miss }, grade)
-        if (g && (g.box != null || g.due)) {
-          return {
-            box: clamp(g.box == null ? box : g.box, 1, 6),
-            nextAt: String(g.due || g.dueKey || rec.nextAt || '')
-          }
+        if (grade >= 3) {
+          let g = ctx.Spaced.grade({ box: box }, true)
+          if (g && g.box != null) return { box: clamp(g.box, 1, 6), nextAt: String(g.due || '') }
+        } else {
+          let g = ctx.Spaced.grade({ box: box }, false)
+          if (g && g.box != null) return { box: clamp(g.box, 1, 6), nextAt: String(g.due || '') }
         }
       }
     } catch (e) { /* 宿主字段变了走本地 */ }
@@ -1314,7 +1489,7 @@
       '<div class="fv-aura" aria-hidden="true"><i></i><i></i></div>'
       + '<header class="fv-top" data-fv="top">'
       + '<div class="fv-brand">'
-      + '<span class="fv-mark" aria-hidden="true">' + U_icon('vault') + '</span>'
+      + '<span class="fv-mark" aria-hidden="true">' + U_icon('bookOpen') + '</span>'
       + '<div class="fv-brandtx"><span class="fv-kicker">KAOYAN · FORMULA VAULT</span>'
       + '<b>公式军火库<em>v' + VERSION + '</em></b></div>'
       + '</div>'
@@ -1422,6 +1597,25 @@
       bindSearch()
     }
     function reload() { S.recs = loadRecs(ctx); S.logs = loadLogs(ctx); paint() }
+
+    /** 焦点感知重绘：记录当前聚焦的 data-fv 输入框与光标，重绘后还原。
+     *  为什么需要：katex 是**异步**就绪的（网络 IO），就绪那一刻用户可能正在
+     *  搜索框里打字 —— 直接 paint 会重建 DOM、丢焦点，打一个字跳一次光标。
+     *  搜索框自己的 input 处理器也做同样的事，这里统一收口。 */
+    function paintKeepFocus() {
+      let ae = document.activeElement
+      let key = ae && ae.getAttribute ? ae.getAttribute('data-fv') : ''
+      let pos = 0
+      if (key) { try { pos = ae.selectionStart || 0 } catch (e) { /* 忽略 */ } }
+      paint()
+      if (key) {
+        let again = stage.querySelector('[data-fv="' + key + '"]')
+        if (again) {
+          again.focus()
+          try { again.setSelectionRange(pos, pos) } catch (e) { /* 忽略 */ }
+        }
+      }
+    }
 
     /* 搜索框：重绘后还原焦点与光标（否则打一个字就丢焦点） */
     function bindSearch() {
@@ -1710,13 +1904,18 @@
     }
 
     /* ---- 自建公式 ---- */
+    /** 读弹窗里的值（宿主渲染 DOM，可能缺字段/被改 — 一律容错，别假设元素一定在） */
+    function modalVal(id) {
+      let el = document.getElementById(id)
+      return String((el && el.value != null ? el.value : '') || '').trim()
+    }
     function openNewFormula(ctx, done) {
       let draft = { s: S.subj === 'all' ? 'calc' : S.subj, c: '', n: '', t: '', p: '', w: '' }
       try {
         if (ctx.Modal && typeof ctx.Modal.open === 'function') {
           ctx.Modal.open({
             title: '自建公式',
-            body: '<div class="fv-form">'
+            html: '<div class="fv-form">'
               + '<label>名称<b>*</b><input class="fv-input" id="fv-nf-n" maxlength="40" placeholder="如：柯西积分公式"></label>'
               + '<label>科目<select class="fv-input" id="fv-nf-s">'
               + SUBJ_ORDER.map(function (k) { return '<option value="' + k + '"' + (k === draft.s ? ' selected' : '') + '>' + subjectLabel(k) + '</option>' }).join('')
@@ -1728,24 +1927,25 @@
               + '<div class="fv-quiet">LaTeX 用 $...$ 包起来；不会写就填纯文本，也能存能看（渲染会退化成等宽文本）。</div>'
               + '</div>',
             actions: [
-              { key: 'cancel', label: '取消' },
+              { label: '取消' },
               {
-                key: 'ok', label: '保存', primary: true, fn: function () {
-                  let n = String((document.getElementById('fv-nf-n')).value || '').trim()
-                  let t = String((document.getElementById('fv-nf-t')).value || '').trim()
-                  if (!n || !t) { toast('名称和公式不能空', 'error'); return false }
+                label: '保存', kind: 'btn-primary', onClick: function (close) {
+                  let n = modalVal('fv-nf-n')
+                  let t = modalVal('fv-nf-t')
+                  if (!n || !t) { toast('名称和公式不能空', 'error'); return }
                   let arr = loadCustom(ctx)
                   arr.push({
-                    id: uid(), s: String((document.getElementById('fv-nf-s')).value || 'calc'),
-                    c: String((document.getElementById('fv-nf-c')).value || '').trim() || '自建',
+                    id: uid(), s: modalVal('fv-nf-s') || 'calc',
+                    c: modalVal('fv-nf-c') || '自建',
                     n: n.slice(0, 60), t: t.slice(0, 500),
-                    p: String((document.getElementById('fv-nf-p')).value || '').slice(0, 120),
-                    w: String((document.getElementById('fv-nf-w')).value || '').slice(0, 120)
+                    p: modalVal('fv-nf-p').slice(0, 120),
+                    w: modalVal('fv-nf-w').slice(0, 120)
                   })
                   saveCustom(ctx, arr)
                   S.customCount = arr.length
                   done()
                   toast('已加入公式库（可立即自测）', 'ok')
+                  close()
                 }
               }
             ]
@@ -1867,6 +2067,10 @@
     /* ---- 生命周期 ---- */
     buildDock()
     paint()
+    /* 首绘先给纯文本兜底；katex 就绪后重绘一次 → 首屏尽量是渲染后的公式。
+     * 用 paintKeepFocus：就绪那一刻用户可能正在搜索框打字，不能丢焦点。 */
+    katexRepaintHooks.push(paintKeepFocus)
+    loadKatex().then(function () { paintKeepFocus() }).catch(function () { /* 保持兜底 */ })
     window.addEventListener('scroll', onScroll, { passive: true })
     window.addEventListener('resize', moveInd)
     window.addEventListener('keydown', onKey)
@@ -1875,6 +2079,7 @@
 
     return function destroy() {
       stopTick()
+      katexRepaintHooks = katexRepaintHooks.filter(function (h) { return h !== paintKeepFocus })
       window.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', moveInd)
       window.removeEventListener('keydown', onKey)
@@ -1892,10 +2097,10 @@
     version: VERSION,
     author: 'kaoyan-v2',
     desc: '考研数学公式速查 + 遮罩自测：119 条核心公式（LaTeX 走站内渲染）→ 先回忆后揭示 → 三档自评 → 站内 SRS 排复测，掌握度写回热力图，教练可查「哪些公式总想不起来」。',
-    tools: [{ id: TOOL_ID, title: '公式军火库', icon: '🧭', mount: mountShell }],
+    tools: [{ id: TOOL_ID, title: '公式军火库', icon: 'bookOpen', mount: mountShell }],
     panels: [
       {
-        id: 'fv-today', title: '公式军火库 · 今日', icon: '🧭', width: 300, height: 250,
+        id: 'fv-today', title: '公式军火库 · 今日', icon: 'bookOpen', width: 300, height: 250,
         render: function (ctx) {
           let recs = loadRecs(ctx)
           let due = dueList(recs, todayKey())
@@ -1970,13 +2175,23 @@
     init: function (ctx) {
       try {
         let n = SEED_CALC.length + SEED_LINALG.length + SEED_PROB.length
-        ctx.log('公式军火库 v' + VERSION + ' 就绪（' + n + ' 条公式，渲染=' + (ctx.Tex ? '站内 tex.js' : '纯文本') + '）')
+        ctx.log('公式军火库 v' + VERSION + ' 就绪（' + n + ' 条公式，渲染=KaTeX' + (window.katex ? '' : '（加载中，先纯文本）') + '）')
         /* 到期提示一次（不打扰：只在真的有到期时） */
         if (ctx.config('notify') !== false) {
           let due = dueList(loadRecs(ctx), todayKey())
           if (due.length && ctx.notify) {
             try {
-              ctx.notify('有 ' + due.length + ' 条公式今天该复测', { title: '公式军火库', level: 'info' })
+              /* ⚠ ctx.notify 是**单参**接口（对象或纯标题串）——
+               * 早期版本写成 notify(msg, {title})，第二参会被静默丢弃，通知只剩一串正文。
+               * 顺便挂 onClick：点通知直接进工具页（唯一有提醒价值的动作）。 */
+              ctx.notify({
+                title: '公式军火库 · ' + due.length + ' 条待复测',
+                body: '打开工具页开练，或按 D 直接开始一轮',
+                level: 'info',
+                onClick: function () {
+                  try { if (ctx.api && ctx.api.goTool) ctx.api.goTool(TOOL_ID) } catch (e) { /* 忽略 */ }
+                }
+              })
             } catch (e) { /* 宿主字段变了就静默 */ }
           }
         }
@@ -1992,7 +2207,8 @@
       dueList: dueList, untestedList: untestedList, streakOf: streakOf,
       scheduleNext: scheduleNext, normRec: normRec, chaptersOf: chaptersOf,
       masteryStars: masteryStars, masteryColor: masteryColor, hintOf: hintOf,
-      barsSvg: barsSvg, lastNDays: lastNDays, U_icon: U_icon,
+      barsSvg: barsSvg, lastNDays: lastNDays, U_icon: U_icon, stripTex: stripTex,
+      katexTex: katexTex, loadKatex: loadKatex, KATEX_BASE: KATEX_BASE, stripDelims: stripDelims,
       TOOL_ID: TOOL_ID, CSS_LEN: CSS.length
     }
   }

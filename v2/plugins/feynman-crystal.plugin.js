@@ -2148,29 +2148,22 @@
     return ''
   }
 
+    /* ---------- 共享层：宿主 css 字段（硬上限 20000 字符）----------
+   * 只放"任何场景都要有"的规则：页眉 / dock / 卡片骨架 / 按钮 / 表单基础 / 列表 /
+   * 空态 / 侧边面板 / 夜间 / 响应式。晶体图、统计、设置、结束卡等**工具页专属**规则
+   * 放到下面的页面层（mount 时注入、destroy 移除），给共享层留出余量。 */
   let CSS = [
     '.fx-root{--fx-acc:#0f766e;--fx-acc2:#2563eb;--fx-on-acc:#fff;--fx-warn-ink:#b45309;--fx-ink:var(--text-primary,#1b2430);--fx-sub:var(--text-muted,#6b7788);--fx-line:var(--line,#e5e7eb);--fx-line2:color-mix(in srgb,var(--text-primary,#1b2430) 24%,transparent);--fx-bg:var(--surface,#fff);--fx-soft:var(--surface-muted,#f6f8fb);--fx-gut:var(--vp-x,16px);--fx-w:1180px;position:relative;color:var(--fx-ink);font:14px/1.65 "PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif}',
-    /* —— 夜间：主色底改站点同款鎏金，压在底上的字改墨色 ——
-     * 白天的青绿 #0f766e 是「晶体」的品牌色，但夜间两处同时翻车：
-     *   ① 当**字**用（页眉砖的 `color`、`.fx-btn.ghost.on` 等）压在 #121a2f 上只有 3.16:1；
-     *   ② `--fx-acc2` 写死的是**白天蓝** #2563eb，夜间主按钮还是那条白天的蓝紫渐变。
-     * 站点夜间的规矩是「主色 = --nk-acc 鎏金，压在鎏金上的字 = --nk-acc-ink 墨色」。 */
     'html[data-theme="night"] .fx-root{--fx-acc:var(--nk-acc,#f0b95a);--fx-acc2:#e2a43f;--fx-on-acc:var(--nk-acc-ink,#2a1c04);--fx-warn-ink:var(--warn,#e8ae3f)}',
-    /* 破坏性文字按钮：写死的 #b91c1c 在夜间深底上只有 2.89:1（读数实测），换成语义令牌 */
     'html[data-theme="night"] .fx-btn.danger,html[data-theme="night"] .fx-icobtn.danger{color:var(--danger,#ef6a63)}',
     '.fx-root *,.fx-root *::before,.fx-root *::after{box-sizing:border-box}',
     '.fx-root button{font-family:inherit;color:inherit}',
-    /* 【2026-10-23 第 26 轮】装饰底色出血到视口边（与 scoring-forge 同一条约定）：
-     * `inset:0` 会把模糊色斑与第一条竖网格线裁在**内容盒**边界上，导航栏与内容之间
-     * 露出站点页面底色 = 一条硬接缝。取负的 `--vp-*` 让底色盖住内边距带，内容位置不动。 */
     '.fx-aura{position:absolute;inset:calc(var(--vp-t,16px) * -1) calc(var(--vp-x,16px) * -1) calc(var(--vp-b,24px) * -1);z-index:0;pointer-events:none;overflow:hidden;background-image:repeating-linear-gradient(90deg,color-mix(in srgb,var(--fx-ink) 4%,transparent) 0 1px,transparent 1px 96px);mask-image:linear-gradient(180deg,#000,transparent 72%);-webkit-mask-image:linear-gradient(180deg,#000,transparent 72%)}',
     '.fx-aura i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.28}',
     '.fx-aura i:nth-child(1){width:460px;height:460px;left:-160px;top:-200px;background:radial-gradient(circle,rgba(15,118,110,.5),transparent 68%);animation:fxFloat 30s ease-in-out infinite alternate}',
     '.fx-aura i:nth-child(2){width:380px;height:380px;right:-140px;top:-90px;background:radial-gradient(circle,rgba(37,99,235,.35),transparent 70%);animation:fxFloat 38s ease-in-out infinite alternate-reverse}',
     '.fx-aura i:nth-child(3){display:none}',
     '@keyframes fxFloat{to{transform:translate3d(30px,-22px,0) scale(1.06)}}',
-    /* 页眉必须**出血到页面边缘**：负 margin 吃掉 #view 的左右内边距，再用 padding 把内容拉回
- * 与 .fx-stage 同一条对齐线（`max(6px, ...)` 保证窄屏不会被算出负值）。 */
     '.fx-top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:16px;margin:0 calc(-1 * var(--fx-gut));padding:15px calc(var(--fx-gut) + max(6px,(100% - var(--fx-w)) / 2)) 13px;background:transparent;transition:padding .3s cubic-bezier(.22,1,.36,1),background-color .3s ease}',
     '.fx-top::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--fx-line);opacity:0;transition:opacity .3s ease}',
     '.fx-top.is-stuck{padding-top:8px;padding-bottom:8px;background:color-mix(in srgb,var(--fx-bg) 88%,transparent);backdrop-filter:blur(18px) saturate(1.1);-webkit-backdrop-filter:blur(18px) saturate(1.1)}',
@@ -2201,7 +2194,6 @@
     '.fx-goalbar{margin-left:auto;width:120px;height:2px;background:var(--fx-line2);overflow:hidden}',
     '.fx-goalbar b{display:block;height:100%;background:var(--fx-acc);transition:width .6s cubic-bezier(.22,1,.36,1)}',
     '.fx-searchbar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:10px}',
-    /* 搜索框与学科 chips 排一行：chips 自带的分节线/外边距在搜索栏里要去掉，否则两行错位 */
     '.fx-searchbar .fx-subjbar{margin:0;padding:0;border:0;flex:0 0 auto}',
     '.fx-search{flex:1;min-width:180px;max-width:320px}',
     '.fx-topacts{display:flex;align-items:center;gap:10px;margin-left:6px}',
@@ -2242,8 +2234,6 @@
     '.fx-qrow:last-child{border-bottom:0}',
     '.fx-qrow:hover{background:linear-gradient(90deg,color-mix(in srgb,var(--fx-acc) 8%,transparent),transparent 58%);padding-left:9px}',
     '.fx-qrow.hot{background:linear-gradient(90deg,rgba(185,28,28,.06),transparent 58%)}',
-    '.fx-qrow .fx-btn.primary.sm,.fx-thin-row .fx-btn.primary.sm,.fx-recent-row .fx-btn{background:none;color:var(--fx-acc);border:0;border-bottom:1px solid color-mix(in srgb,var(--fx-acc) 45%,transparent);border-radius:0;box-shadow:none;height:auto;padding:0 0 1px;font-size:12px}',
-    '.fx-qrow .fx-btn.primary.sm:hover,.fx-thin-row .fx-btn.primary.sm:hover{color:var(--fx-acc2);border-bottom-color:currentColor;transform:none}',
     '.fx-qdot{width:7px;height:7px;border-radius:50%;flex:0 0 7px}',
     '.fx-qmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
     '.fx-qmain b{font-size:13.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -2256,58 +2246,25 @@
     '.fx-qa-row{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end}',
     '.fx-qa-row .fx-input{flex:1;min-width:220px}',
     '.fx-sel{flex:0 0 auto;width:auto;cursor:pointer}',
-    '.fx-ta{width:100%;border:0;border-left:2px solid color-mix(in srgb,var(--fx-acc) 55%,transparent);border-radius:0;padding:12px 14px;background:color-mix(in srgb,var(--fx-ink) 2.5%,transparent);color:var(--fx-ink);font:13.5px/1.85 inherit;outline:none;resize:vertical;min-height:150px;transition:background .16s,border-color .16s}',
-    '.fx-ta:focus{background:color-mix(in srgb,var(--fx-acc) 4%,transparent);border-left-color:var(--fx-acc)}',
-    '.fx-form{display:flex;flex-direction:column;gap:14px}',
-    '.fx-form label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--fx-sub);letter-spacing:.04em;font-weight:600}',
-    '.fx-form label b{color:#b91c1c}',
-    '.fx-form textarea.fx-input{height:auto;padding:6px 2px;line-height:1.75;resize:vertical}',
-    '.fx-prog{display:flex;align-items:center;gap:7px;margin-bottom:14px}',
-    '.fx-prog i{width:26px;height:2px;background:var(--fx-line2);transition:background .3s}',
-    '.fx-prog i.done{background:color-mix(in srgb,var(--fx-acc) 60%,transparent)}',
-    '.fx-prog i.on{background:var(--fx-acc);height:3px}',
-    '.fx-prog span{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;letter-spacing:.1em;color:var(--fx-sub)}',
     '.fx-clock{margin-left:auto;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--fx-acc);font-variant-numeric:tabular-nums}',
     '.fx-q{padding:16px 0 14px 16px;border-left:2px solid var(--fx-acc);margin-bottom:16px}',
     '.fx-q b{display:block;font-family:Georgia,"Songti SC",serif;font-size:17.5px;line-height:1.65;font-weight:700;letter-spacing:.01em}',
     '.fx-qwhy{display:block;margin-top:7px;font-size:11.5px;color:var(--fx-sub);letter-spacing:.03em}',
     '.fx-qlocal{display:inline-block;margin-top:9px;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.08em;color:#b45309;border-bottom:1px solid rgba(180,83,9,.4);padding-bottom:1px}',
-    '.fx-asking{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--fx-sub);padding:16px 0}',
-    '.fx-asking i{font-style:normal;font-size:11.5px;opacity:.85}',
-    '.fx-spin{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--fx-acc) 25%,transparent);border-top-color:var(--fx-acc);animation:fxSpin .8s linear infinite}',
     '@keyframes fxSpin{to{transform:rotate(360deg)}}',
-    '.fx-skl{display:flex;flex-direction:column;gap:9px;padding:2px 0 14px}',
-    '.fx-skl i{height:9px;background:var(--fx-line);animation:fxShimmer 1.4s ease-in-out infinite}',
-    '.fx-skl i:nth-child(2){width:80%;animation-delay:.12s}',
-    '.fx-skl i:nth-child(3){width:62%;animation-delay:.24s}',
     '@keyframes fxShimmer{0%,100%{opacity:.35}50%{opacity:1}}',
-    '.fx-vhead{display:flex;align-items:center;gap:16px;margin-bottom:16px}',
-    '.fx-vhead-tx{display:flex;flex-direction:column;gap:3px}',
-    '.fx-vhead-tx b{font-family:Georgia,"Songti SC",serif;font-size:16px;font-weight:700}',
-    '.fx-vhead-tx span{font-size:11.5px;color:var(--fx-sub)}',
-    '.fx-ring{display:block}',
-    '.fx-ring-t{font:700 17px/1 Georgia,serif;fill:var(--fx-ink)}',
     '.fx-dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0 22px;margin-bottom:14px}',
     '.fx-dim{padding:10px 0;border-bottom:1px solid var(--fx-line)}',
-    '.fx-dim-h{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px}',
-    '.fx-dim-h b{font-size:12.5px;letter-spacing:.06em}',
-    '.fx-dim-h em{font-style:normal;font-family:Georgia,serif;font-size:18px;font-weight:700;color:var(--c)}',
-    '.fx-dim-bar{height:2px;background:var(--fx-line2);overflow:hidden}',
-    '.fx-dim-bar i{display:block;height:100%;background:var(--c);transition:width .7s cubic-bezier(.22,1,.36,1)}',
     '.fx-dim span{display:block;margin-top:6px;font-size:10.5px;color:var(--fx-sub)}',
     '.fx-comment{padding:12px 0 12px 16px;border-left:2px solid var(--fx-line2);font-size:13px;line-height:1.85}',
     '.fx-missing{margin-top:12px}',
     '.fx-missing b{display:block;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fx-sub);margin-bottom:7px}',
     '.fx-chip{display:inline-block;margin:0 8px 6px 0;padding:0 0 2px;border-bottom:1px solid rgba(185,28,28,.45);font-size:12px;color:#b91c1c}',
-    '.fx-followup{margin-top:14px;padding:11px 0 11px 16px;border-left:2px solid var(--fx-acc2);font-size:12.5px;line-height:1.8}',
-    '.fx-followup b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.14em;color:var(--fx-acc2);margin-bottom:4px}',
     '.fx-empty{padding:34px 12px;text-align:center;border-top:1px solid var(--fx-line);border-bottom:1px solid var(--fx-line);display:flex;flex-direction:column;align-items:center;gap:9px}',
     '.fx-empty-ic{color:var(--fx-sub);opacity:.75}',
     '.fx-empty-ic svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.4}',
     '.fx-empty b{font-family:Georgia,"Songti SC",serif;font-size:15px}',
     '.fx-empty span{font-size:12px;color:var(--fx-sub);max-width:440px;line-height:1.85}',
-    '.fx-confetti{position:fixed;left:50%;top:46%;width:0;height:0;z-index:60;pointer-events:none}',
-    '.fx-confetti i{position:absolute;width:6px;height:6px;border-radius:1px;background:var(--c);animation:fxConfetti 1.25s cubic-bezier(.2,.8,.3,1) var(--d) both}',
     '@keyframes fxConfetti{from{transform:translate(0,0) rotate(0);opacity:1}to{transform:translate(var(--x),var(--y)) rotate(var(--r));opacity:0}}',
     '.fx-dockwrap{display:contents}',
     '.fx-dock{position:sticky;z-index:40;bottom:calc(70px + env(safe-area-inset-bottom,0px));display:flex;justify-content:center;gap:2px;width:max-content;margin:18px auto 0;padding:6px;border-radius:18px;background:color-mix(in srgb,var(--fx-bg) 84%,transparent);border:1px solid var(--fx-line);box-shadow:0 16px 36px -26px rgba(20,32,28,.7);backdrop-filter:blur(20px) saturate(1.15);-webkit-backdrop-filter:blur(20px) saturate(1.15)}',
@@ -2317,10 +2274,6 @@
     '.fx-dock-item{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:62px;padding:8px 13px;border:0;border-radius:14px;background:none;color:var(--fx-sub);font-size:10.5px;font-weight:600;letter-spacing:.04em;cursor:pointer;transition:color .25s}',
     '.fx-dock-item svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;transition:transform .25s}',
     '.fx-dock-item em{font-style:normal}',
-    /* 【2026-10-22】图标换站内线性 SVG 后，站点全局给 .ci 留了 margin-right:5px 当「图标-文字」间距。
-     * 但本插件这三处的父级**自己就有间距**：.fx-btn 是 inline-flex+gap:6px、.fx-dock-item 是
-     * 竖排 flex+gap:3px、.fx-icobtn 是 grid 居中 —— 再吃 margin 就是双付：
-     * 前者白多 5px，后两者会让图标在中轴上偏左 2.5px（真机量过）。间距交给 gap/居中，图标清零。 */
     '.fx-btn svg.ci,.fx-icobtn svg.ci,.fx-dock-item svg.ci{margin-right:0}',
     '.fx-dock-item:hover{color:var(--fx-ink)}',
     '.fx-dock-item:hover svg{transform:translateY(-2px) scale(1.06)}',
@@ -2331,7 +2284,6 @@
     '@media (max-width:760px){.fx-top{gap:10px;padding:11px 14px}.fx-brandtx b{font-size:17px}.fx-kicker{display:none}.fx-kpi{padding:0 9px;min-width:44px}.fx-kpi b{font-size:16px}.fx-kpi i{font-size:8.5px;letter-spacing:.08em}.fx-topacts .fx-go span{display:none}.fx-topacts .fx-go{padding:0 11px}.fx-stage{padding:4px 14px 152px}.fx-card-h{flex-wrap:wrap}.fx-dock{width:calc(100vw - 24px);justify-content:space-between}.fx-dock-item{min-width:0;flex:1;padding:7px 2px}.fx-dock-item em{font-size:9.5px}}',
     '@media (prefers-reduced-motion:reduce){.fx-root *,.fx-root *::before,.fx-root *::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}}',
     'html[data-theme="night"] .fx-dock{box-shadow:0 16px 40px -26px rgba(0,0,0,.95)}',
-    'html[data-theme="night"] .fx-dim-bar,html[data-theme="night"] .fx-subdist,html[data-theme="night"] .fx-thin-bar,html[data-theme="night"] .fx-recent-bar{background:rgba(255,255,255,.14)}',
     'html[data-theme="night"] .fx-aura{background-image:repeating-linear-gradient(90deg,rgba(255,255,255,.045) 0 1px,transparent 1px 96px)}',
     '.fx-panel{font:13px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--text-primary,#1b2430);padding:2px}',
     '.fx-panel-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}',
@@ -2345,11 +2297,10 @@
     '.fx-panel-row em{font-style:normal;font-family:ui-monospace,Consolas,monospace;font-size:9.5px;color:var(--text-muted,#6b7788)}',
     '.fx-panel-empty{font-size:12px;color:var(--text-muted,#6b7788);padding:14px 0;line-height:1.8;border-bottom:1px solid var(--line,#e5e7eb)}',
     '.fx-panel-empty.ok{color:#0f766e}',
-    '.fx-panel-foot{margin-top:10px;font-size:10px;letter-spacing:.06em;color:var(--text-muted,#6b7788)}',
+    '.fx-panel-foot{margin-top:10px;font-size:10px;letter-spacing:.06em;color:var(--text-muted,#6b7788)}'
   ].join('')
 
-  /* ---------- 页面专属层：挂载时注入 <style>，destroy 时移除 ----------
-   * 只服务工具页（晶体图/统计/设置/结束卡），侧边面板用不到；不占宿主 css 配额。 */
+  /* ---------- 页面专属层：挂载时注入 <style>，destroy 时移除 ---------- */
   let CSS_EXTRA = [
     '.fx-done{display:flex;align-items:center;gap:26px;padding:10px 0 4px;flex-wrap:wrap}',
     '.fx-done-ring{animation:fxGrow .6s cubic-bezier(.22,1,.36,1) both}',
@@ -2384,10 +2335,6 @@
     '.fx-subjbar{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--fx-line);padding-bottom:10px}',
     '.fx-schip{height:22px;padding:0;border:0;border-bottom:1px solid transparent;border-radius:0;background:none;font-size:12px;color:var(--fx-sub);cursor:pointer;transition:color .16s,border-color .16s}',
     '.fx-schip:hover{color:var(--fx-ink)}',
-    /* 【2026-10-23 触控命中区】`.fx-btn.sm` 24px / `.fx-schip` 22px 的命中框在手机上按不准
-     * ——真机实测 72×24 / 24×22。不直接加高的理由：这两类是「线压字」风格，高度一动下划线
-     * 就离字更远、整行行高也跟着变。改用透明伪元素外扩命中区（绝对定位不参与布局）：
-     * 视觉零变化，可点范围 36~38px。 */
     '.fx-btn.sm,.fx-schip{position:relative}',
     '.fx-btn.sm::after,.fx-schip::after{content:"";position:absolute;left:-2px;right:-2px;top:-7px;bottom:-7px}',
     '.fx-schip.on{color:var(--c,var(--fx-acc));border-bottom-color:currentColor;font-weight:700}',
@@ -2489,6 +2436,42 @@
     '.fx-hqa b{display:block;font-size:12px;line-height:1.65}',
     '.fx-hqa p{margin:4px 0;font-size:12px;line-height:1.85}',
     '.fx-hqa span{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--fx-sub);letter-spacing:.04em}',
+    '.fx-qrow .fx-btn.primary.sm,.fx-thin-row .fx-btn.primary.sm,.fx-recent-row .fx-btn{background:none;color:var(--fx-acc);border:0;border-bottom:1px solid color-mix(in srgb,var(--fx-acc) 45%,transparent);border-radius:0;box-shadow:none;height:auto;padding:0 0 1px;font-size:12px}',
+    '.fx-qrow .fx-btn.primary.sm:hover,.fx-thin-row .fx-btn.primary.sm:hover{color:var(--fx-acc2);border-bottom-color:currentColor;transform:none}',
+    '.fx-ta{width:100%;border:0;border-left:2px solid color-mix(in srgb,var(--fx-acc) 55%,transparent);border-radius:0;padding:12px 14px;background:color-mix(in srgb,var(--fx-ink) 2.5%,transparent);color:var(--fx-ink);font:13.5px/1.85 inherit;outline:none;resize:vertical;min-height:150px;transition:background .16s,border-color .16s}',
+    '.fx-ta:focus{background:color-mix(in srgb,var(--fx-acc) 4%,transparent);border-left-color:var(--fx-acc)}',
+    '.fx-form{display:flex;flex-direction:column;gap:14px}',
+    '.fx-form label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--fx-sub);letter-spacing:.04em;font-weight:600}',
+    '.fx-form label b{color:#b91c1c}',
+    '.fx-form textarea.fx-input{height:auto;padding:6px 2px;line-height:1.75;resize:vertical}',
+    '.fx-prog{display:flex;align-items:center;gap:7px;margin-bottom:14px}',
+    '.fx-prog i{width:26px;height:2px;background:var(--fx-line2);transition:background .3s}',
+    '.fx-prog i.done{background:color-mix(in srgb,var(--fx-acc) 60%,transparent)}',
+    '.fx-prog i.on{background:var(--fx-acc);height:3px}',
+    '.fx-prog span{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;letter-spacing:.1em;color:var(--fx-sub)}',
+    '.fx-asking{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--fx-sub);padding:16px 0}',
+    '.fx-asking i{font-style:normal;font-size:11.5px;opacity:.85}',
+    '.fx-spin{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--fx-acc) 25%,transparent);border-top-color:var(--fx-acc);animation:fxSpin .8s linear infinite}',
+    '.fx-skl{display:flex;flex-direction:column;gap:9px;padding:2px 0 14px}',
+    '.fx-skl i{height:9px;background:var(--fx-line);animation:fxShimmer 1.4s ease-in-out infinite}',
+    '.fx-skl i:nth-child(2){width:80%;animation-delay:.12s}',
+    '.fx-skl i:nth-child(3){width:62%;animation-delay:.24s}',
+    '.fx-vhead{display:flex;align-items:center;gap:16px;margin-bottom:16px}',
+    '.fx-vhead-tx{display:flex;flex-direction:column;gap:3px}',
+    '.fx-vhead-tx b{font-family:Georgia,"Songti SC",serif;font-size:16px;font-weight:700}',
+    '.fx-vhead-tx span{font-size:11.5px;color:var(--fx-sub)}',
+    '.fx-ring{display:block}',
+    '.fx-ring-t{font:700 17px/1 Georgia,serif;fill:var(--fx-ink)}',
+    '.fx-dim-h{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px}',
+    '.fx-dim-h b{font-size:12.5px;letter-spacing:.06em}',
+    '.fx-dim-h em{font-style:normal;font-family:Georgia,serif;font-size:18px;font-weight:700;color:var(--c)}',
+    '.fx-dim-bar{height:2px;background:var(--fx-line2);overflow:hidden}',
+    '.fx-dim-bar i{display:block;height:100%;background:var(--c);transition:width .7s cubic-bezier(.22,1,.36,1)}',
+    '.fx-followup{margin-top:14px;padding:11px 0 11px 16px;border-left:2px solid var(--fx-acc2);font-size:12.5px;line-height:1.8}',
+    '.fx-followup b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.14em;color:var(--fx-acc2);margin-bottom:4px}',
+    '.fx-confetti{position:fixed;left:50%;top:46%;width:0;height:0;z-index:60;pointer-events:none}',
+    '.fx-confetti i{position:absolute;width:6px;height:6px;border-radius:1px;background:var(--c);animation:fxConfetti 1.25s cubic-bezier(.2,.8,.3,1) var(--d) both}',
+    'html[data-theme="night"] .fx-dim-bar,html[data-theme="night"] .fx-subdist,html[data-theme="night"] .fx-thin-bar,html[data-theme="night"] .fx-recent-bar{background:rgba(255,255,255,.14)}'
   ].join('')
 
   /* ============================================================
