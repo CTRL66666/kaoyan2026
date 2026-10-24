@@ -2540,6 +2540,42 @@
       { key: 'autoNext', label: '自评后自动继续', type: 'bool', default: true },
       { key: 'dailyGoal', label: '每日复述目标（个）', type: 'number', default: 3 }
     ],
+    /* 教练可查：复述数据本来就在本地（points/sessions），但教练问"我哪些点讲不清"时
+     * 没法自己看 —— 这两条让教练直接拿到结论，不用用户复述。
+     * （2026-10-24 补：另两个插件早就有 queries，这个一直缺，能力面对不齐） */
+    queries: [
+      {
+        key: 'stale', label: '最久没复述的知识点',
+        run: function (ctx) {
+          let pts = loadPoints(ctx).filter(function (p) { return p && p.title })
+          if (!pts.length) return '还没有知识点。'
+          let today = todayKey()
+          let list = pts.slice().sort(function (a, b) {
+            let ta = a.nextAt || '', tb = b.nextAt || ''
+            if (ta !== tb) return ta < tb ? -1 : 1
+            return (a.mastery || 0) - (b.mastery || 0)
+          }).slice(0, 5)
+          let parts = list.map(function (p) {
+            let od = p.nextAt ? overdueDays(p, today) : 0
+            return p.title + (od ? '（逾期 ' + od + ' 天）' : (p.nextAt ? '（' + fmtDate(p.nextAt) + ' 到期）' : '（从没复述）'))
+          })
+          return '最该先讲的 ' + list.length + ' 个知识点：' + parts.join('；') + '。'
+        }
+      },
+      {
+        key: 'weak', label: '复述最吃力的知识点',
+        run: function (ctx) {
+          let pts = loadPoints(ctx)
+          let tested = pts.filter(function (p) { return (p.reps || 0) > 0 })
+          if (!tested.length) return '还没有复述记录。'
+          let list = tested.slice().sort(function (a, b) { return (a.mastery || 0) - (b.mastery || 0) }).slice(0, 5)
+          let ss = loadSessions(ctx)
+          let avg = ss.length ? Math.round(ss.reduce(function (a, b) { return a + (b.score || 0) }, 0) / ss.length) : 0
+          return '共复述 ' + ss.length + ' 次（均分 ' + avg + '）。掌握度最低：'
+            + list.map(function (p) { return p.title + ' ' + (p.mastery || 0) + '（' + masteryLabel(p.mastery) + '，讲过 ' + p.reps + ' 次）' }).join('；') + '。'
+        }
+      }
+    ],
     /* 全局快捷键：Alt+F 直达费曼晶体（不在输入框里也能用；有修饰键不会被打字吃掉） */
     shortcuts: [
       {

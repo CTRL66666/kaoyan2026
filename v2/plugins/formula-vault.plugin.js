@@ -856,10 +856,20 @@
     let q = String(S.q || '').trim().toLowerCase()
     /* 易混对比：搜索词为空且没按学科过滤时才显示（避免和列表抢注意力） */
     if (!q && S.subj === 'all' && S.openChap.confuse !== false) {
-      out.push('<section class="fv-card fv-confuse"><div class="fv-card-h"><b>易混对比</b><em>分不清 = 做不对</em>'
-        + '<button class="fv-btn ghost sm" data-act="chap" data-k="confuse">收起</button></div>')
-      for (let i = 0; i < CONFUSE.length; i++) out.push(confuseRow(ctx, list, CONFUSE[i]))
-      out.push('</section>')
+      /* 先把能渲染的收起来：CONFUSE 按 id 引用种子，万一哪天改了种子 id，
+       * 直接 for 循环会把分区标题渲染出来但下面空空（静默的空壳）。
+       * 一条都渲染不出来就整块不显示。 */
+      let rows = []
+      for (let i = 0; i < CONFUSE.length; i++) {
+        let html = confuseRow(ctx, list, CONFUSE[i])
+        if (html) rows.push(html)
+      }
+      if (rows.length) {
+        out.push('<section class="fv-card fv-confuse"><div class="fv-card-h"><b>易混对比</b><em>分不清 = 做不对</em>'
+          + '<button class="fv-btn ghost sm" data-act="chap" data-k="confuse">收起</button></div>')
+        out.push(rows.join(''))
+        out.push('</section>')
+      }
     }
 
     let filtered = list.filter(function (f) {
@@ -996,7 +1006,9 @@
         + '<button class="fv-grade g3" data-act="grade" data-k="fast"><b>秒想</b><em>一次到位</em></button>'
         + '</div></div>')
     }
-    out.push('<div class="fv-acts"><button class="fv-btn ghost" data-act="drill-abort">结束本轮</button></div>')
+    out.push('<div class="fv-acts">'
+      + '<button class="fv-btn ghost" data-act="drill-skip">跳过这题（本轮稍后再问）</button>'
+      + '<button class="fv-btn ghost" data-act="drill-abort">结束本轮</button></div>')
     out.push('</section>')
     return out.join('')
   }
@@ -1276,6 +1288,7 @@
     out.push(krow('D', '直接开一轮（到期优先）'))
     out.push(krow('R', '揭示公式'))
     out.push(krow('1 / 2 / 3', '揭示后打分：没想起 / 想一下 / 秒想'))
+    out.push(krow('S', '跳过当前题（本轮稍后再问）'))
     out.push(krow('Z', '撤销上次自评'))
     out.push(krow('Esc', '结束本轮 / 收起'))
     out.push('</div></section>')
@@ -1696,6 +1709,32 @@
       moveInd()
     }
 
+    /** 跳过当前题：移到本轮末尾稍后再问；同一题跳两次就彻底移出。
+     *  为什么不直接"结束本轮"：跳过一道不该毁掉整轮（用户只是这道不熟/不想现在练）。 */
+    function skipRun() {
+      let run = S.run
+      if (!run || !run.queue.length) return
+      let f = run.queue[run.idx]
+      if (!f) return
+      run.skipped = run.skipped || {}
+      let already = !!run.skipped[f.id]
+      run.skipped[f.id] = 1
+      run.queue.splice(run.idx, 1)
+      if (already || !run.queue.length) {
+        /* 跳过第二次 / 已经没别的题 → 这道彻底不算，收尾或继续 */
+        if (!run.queue.length) { finishDrill(); return }
+        if (run.idx >= run.queue.length) run.idx = 0
+      } else {
+        run.queue.push(f)
+        if (run.idx >= run.queue.length) run.idx = 0
+      }
+      run.revealed = false
+      run.draft = ''
+      run.draftOpen = false
+      paint()
+      toast(already ? '这道本轮不再问' : '已挪到本轮末尾', 'info', 1600)
+    }
+
     function reveal() {
       if (!S.run || S.run.revealed) return
       /* 收一下草稿文本（input 事件是实时的，这里兜底防时序漏更） */
@@ -1806,6 +1845,7 @@
       }
       if (act === 'grade') { grade(k); return }
       if (act === 'drill-abort') { S.run = null; stopTick(); paint(); return }
+      if (act === 'drill-skip') { skipRun(); return }
       if (act === 'fav') {
         let r = normRec(S.recs[id] || null)
         r.fav = !r.fav
@@ -2062,6 +2102,7 @@
       }
       if (e.key === 'r' || e.key === 'R') { reveal(); return }
       if (e.key === 'z' || e.key === 'Z') { undoLast(); return }
+      if ((e.key === 's' || e.key === 'S') && S.run) { skipRun(); return }
     }
 
     /* ---- 生命周期 ---- */
