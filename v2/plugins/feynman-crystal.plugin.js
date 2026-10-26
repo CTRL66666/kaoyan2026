@@ -522,7 +522,7 @@
 
   let VIEWS = [
     { k: 'train', t: '复述', ic: 'cpChat' },
-    { k: 'crystal', t: '晶体', ic: 'cpNodes' },
+    { k: 'crystal', t: '晶体', ic: 'puzzle' },
     { k: 'review', t: '复习', ic: 'cpRefresh' },
     { k: 'stats', t: '统计', ic: 'barChart' },
     { k: 'setup', t: '设置', ic: 'cpGear' }
@@ -1673,7 +1673,7 @@
       + '</div>')
 
     if (!pts.length) {
-      out.push(emptyCard(icon({ U: window.U }, 'cpNodes'), '晶体还没长出来',
+      out.push(emptyCard(icon({ U: window.U }, 'puzzle'), '晶体还没长出来',
         S.points.length ? '当前筛选下没有节点，试试切回「全部」' : '先建一个知识点，复述一次它就会亮起来',
         S.points.length ? '' : '新建知识点', 'newpoint'))
       out.push('</section>')

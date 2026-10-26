@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "云端资料",
+  "updatedAt": "",
+  "_doc": "本站当前未收录云端资料（PDF/HTML）。这份**空清单**的唯一作用是让「我的阅读 → 在线拉取」拿到 200 + 空 items，而不是 404 —— 404 会在控制台留一条红字，也会让用户误以为功能坏了（实际只是"还没有资料"）。补资料的正确流程：把文件放进本目录 → 在 scripts/reader-sources.json 登记 → 跑 scripts/build-reader-manifest.py（它会按真实文件体积重写本文件）。",
+  "items": []
+}

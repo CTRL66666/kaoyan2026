@@ -26,10 +26,10 @@
 
   let TOOL_ID = 'formula-vault'
   let VERSION = '1.0'
-  /* AI 场景 ctx：必须与 src/core/ai.ts 的 AI_REGISTRY 条目同名 —— 缺条目时
-   * 思考模式/maxTokens/提示词增强会**静默失效**（不报错，只按默认跑），
-   * Token 用量也归不进配置中心。这条 ctx 已在注册表登记（2026-10-24）。 */
-  let AI_CTX_MNEMONIC = 'plugin.vault.mnemonic'
+  /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
+   * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
+   * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
+  let AI_CTX_MNEMONIC = 'plugin.formula-vault.mnemonic'
 
   /* ══════════════ 0. 设计决策（改这个文件前先读这里） ══════════════
    *
@@ -2232,8 +2232,63 @@
         }
       }
     ],
+    /* 【2026-10-24】教练可读的公式画像。两条都是**一段人话**（教练直接念给用户），不是 JSON：
+     * 用户问「我哪些公式总想不起来」时，想知道的不是"测了几条"，而是"哪几条在拖后腿、
+     * 下一步该背什么"。所以按 miss（想不起来次数）而不是按最近一次排。
+     * 键名 weak / due 与 tests/ui/formula-vault-plugin.test.ts 的契约一致（那里钉着顺序与文案）。 */
+    queries: [
+      {
+        key: 'weak', label: '公式军火库最想不起来的公式',
+        run: function (ctx) {
+          let recs = loadRecs(ctx)
+          let all = allFormulas(ctx)
+          let ids = Object.keys(recs).filter(function (k) { return isWeak(recs[k]) })
+          if (!ids.length) {
+            let tested = Object.keys(recs).filter(function (k) { return recs[k].lastAt }).length
+            return tested ? '目前没有明显记不住的公式（已测 ' + tested + ' 条）。' : '公式库还没有自测记录，去工具页跑一轮「遮罩自测」我就能看出你哪几条不稳。'
+          }
+          ids.sort(function (a, b) { return (recs[b].miss - recs[a].miss) || (recs[a].mastery - recs[b].mastery) })
+          let lines = ids.slice(0, 5).map(function (id) {
+            let f = findF(all, id), r = recs[id]
+            if (!f) return null
+            return f.n + '（' + (f.c || '未分章') + '）· 想不起来 ' + r.miss + ' 次 / 掌握 ' + r.mastery + ' 分'
+          }).filter(Boolean)
+          return '最该补的 ' + lines.length + ' 条公式（共 ' + ids.length + ' 条薄弱）：' + lines.join('；') + '。'
+        }
+      },
+      {
+        key: 'due', label: '公式军火库今天该复测什么',
+        run: function (ctx) {
+          let recs = loadRecs(ctx)
+          let all = allFormulas(ctx)
+          let due = dueList(recs, todayKey())
+          let untested = untestedList(recs, all)
+          if (!due.length) {
+            return '今天没有到期的公式复测' + (untested.length ? '（还有 ' + untested.length + ' 条从没测过，可以顺手开一轮）' : '') + '。'
+          }
+          let names = due.slice(0, 4).map(function (d) { let f = findF(all, d.id); return f ? f.n : null }).filter(Boolean)
+          return '今天有 ' + due.length + ' 条公式待复测：' + names.join('、') + (due.length > names.length ? ' 等' : '') + '。'
+        }
+      }
+    ],
     init: function (ctx) {
       try {
+        /* 【2026-10-24】把自己的 AI 场景登记进注册表（与另 5 支插件同构）。
+         * 注册表里本来就有静态条目，这里再注册一遍的意义是**热更新覆盖**：
+         * 插件改了名/改了思考档，重新 init 会原地覆盖，而不是永远吃旧的静态值。
+         * latexNeed=true：助记生成的输出里有公式，公式契约必须自动注入。 */
+        try {
+          if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {
+            ctx.ai.registerCtx({
+              ctx: AI_CTX_MNEMONIC,
+              name: '公式助记生成',
+              desc: '为公式生成记忆钩子与易错提醒',
+              def: 'noThink',
+              latexNeed: true,
+              tools: 'none'
+            })
+          }
+        } catch (e) { /* 宿主老版本没有 registerCtx：静态注册表兜底 */ }
         let n = SEED_CALC.length + SEED_LINALG.length + SEED_PROB.length
         ctx.log('公式军火库 v' + VERSION + ' 就绪（' + n + ' 条公式，渲染=KaTeX' + (window.katex ? '' : '（加载中，先纯文本）') + '）')
         /* 到期提示一次（不打扰：只在真的有到期时） */

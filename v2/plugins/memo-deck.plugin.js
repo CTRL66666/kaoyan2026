@@ -449,9 +449,15 @@
     return out
   }
 
-  /* AI 可用性统一探测（各页签同一入口，不重复写 try/catch 三段式） */
+  /* AI 可用性统一探测（各页签同一入口，不重复写 try/catch 三段式）
+   * 【2026-10-24 修】宿主 ctx 只有 `ai`（pluginBus buildCtx），没有 `AI`。
+   * 原判断恒 false → "AI 制卡"入口永远显示未就绪，功能等于不存在。 */
   function aiReady(ctx) {
-    try { return !!(ctx.AI && typeof ctx.AI.chatJSON === 'function' && ctx.AI.configured()) } catch (e) { return false }
+    try {
+      if (!ctx.ai) return false
+      if (typeof ctx.ai.configured === 'function') return !!ctx.ai.configured()
+      return typeof ctx.ai.has === 'function' ? !!ctx.ai.has() : false
+    } catch (e) { return false }
   }
 
   /* ════════════════════════ 4. 样式（注入 <style>，全插件单例） ════════════════════════
@@ -789,10 +795,22 @@
     '@media (prefers-reduced-motion:reduce){.md-root *{animation:none!important;transition:none!important}}'
   ].join('\n')
 
+  /* 【2026-10-24 改走宿主托管】原先自己 createElement('style') 挂 head —— 宿主看不见，代价三条：
+   *   ① 卸载/停用不回收，`<style id="md-styles">` 永久留在 head；
+   *   ② 卸载后重装同一 id 时，下面的 `getElementById` 命中上一次留下的旧节点直接 return
+   *      → **改过的样式永远不生效**（源码编辑器里改 CSS 也一样），只有刷新整页才好；
+   *   ③ 同一 tab 下叠两个插件工具时样式互相啃。
+   * 现在优先走 `ctx.css.add`（宿主按 pid 记账、停用/卸载整批摘掉、同 key 幂等替换内容）；
+   * 老宿主没这个 API 时退回自建节点，但**命中旧节点也要比对内容**，不能一味 return。
+   * 顺带说明为什么不用 `manifest.css` 字段：那里有 20000 字符硬上限（clampCss 会按规则边界截断），
+   * 本插件皮肤已 15K+，再长就会被切；ctx.css 不受那个上限约束。 */
   let STYLE_ID = 'md-styles'
   function injectStyles() {
-    if (document.getElementById(STYLE_ID)) return
-    let st = document.createElement('style')
+    let host = HOST_CTX
+    if (host && host.css && typeof host.css.add === 'function') { host.css.add(CSS, 'skin'); return }
+    let st = document.getElementById(STYLE_ID)
+    if (st) { if (st.textContent !== CSS) st.textContent = CSS; return }
+    st = document.createElement('style')
     st.id = STYLE_ID
     st.textContent = CSS
     document.head.appendChild(st)
@@ -1474,7 +1492,7 @@
           let subject = m.box.querySelector('[data-f=subject]').value
           msg.className = 'md-msg'; msg.textContent = '生成中…'
           out.innerHTML = '<div class="md-skel"><i></i><i></i><i></i></div><div class="md-skel"><i></i><i></i><i></i></div>'
-          ctx.AI.chatJSON(SYS_CARDS + '\n目标卡数约 ' + want + ' 张，科目归「' + subject + '」。', notes, null,
+          ctx.ai.json(SYS_CARDS + '\n目标卡数约 ' + want + ' 张，科目归「' + subject + '」。', notes,
             { ctx: AI_CTX, noTools: true, cache: false, timeout: 180000, maxTokens: 6000 })
             .then(function (r) {
               let cards = (r && r.cards) || []
@@ -2039,7 +2057,7 @@
         + healthCell(log.length < LOG_MAX, '日志 ' + log.length + ' / ' + LOG_MAX + ' 条')
         + healthCell(q.due.length === 0, q.due.length ? '今日有 ' + q.due.length + ' 张到期' : '今日无到期卡')
         + '</div></section>'
-        + '<section class="md-card" style="--i:2"><div class="md-h">' + I('cpNodes') + '引擎说明</div>'
+        + '<section class="md-card" style="--i:2"><div class="md-h">' + I('cpGear') + '引擎说明</div>'
         + '<div class="md-desc">SM-2 间隔重复（Anki 同源变体）：评分四档（重来/困难/良好/轻松），'
         + '难度因子 EF′ = EF + (0.1 − (5−q)(0.08 + (5−q)·0.02))，夹在 [' + EASE_MIN + ', ' + EASE_MAX + ']；'
         + '首过 1 天、二过 6 天，之后 I(n) = I(n−1) × EF，「困难」×' + HARD_F + '、「轻松」×' + EASY_F + '；'
@@ -2189,6 +2207,59 @@
       { key: 'dailyNew', label: '每日新卡上限', type: 'number', default: 15 },
       { key: 'dailyReview', label: '每日复习上限', type: 'number', default: 80 },
       { key: 'remindAt', label: '每日提醒时刻（HH:MM，过点且有到期卡才提醒）', type: 'text', default: '20:30' }
+    ],
+    /* 【2026-10-24 新增】记忆卡组的数据查询面。
+     * 教练最常问的两件事就是「今天还有多少要背」「哪些一直记不住」——
+     * 之前只能让用户自己数，现在直接查。复用 dueQueue/retentionOf，不另算一套。 */
+    queries: [
+      {
+        key: 'deck-today',
+        label: '今天还有多少卡要背',
+        run: function (ctx) {
+          let deck = deckGet(ctx)
+          if (!deck.length) return '卡组是空的 —— 还没有任何记忆卡。'
+          let q = dueQueue(deck, Date.now(), num(ctx.config('dailyNew'), 15), num(ctx.config('dailyReview'), 80))
+          let fresh = q.fresh.length + num(q.freshLeft, 0)
+          let due = q.due.length + num(q.dueLeft, 0)
+          if (!fresh && !due) return '卡组共 ' + deck.length + ' 张，今天既没有新卡也没有到期复习 —— 清空了。'
+          let parts = []
+          if (fresh) parts.push('新卡 ' + fresh + ' 张（本次限 ' + q.fresh.length + '）')
+          if (due) parts.push('到期复习 ' + due + ' 张（本次限 ' + q.due.length + '）')
+          return '卡组共 ' + deck.length + ' 张。今天还有 ' + parts.join('、') + '。'
+        }
+      },
+      {
+        key: 'deck-hard',
+        label: '最难记住的卡',
+        run: function (ctx) {
+          let deck = deckGet(ctx)
+          if (!deck.length) return '卡组是空的。'
+          /* 反复掉回小盒（lapses 多）或盒号低 = 难记。只用已有字段，不臆造 */
+          let hard = deck.slice().sort(function (a, b) {
+            let la = num(a.lapses, 0), lb = num(b.lapses, 0)
+            if (lb !== la) return lb - la
+            return num(a.box, 1) - num(b.box, 1)
+          }).slice(0, 4)
+          let any = hard.some(function (c) { return num(c.lapses, 0) > 0 || num(c.box, 1) <= 1 })
+          if (!any) return '卡组共 ' + deck.length + ' 张，暂时没有反复忘的卡 —— 都还稳。'
+          return '最难记的卡：' + hard.map(function (c) {
+            return trunc(c.front, 16) + '（盒 ' + num(c.box, 1) + (num(c.lapses, 0) ? '，忘过 ' + num(c.lapses, 0) + ' 次' : '') + '）'
+          }).join('；') + '。'
+        }
+      },
+      {
+        key: 'deck-retention',
+        label: '近七天记忆保留率',
+        run: function (ctx) {
+          let log = logGet(ctx)
+          if (!log.length) return '还没有评分记录 —— 保留率要背过才有数。'
+          /* retentionOf 返回的是**百分比整数或 null**（null = 样本不足），不是对象 */
+          let r7 = retentionOf(log, 7, Date.now())
+          if (r7 == null) return '近七天没有评分记录 —— 样本不足，算不出保留率。'
+          let st = streakOf(log, Date.now())
+          return '近七天记忆保留率 ' + r7 + '%（评分≥3 视为记住），当前连续学习 ' + st + ' 天。'
+        }
+      }
     ],
     skills: [
       {

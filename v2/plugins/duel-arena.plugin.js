@@ -53,7 +53,7 @@
     { min: 2300, icon: 'moon', name: '心魔共舞者' },
     { min: 2150, icon: 'sun', name: '半步上岸' },
     { min: 1950, icon: 'books', name: '图书馆传说' },
-    { min: 1750, icon: 'cpStar4', name: '满分手套继承者' },
+    { min: 1750, icon: 'trophy', name: '满分手套继承者' },
     { min: 1550, icon: 'archive', name: '真题大师' },
     { min: 1350, icon: 'puzzle', name: '套路猎手' },
     { min: 1200, icon: 'ruler', name: '解题熟手' },
@@ -70,7 +70,7 @@
     { id: 'flawless', icon: 'star', name: '完胜', desc: '单场全部答对', cond: function (l) { return l.score === 1 && l.allCorrect } },
     { id: 'swift', icon: 'hourglass', name: '快剑', desc: '单场 ≥5 题全对且平均 8 秒内', cond: function (l) { return l.score === 1 && l.allCorrect && l.answered >= 5 && l.avgUsed < 8 } },
     { id: 'giant-killer', icon: 'compass', name: '以下克上', desc: '战胜 ELO 高你 300+ 的对手', cond: function (l) { return l.score === 1 && l.oppEloGap >= 300 } },
-    { id: 'boss-slayer', icon: 'cpStar4', name: '弑魔者', desc: '击败心魔', cond: function (l) { return l.score === 1 && l.oppBoss } },
+    { id: 'boss-slayer', icon: 'trophy', name: '弑魔者', desc: '击败心魔', cond: function (l) { return l.score === 1 && l.oppBoss } },
     { id: 'comeback', icon: 'cpUndo', name: '绝地翻盘', desc: 'HP 低于 20 时获胜', cond: function (l) { return l.score === 1 && l.pHp > 0 && l.pHp < 20 } },
     { id: 'veteran', icon: 'landmark', name: '身经百战', desc: '累计 10 场决斗', cond: function (l, p) { return p.wins + p.losses + p.draws >= 10 } }
   ]
@@ -84,7 +84,7 @@
     { id: 'o5', name: '倒计时信徒', icon: 'hourglass', elo: 1400, acc: 0.78, tag: '日历上全是红圈' },
     { id: 'o6', name: '套路拆解师', icon: 'puzzle', elo: 1550, acc: 0.82, tag: '看见题干就拆骨架' },
     { id: 'o7', name: '命题人影子', icon: 'eye', elo: 1700, acc: 0.86, tag: '出题思路比你还熟' },
-    { id: 'o8', name: '满分手套', icon: 'cpStar4', elo: 1850, acc: 0.89, tag: '据说从没沾过墨水' },
+    { id: 'o8', name: '满分手套', icon: 'trophy', elo: 1850, acc: 0.89, tag: '据说从没沾过墨水' },
     { id: 'o9', name: '图书馆幽灵', icon: 'moon', elo: 2000, acc: 0.92, tag: '座位固定，来去无声' },
     { id: 'o10', name: '上岸者残影', icon: 'sun', elo: 2200, acc: 0.95, tag: '去年此时，他坐在这里' },
     { id: 'boss', name: '心魔', icon: 'cpBrain', elo: 2400, acc: 0.97, tag: '你所有「差一点」的总和', boss: true }
@@ -214,12 +214,19 @@
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) }
     return h >>> 0
   }
+  /* 【2026-10-24 修】宿主 ctx 只有 `ai`，从来没有 `AI`（见 pluginBus buildCtx）。
+   * 原写法 `ctx.AI.chatJSON(...)` → 第一句就 reject「AI 接口不可用」，
+   * 出题与判定全线静默失效。改走契约形态 `ctx.ai.json(sys, usr, opts)`。 */
   function aiJSON(ctx, sys, usr, opts) {
-    if (!ctx.AI || typeof ctx.AI.chatJSON !== 'function') return Promise.reject(new Error('AI 接口不可用'))
-    return ctx.AI.chatJSON(sys, usr, null, Object.assign({ ctx: AI_CTX, noTools: true, cache: false }, opts || {}))
+    if (!ctx.ai || typeof ctx.ai.json !== 'function') return Promise.reject(new Error('AI 接口不可用'))
+    return ctx.ai.json(sys, usr, Object.assign({ ctx: AI_CTX, noTools: true, cache: false }, opts || {}))
   }
   function aiReady(ctx) {
-    try { return !!(ctx.AI && typeof ctx.AI.chatJSON === 'function' && ctx.AI.configured()) } catch (e) { return false }
+    try {
+      if (!ctx.ai) return false
+      if (typeof ctx.ai.configured === 'function') return !!ctx.ai.configured()
+      return typeof ctx.ai.has === 'function' ? !!ctx.ai.has() : false
+    } catch (e) { return false }
   }
 
   /* ════════════════════════ 2. 纯逻辑：ELO / 对手判定 / 伤害（可单测） ════════════════════════ */
@@ -422,7 +429,7 @@
   }
 
   function titleOf(elo, badges) {
-    if (badges && badges.indexOf('boss-slayer') >= 0) return { icon: 'cpStar4', name: '弑魔者' }
+    if (badges && badges.indexOf('boss-slayer') >= 0) return { icon: 'trophy', name: '弑魔者' }
     for (let i = 0; i < TITLES.length; i++) if (elo >= TITLES[i].min) return TITLES[i]
     return TITLES[TITLES.length - 1]
   }
@@ -747,10 +754,22 @@
     '.du-pick.on{border-color:var(--du-gold);box-shadow:0 0 0 2px color-mix(in oklab,var(--du-gold) 22%,transparent)}'
   ].join('\n')
 
+  /* 【2026-10-24 改走宿主托管】原先自己 createElement('style') 挂 head —— 宿主看不见，代价三条：
+   *   ① 卸载/停用不回收，`<style id="du-styles">` 永久留在 head；
+   *   ② 卸载后重装同一 id 时，下面的 `getElementById` 命中上一次留下的旧节点直接 return
+   *      → **改过的样式永远不生效**（源码编辑器里改 CSS 也一样），只有刷新整页才好；
+   *   ③ 同一 tab 下叠两个插件工具时样式互相啃。
+   * 现在优先走 `ctx.css.add`（宿主按 pid 记账、停用/卸载整批摘掉、同 key 幂等替换内容）；
+   * 老宿主没这个 API 时退回自建节点，但**命中旧节点也要比对内容**，不能一味 return。
+   * 顺带说明为什么不用 `manifest.css` 字段：那里有 20000 字符硬上限（clampCss 会按规则边界截断），
+   * 本插件皮肤已 15K+，再长就会被切；ctx.css 不受那个上限约束。 */
   let STYLE_ID = 'du-styles'
   function injectStyles() {
-    if (document.getElementById(STYLE_ID)) return
-    let st = document.createElement('style')
+    let host = HOST_CTX
+    if (host && host.css && typeof host.css.add === 'function') { host.css.add(CSS, 'skin'); return }
+    let st = document.getElementById(STYLE_ID)
+    if (st) { if (st.textContent !== CSS) st.textContent = CSS; return }
+    st = document.createElement('style')
     st.id = STYLE_ID
     st.textContent = CSS
     document.head.appendChild(st)
@@ -1805,6 +1824,59 @@
       { key: 'questionsPerMatch', label: '每场题数（3-10）', type: 'number', default: 5 },
       { key: 'secondsPerQ', label: '每题倒计时秒数（10-120）', type: 'number', default: 30 },
       { key: 'writeBackMistakes', label: '战败题同步进站内错题本', type: 'bool', default: true }
+    ],
+    /* 【2026-10-24 新增】让 AI 教练能直接查到决斗数据。
+     * 为什么补：这个插件攒了 ELO / 段位 / 错题本 / 连胜，全是教练讲「你现在该补什么」
+     * 的硬依据；没有 queries 时教练只能问用户"你最近打得怎么样"，用户还得自己复述。
+     * 契约见 pluginbus.queries()：run(ctx) 返回**一段人话**（教练直接读），
+     * 所以这里做摘要而不是甩 JSON —— 也别返回空串，那会被当成"没查到"。 */
+    queries: [
+      {
+        key: 'duel-rank',
+        label: '决斗场段位与战绩',
+        run: function (ctx) {
+          let p = profileGet(ctx)
+          let t = titleOf(p.elo, p.badges)
+          let total = p.wins + p.losses + p.draws
+          if (!total) return '还没打过决斗场（当前初始 ELO ' + p.elo + '）。'
+          let rate = Math.round((p.wins / total) * 100)
+          return '决斗场 ELO ' + p.elo + '（' + t.name + '），' + total + ' 场 ' + p.wins + '胜'
+            + p.losses + '负' + (p.draws ? p.draws + '平' : '') + '，胜率 ' + rate + '%'
+            + (p.streak > 0 ? '，当前 ' + p.streak + ' 连胜' : '') + '。'
+        }
+      },
+      {
+        key: 'duel-revenge',
+        label: '决斗场待复仇错题',
+        run: function (ctx) {
+          let p = profileGet(ctx)
+          let book = p.wrongBook || []
+          if (!book.length) return '决斗场错题本是空的 —— 没有待复仇的题。'
+          /* 按错误次数降序：错得最多的先讲，教练据此安排专项 */
+          let top = book.slice().sort(function (a, b) { return num(b.wrong, 1) - num(a.wrong, 1) }).slice(0, 4)
+          return '决斗场错题本 ' + book.length + ' 题待复仇。错得最多的：'
+            + top.map(function (q) {
+              return (q.topic || '未分类') + '（错 ' + num(q.wrong, 1) + ' 次）'
+            }).join('；') + '。'
+        }
+      },
+      {
+        key: 'duel-weak',
+        label: '决斗场弱项分布',
+        run: function (ctx) {
+          let book = profileGet(ctx).wrongBook || []
+          if (!book.length) return '决斗场暂无弱项数据（错题本为空）。'
+          let agg = {}
+          book.forEach(function (q) {
+            let k = q.topic || '未分类'
+            agg[k] = num(agg[k], 0) + num(q.wrong, 1)
+          })
+          let arr = Object.keys(agg).map(function (k) { return { k: k, n: agg[k] } })
+            .sort(function (a, b) { return b.n - a.n })
+          return '决斗场弱项（按累计错次）：' + arr.slice(0, 5)
+            .map(function (x) { return x.k + ' ' + x.n + ' 次' }).join('；') + '。'
+        }
+      }
     ],
     hooks: {
       /* 站内任何工具完成一组刷题 → 给决斗场充能护盾（下一场 +20 HP） */

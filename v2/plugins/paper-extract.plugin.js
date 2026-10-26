@@ -867,15 +867,23 @@
   }
 
   /* ---------------- AI ---------------- */
+  /* 【2026-10-24 修】原来写的是 `ctx.AI.chatJSON(...)` —— 宿主**从来没有** `ctx.AI`
+   * 这个对象（见 src/core/pluginBus.ts 的 buildCtx：只有 `ctx.ai`）。
+   * 于是 askJson 第一行就抛「AI 未就绪」，拍照提取/公式识别全线静默失效。
+   * 统一改走 `ctx.ai.json(sys, usr, { image, ...opts })`：图片走 opts.image 透传
+   * （宿主侧已补上多模态口子，见 pluginBus 的 aiImageOf）。 */
   async function askJson(ctx, sys, user, image, maxTokens, signal) {
-    if (!ctx.AI || typeof ctx.AI.chatJSON !== 'function') throw new Error('AI 未就绪')
-    if (!ctx.AI.configured()) throw new Error('请先在设置里配置 AI 接口')
+    if (!ctx.ai || typeof ctx.ai.json !== 'function') throw new Error('AI 未就绪')
+    if (typeof ctx.ai.configured === 'function' ? !ctx.ai.configured() : !ctx.ai.has()) {
+      throw new Error('请先在设置里配置 AI 接口')
+    }
     let opts = {
       ctx: AI_CTX, noTools: true, noThink: true, cache: false,
       timeout: 240000, maxTokens: maxTokens || 8192,
       signal: signal
     }
-    return await ctx.AI.chatJSON(sys, user, image || null, opts)
+    if (image) opts.image = image
+    return await ctx.ai.json(sys, user, opts)
   }
 
   function questionsOf(res) {
@@ -1367,7 +1375,7 @@
     let pdf = !!(window.PdfKit && typeof window.PdfKit.open === 'function')
     let paper = !!(window.PaperKit && typeof window.PaperKit.addDrafts === 'function')
     let ai = false
-    try { ai = !!(ctx.AI && ctx.AI.configured()) } catch (e) { ai = false }
+    try { ai = !!(ctx.ai && (typeof ctx.ai.configured === 'function' ? ctx.ai.configured() : ctx.ai.has())) } catch (e) { ai = false }
     return { pdf: pdf, paper: paper, ai: ai }
   }
   function healthHtml(ctx) {
@@ -2197,7 +2205,7 @@
 
     $('[data-run]').onclick = async function () {
       if (!state.file) { ctx.Toast.show('请先选择 PDF', 'warn', 2000); return }
-      if (!ctx.AI || !ctx.AI.configured()) { ctx.Toast.show('请先在设置里配置 AI 接口', 'warn', 2600); return }
+      if (!ctx.ai || (typeof ctx.ai.configured === 'function' ? !ctx.ai.configured() : !ctx.ai.has())) { ctx.Toast.show('请先在设置里配置 AI 接口', 'warn', 2600); return }
       if (!window.PdfKit || typeof window.PdfKit.open !== 'function') {
         ctx.Toast.show('PDF 引擎未就绪（缺少 window.PdfKit）', 'warn', 3200)
         return
@@ -2842,6 +2850,75 @@
       { key: 'lowConf', label: '低置信阈值', type: 'number', default: LOW_CONF_DEFAULT },
       { key: 'autoBank', label: '完成后自动存入卷库', type: 'bool', default: true },
       { key: 'extraNoise', label: '额外噪声词（一行一个）', type: 'text', default: '' }
+    ],
+    /* 【2026-10-24】教练可读的卷库/任务查询。返回**一段人话**（教练直接念，不是 JSON）。
+     * 设计取向：用户问"我提了几卷"其实想问"我还有什么活没干完"——
+     * 所以第二条专挑「无答案题」并说清去哪补，第三条直接报后台任务跑到哪（切走/刷新后最常问）。
+     * 只读：不改卷库、不动任务状态。缺数据如实说，不编造题数。 */
+    queries: [
+      {
+        key: 'paper-bank',
+        label: '试卷提取卷库概览',
+        run: function (ctx) {
+          let list = bankGet(ctx)
+          if (!list.length) return '试卷提取的卷库还是空的（提取完会自动存进来，也可以在卷库里手动导入）。'
+          let qn = 0, noAns = 0
+          list.forEach(function (e) {
+            let qs = Array.isArray(e.questions) ? e.questions : []
+            qn += qs.length
+            qs.forEach(function (q) { if (q && q.noAnswer) noAns++ })
+          })
+          let chars = 0
+          list.forEach(function (e) { chars += examChars(e) })
+          let newest = list[0]
+          let out = '试卷提取卷库有 ' + list.length + ' / ' + BANK_MAX + ' 卷，共 ' + qn + ' 题'
+          out += '，占用约 ' + Math.round(chars / 1024) + 'KB（预算 ' + Math.round(BANK_CHAR_BUDGET / 1024) + 'KB）。'
+          if (newest && newest.title) out += '最近一卷是「' + newest.title + '」。'
+          if (noAns) out += '其中 ' + noAns + ' 题卷面没给答案（只能当练手，不能自测对错）。'
+          if (list.length >= BANK_MAX) out += '卷库已满，再提取会把最旧的一卷挤掉。'
+          return out
+        }
+      },
+      {
+        key: 'paper-noans',
+        label: '试卷提取里缺答案的题',
+        run: function (ctx) {
+          let list = bankGet(ctx)
+          if (!list.length) return '试卷提取的卷库是空的，没有可核对的答案。'
+          let rows = []
+          list.forEach(function (e) {
+            let qs = Array.isArray(e.questions) ? e.questions : []
+            let bad = qs.filter(function (q) { return q && q.noAnswer }).length
+            if (bad) rows.push({ title: e.title || '未命名卷', bad: bad, n: qs.length })
+          })
+          if (!rows.length) return '试卷提取的 ' + list.length + ' 卷里答案都齐（没有"卷面没给答案"的题）。'
+          rows.sort(function (a, b) { return b.bad - a.bad })
+          return '有 ' + rows.length + ' 卷存在无答案题：'
+            + rows.slice(0, 4).map(function (r) { return '「' + r.title + '」' + r.bad + '/' + r.n + ' 题' }).join('；')
+            + '。这些题是照卷面搬的（卷面确实没印答案），要自测就得补拍答案页再提取一次。'
+        }
+      },
+      {
+        key: 'paper-job',
+        label: '试卷提取后台任务进度',
+        run: function (ctx) {
+          let j = jobGet(ctx)
+          if (!j) return '试卷提取没有正在跑或刚跑完的任务。'
+          if (j.state === 'running') {
+            return '试卷提取正在后台跑：' + (j.msg || '处理中') + '（' + Math.round(num(j.pct, 0)) + '%）。'
+              + '切走也不影响，跑完会发通知卡，点卡片能跳回提取台。'
+          }
+          if (j.state === 'done') {
+            let t = j.title || (j.exam && j.exam.title) || '提取结果'
+            return '上一次提取已完成：「' + t + '」'
+              + (j.examId ? '，结果在卷库里（卷号 ' + j.examId + '）' : '') + '。'
+          }
+          /* interrupted / cancelled：如实说，别假装还在跑（这条最容易骗人） */
+          let log = Array.isArray(j.log) ? j.log.slice(-1)[0] : ''
+          return '上一次提取没跑完（' + (j.msg || j.state || '中断') + '）'
+            + (log ? '，最后一条日志：' + String(log).slice(0, 90) : '') + '。重新提取一次即可。'
+        }
+      }
     ],
     /* 噪声词是"切题时才用到"的全局状态，必须在注册时装载一次：
      * 否则用户保存完配置、刷新页面后，要先去设置页点一下才生效。 */

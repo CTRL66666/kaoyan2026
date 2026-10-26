@@ -15,7 +15,9 @@
  *
  * AI 调用两路：
  *   · 对话：ctx.ai.stream（流式，考官气泡逐字出现）——追问逻辑全在 system 提示词；
- *   · 评分：ctx.AI.chatJSON（结构化 rubric，入参 transcript 全文）。
+ *   · 评分：ctx.ai.json（结构化 rubric，入参 transcript 全文）。
+ *     【2026-10-24 修正】旧注释写的是 `ctx.AI.chatJSON` —— 宿主从无 `ctx.AI`，
+ *     照那条写必然静默失效。正确契约只有 `ctx.ai.{chat,json,stream}`。
  *
  * 安装：插件中心 →「粘贴导入」→ 选择本文件（.js）。
  * ============================================================ */
@@ -275,12 +277,18 @@
     if (!ctx.ai || typeof ctx.ai.stream !== 'function') return Promise.reject(new Error('AI 流式接口不可用'))
     return ctx.ai.stream(sys, usr, onChunk, Object.assign({ ctx: AI_CTX_CHAT, noTools: true }, opts || {}))
   }
+  /* 【2026-10-24 修】同 duel-arena：`ctx.AI` 不存在（宿主只有 `ctx.ai`）。
+   * 评分是这插件的核心产出，原来 100% 走不通。 */
   function aiJSON(ctx, sys, usr, opts) {
-    if (!ctx.AI || typeof ctx.AI.chatJSON !== 'function') return Promise.reject(new Error('AI 接口不可用'))
-    return ctx.AI.chatJSON(sys, usr, null, Object.assign({ ctx: AI_CTX_SCORE, noTools: true, cache: false }, opts || {}))
+    if (!ctx.ai || typeof ctx.ai.json !== 'function') return Promise.reject(new Error('AI 接口不可用'))
+    return ctx.ai.json(sys, usr, Object.assign({ ctx: AI_CTX_SCORE, noTools: true, cache: false }, opts || {}))
   }
   function aiReady(ctx) {
-    try { return !!(ctx.AI && typeof ctx.AI.chatJSON === 'function' && ctx.AI.configured()) } catch (e) { return false }
+    try {
+      if (!ctx.ai) return false
+      if (typeof ctx.ai.configured === 'function') return !!ctx.ai.configured()
+      return typeof ctx.ai.has === 'function' ? !!ctx.ai.has() : false
+    } catch (e) { return false }
   }
 
   /* ════════════════════════ 2. 数据层（编年史 + 站内资料库只读桥） ════════════════════════ */
@@ -548,10 +556,22 @@
     '@media (prefers-reduced-motion:reduce){.ivs-root *{animation:none!important;transition:none!important}}'
   ].join('\n')
 
+  /* 【2026-10-24 改走宿主托管】原先自己 createElement('style') 挂 head —— 宿主看不见，代价三条：
+   *   ① 卸载/停用不回收，`<style id="ivs-styles">` 永久留在 head；
+   *   ② 卸载后重装同一 id 时，下面的 `getElementById` 命中上一次留下的旧节点直接 return
+   *      → **改过的样式永远不生效**（源码编辑器里改 CSS 也一样），只有刷新整页才好；
+   *   ③ 同一 tab 下叠两个插件工具时样式互相啃。
+   * 现在优先走 `ctx.css.add`（宿主按 pid 记账、停用/卸载整批摘掉、同 key 幂等替换内容）；
+   * 老宿主没这个 API 时退回自建节点，但**命中旧节点也要比对内容**，不能一味 return。
+   * 顺带说明为什么不用 `manifest.css` 字段：那里有 20000 字符硬上限（clampCss 会按规则边界截断），
+   * 本插件皮肤已 15K+，再长就会被切；ctx.css 不受那个上限约束。 */
   let STYLE_ID = 'ivs-styles'
   function injectStyles() {
-    if (document.getElementById(STYLE_ID)) return
-    let st = document.createElement('style')
+    let host = HOST_CTX
+    if (host && host.css && typeof host.css.add === 'function') { host.css.add(CSS, 'skin'); return }
+    let st = document.getElementById(STYLE_ID)
+    if (st) { if (st.textContent !== CSS) st.textContent = CSS; return }
+    st = document.createElement('style')
     st.id = STYLE_ID
     st.textContent = CSS
     document.head.appendChild(st)
@@ -1226,6 +1246,86 @@
     },
     memory: '用户装有「复试模拟舱」插件：可随时进行多轮 AI 压力面试（工具 → 复试模拟舱）。'
       + '用户提到「复试」「面试」「自我介绍」时，建议他去模拟舱练，并把成绩单拿出来复盘。',
+    /* 【2026-10-24】教练可读的成绩查询。返回**一段人话**（教练直接念给用户，不是 JSON）：
+     * 面试分是模型单次判定，用户最想知道的不是"我练了几场"，而是"我哪一维在拖后腿、
+     * 下一场该练什么"。所以第三条按**跨场聚合**找最弱维度，而不是只看最近一场。
+     * 数据只读：不写 Store、不改成绩，缺数据时如实说"还没有记录"，不编造。 */
+    queries: [
+      {
+        key: 'interview-last',
+        label: '复试模拟舱最近一场成绩',
+        run: function (ctx) {
+          let list = sessionsGet(ctx).filter(function (s) { return s.total != null })
+          if (!list.length) return '复试模拟舱还没有完整成绩单（练完一场、出成绩后才有记录）。'
+          let s = list[0]
+          let prev = list[1]
+          let d = new Date(num(s.at, Date.now()))
+          let day = (d.getMonth() + 1) + '-' + d.getDate()
+          let parts = '最近一场复试模拟：' + day + '，' + (s.subject || '未填方向')
+            + ' · ' + (s.mode || '专业面') + ' · 压力' + (s.pressure || '标准')
+            + '，总分 ' + Math.round(num(s.total, 0)) + '。'
+          if (prev && prev.total != null) {
+            let diff = Math.round(num(s.total, 0)) - Math.round(num(prev.total, 0))
+            parts += diff === 0 ? '与上一场持平。' : (diff > 0 ? '比上一场高 ' : '比上一场低 ') + Math.abs(diff) + ' 分。'
+          }
+          let sc = (s.report && s.report.scores) || {}
+          let given = DIMS.filter(function (x) { return sc[x.key] != null })
+          if (given.length) {
+            parts += '四维：' + given.map(function (x) { return x.label + ' ' + Math.round(num(sc[x.key], 0)) }).join(' / ') + '。'
+          }
+          let tips = adviceFor(s.report)
+          if (tips.length) parts += '最该补的是' + tips.map(function (t) { return t.label + '（' + t.score + '）' }).join('与') + '。'
+          return parts
+        }
+      },
+      {
+        key: 'interview-trend',
+        label: '复试模拟舱成绩走势',
+        run: function (ctx) {
+          let list = sessionsGet(ctx).filter(function (s) { return s.total != null })
+          if (!list.length) return '复试模拟舱还没有成型的走势（至少要一场出分）。'
+          let st = statsOf(list)
+          let recent = list.slice(0, 3).map(function (s) { return Math.round(num(s.total, 0)) })
+          let out = '复试模拟舱练了 ' + st.n + ' 场出分，平均 ' + (st.avg == null ? '—' : st.avg) + ' 分'
+          if (st.best && st.best.total != null) out += '，最好 ' + Math.round(num(st.best.total, 0)) + ' 分'
+          out += '。最近 ' + recent.length + ' 场（新→旧）：' + recent.join(' / ') + '。'
+          if (recent.length >= 2 && recent[0] > recent[recent.length - 1]) out += '趋势是往上走的。'
+          else if (recent.length >= 2 && recent[0] < recent[recent.length - 1]) out += '最近在往下掉，建议回看编年史里那一场。'
+          return out
+        }
+      },
+      {
+        key: 'interview-weak',
+        label: '复试模拟舱跨场最弱维度',
+        run: function (ctx) {
+          let list = sessionsGet(ctx)
+          if (!list.length) return '复试模拟舱还没有记录，练一场后我才能判断哪一维最弱。'
+          /* 跨场聚合：只统计**真给了分**的维度（null 表示这轮没问到，算 0 会把建议指错方向） */
+          let sum = {}, cnt = {}
+          list.forEach(function (s) {
+            let sc = (s.report && s.report.scores) || {}
+            DIMS.forEach(function (x) {
+              let v = sc[x.key]
+              if (v == null || !isFinite(Number(v))) return
+              sum[x.key] = (sum[x.key] || 0) + Number(v)
+              cnt[x.key] = (cnt[x.key] || 0) + 1
+            })
+          })
+          let rows = DIMS.filter(function (x) { return cnt[x.key] }).map(function (x) {
+            return { key: x.key, label: x.label, avg: Math.round(sum[x.key] / cnt[x.key]), n: cnt[x.key] }
+          })
+          if (!rows.length) return '复试模拟舱的 ' + list.length + ' 场记录里还没有四维分数（可能是评分没走完）。'
+          rows.sort(function (a, b) { return a.avg - b.avg })
+          let worst = rows[0]
+          let out = '按 ' + list.length + ' 场记录聚合，最弱的一维是「' + worst.label + '」平均 ' + worst.avg
+            + '（' + worst.n + ' 场有分）'
+          if (rows.length > 1) out += '，其次是「' + rows[1].label + '」' + rows[1].avg
+          out += '。'
+          if (ADVICE[worst.key]) out += '练法：' + ADVICE[worst.key]
+          return out
+        }
+      }
+    ],
     init: function (ctx) {
       HOST_CTX = ctx
       /* 声明自己的 AI 场景：注册后才吃得到站内「设置 → AI 思考模式」的逐场景档位、
