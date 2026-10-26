@@ -266,6 +266,13 @@
         // force=true（?boot=diag）时不因"已挂载"而退出：正常设备也能唤出面板做**对照基线**
         // （例如安卓正常、鸿蒙异常时，两张截图一比就知道差在内核哪一项）。
         if ((G.booted && !force) || document.getElementById('boot-diag')) return;
+        /* 【2026-10-26 修】看门狗必须能承受"文档已经没了"：
+         * 15s 定时器可能在页面已跳转/被销毁（或极慢设备上 body 尚未可用）后触发，
+         * 那时 `document.body` 是 **null**，`document.body.appendChild(d)` 直接抛
+         * `Cannot read properties of null`。实测线上偶发（6 次加载里 1 次），
+         * 控制台一条红字，而页面其实好好的 —— 属于纯噪声，还会掩盖真问题。
+         * 看门狗的职责是"帮用户诊断"，它自己绝不能抛异常。 */
+        if (!document.body) return;
         G.forced = !!force;
         var d = document.createElement('div');
         d.id = 'boot-diag';
@@ -422,7 +429,7 @@
       /* 时间轴：6s 若无起色 → 预探测入口脚本；9s → 自愈一次；15s → 诊断面板 */
       setTimeout(function () { if (!done) probeEntry(); }, 6000);
       setTimeout(function () { if (!done) healOnce(); }, 9000);
-      setTimeout(function () { if (!done) showPanel(); }, 15000);
+      setTimeout(function () { if (!done && document.body) showPanel(); }, 15000);
 
       // 首屏渲染后立刻启动（DOM 就绪即可，无需等任何资源）
       var start = function () {
