@@ -25,11 +25,14 @@
   'use strict'
 
   let TOOL_ID = 'formula-vault'
-  let VERSION = '1.0'
+  let VERSION = '1.3'
   /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
    * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
    * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
   let AI_CTX_MNEMONIC = 'plugin.formula-vault.mnemonic'
+  /* 【v1.3】深度解读（记忆法/推导/场景/注意事项，入卡持久化）与口语制卡通道 */
+  let AI_CTX_DEEP = 'plugin.formula-vault.deep'
+  let AI_CTX_TEXTCARD = 'plugin.formula-vault.textcard'
 
   /* ══════════════ 0. 设计决策（改这个文件前先读这里） ══════════════
    *
@@ -80,118 +83,24 @@
   }
   function clamp(v, a, b) { v = Number(v); if (!isFinite(v)) v = a; return Math.max(a, Math.min(b, v)) }
   function uid() { return 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
-  /* ---- KaTeX 渲染层 ----
-   * 用户要求不走站内自研 tex 渲染器，一律用 KaTeX。资产在 public/vendor/katex
-   * （与站内 docRender 同版本 0.16.47），运行时按需注入：
-   *   · 只注入一次（katexLoad 缓存 Promise，重复调用返回同一个）
-   *   · 站点里已有 katex（别人注入过）就直接复用，不重复下 272KB
-   *   · 加载失败 → 纯文本兜底，页面照常能用（绝不白屏）
-   * 渲染参数：throwOnError:false（破损 LaTeX 不炸页面，由 CSS 把错误色压成中性）、
-   *           strict:false（宽容未知命令）、trust:false（禁 \href 等，防 XSS）。
-   *
-   * **用 renderToString 不是 render**：render(tex, baseNode, options) 的第二个参数是
-   * **目标 DOM 节点**，把 options 传进去会得到 "t.appendChild is not a function"
-   * （真机抓到：公式整排静默变纯文本兜底，页面不报错）。 */
-  /* KaTeX 资产在**插件自己的目录**下（public/plugins/vendor/formula-vault/）：
-   * 卸载这个插件 = 删掉它自己的 vendor 目录，不会在站点根留死文件。
-   * 不用 CDN：国内访问 jsdelivr 不稳，公式是核心功能不能赌网络。 */
-  const KATEX_BASE = 'plugins/vendor/formula-vault'
-  let katexLoad = null
-  let katexRepaintHooks = []
-
-  /** 是否跑在 jsdom（vitest）里：那里**不会执行外部 script**，
-   *  注入 + 轮询纯属白等 —— 全量测试时每个用例等满 3s，能把市场重放用例拖到 25s+（实测）。
-   *  真机 Chromium 的 UA 不含 jsdom，正常走加载。 */
-  function isHeadlessDom() {
-    try { return /jsdom/i.test(String((window.navigator && window.navigator.userAgent) || '')) } catch (e) { return false }
-  }
-
-  function loadKatex() {
-    if (window.katex && typeof window.katex.renderToString === 'function') return Promise.resolve(window.katex)
-    if (katexLoad) return katexLoad
-    if (isHeadlessDom()) {
-      /* 直接失败退纯文本兜底，不占任何等待时间 */
-      return Promise.reject(new Error('jsdom 不执行外部脚本，跳过 KaTeX 加载'))
-    }
-    katexLoad = new Promise(function (resolve, reject) {
-      let done = false
-      function finish(ok) {
-        if (done) return
-        done = true
-        if (ok && window.katex && typeof window.katex.renderToString === 'function') resolve(window.katex)
-        else { katexLoad = null; reject(new Error('katex load failed')) }
-      }
-      /* CSS 只注入一次（link[data-fv-katex] 做幂等标记） */
-      if (!document.querySelector('link[data-fv-katex]')) {
-        let link = document.createElement('link')
-        link.rel = 'stylesheet'
-        link.href = KATEX_BASE + '/katex.min.css'
-        link.setAttribute('data-fv-katex', '1')
-        document.head.appendChild(link)
-      }
-      if (document.querySelector('script[data-fv-katex]')) {
-        /* script 在（可能是别人刚注入、还没执行完）→ 轮询等 window.katex。
-         * 上限 3s：jsdom/无脚本执行环境里 script 永远不 onload，
-         * 等满 8s 会让批量重放测试白等 8s×N（真机抓到的性能坑）。 */
-        let t0 = Date.now()
-        let poll = setInterval(function () {
-          if (window.katex && typeof window.katex.renderToString === 'function') { clearInterval(poll); finish(true) }
-          else if (Date.now() - t0 > 3000) { clearInterval(poll); finish(false) }
-        }, 120)
-        return
-      }
-      let sc = document.createElement('script')
-      sc.src = KATEX_BASE + '/katex.min.js'
-      sc.async = true
-      sc.setAttribute('data-fv-katex', '1')
-      sc.onload = function () { finish(true) }
-      sc.onerror = function () { finish(false) }
-      document.head.appendChild(sc)
-    }).catch(function (e) {
-      /* 失败不缓存：下次 paint 还会再试一次（可能是网络抖动） */
-      katexLoad = null
-      throw e
-    })
-    return katexLoad
-  }
-
-  /** 剥掉 $ / $$ 定界符（KaTeX 只吃裸 TeX，见下方注释） */
-  function stripDelims(s) {
-    let t = String(s == null ? '' : s).trim()
-    if (t.length > 4 && t.slice(0, 2) === '$$' && t.slice(-2) === '$$') return t.slice(2, -2)
-    if (t.length > 2 && t[0] === '$' && t[t.length - 1] === '$') return t.slice(1, -1)
-    return t
-  }
-  /** 渲染一段 LaTeX。已加载 → 同步出 HTML；未加载 → 纯文本兜底 + 后台加载完重绘
-   *
-   * **定界符必须自己剥**：KaTeX.render 的输入是裸 TeX，传 `$x$` 会报
-   * "Can't use function '$' in math mode"（真机抓到：公式整排变成纯文本兜底，
-   * 页面不报错、只是"公式没渲染"）。站内自研 tex.js 会自己吃定界符，换引擎就得自己管。 */
+  /* ---- 公式输出层（v1.2：交给站点自动渲染管线） ----
+   * 【2026-10-29 按用户指示重构】插件不再自带 KaTeX 渲染层（旧版：vendor 目录注入
+   * script + renderToString + 纯文本兜底 + 就绪重绘钩子，约 140 行 + 596KB vendor）。
+   * 站点的 core/texauto.ts 是全局 MutationObserver：任何地方往 DOM 写 `$…$` / `$$…$$`
+   * 文本，都会自动走站内统一管线渲染成 KaTeX（main.ts 全局引 katex.min.css，
+   * tex.ts 懒加载 katex JS，容错 + 印刷保真 + LRU 缓存都是站点的事）。
+   * 所以这里只做一件事：**把公式按标准格式包好吐出去**——
+   *   · 库内数据约定已是 `$…$` 包裹（种子/自建/AI 输出同口径），原样转义输出即可；
+   *   · 漏包的裸 TeX（手滑没写 $ 的自建条目）整串补上 $；display 槽的单段升 $$ 走行间；
+   *   · 文本段（，；"其中"）不动 —— texauto 自己会只认 $ 对。
+   * 旧版自绘管线在混排段（`$…$，$…$`）上必炸（中段裸 $ 喂给 KaTeX 报
+   * "Can't use function '$' in math mode"），整条退化成纯文本 —— 删了它，bug 一并消失。 */
   function katexTex(s, display) {
     let src = String(s == null ? '' : s).trim()
-    let wantDisplay = !!display
-    if (src.length > 4 && src.slice(0, 2) === '$$' && src.slice(-2) === '$$') { src = src.slice(2, -2); wantDisplay = true }
-    else if (src.length > 2 && src[0] === '$' && src[src.length - 1] === '$') { src = src.slice(1, -1) }
-    if (window.katex && typeof window.katex.renderToString === 'function') {
-      try {
-        return '<span class="fv-katex">' + window.katex.renderToString(src, {
-          displayMode: wantDisplay,
-          throwOnError: false,
-          strict: false,
-          trust: false
-        }) + '</span>'
-      } catch (e) { /* 极端情况也别炸 */ }
-    }
-    if (katexLoad) {
-      katexLoad.then(function () {
-        for (let i = 0; i < katexRepaintHooks.length; i++) katexRepaintHooks[i]()
-      }).catch(function () { /* 兜底文本已经显示了 */ })
-    } else {
-      loadKatex().then(function () {
-        for (let i = 0; i < katexRepaintHooks.length; i++) katexRepaintHooks[i]()
-      }).catch(function () { /* 忽略：保持纯文本 */ })
-    }
-    return '<code class="fv-fallback">' + esc(String(s == null ? '' : s)) + '</code>'
+    if (!src) return ''
+    if (src.indexOf('$') < 0) src = (display ? '$$' : '$') + src + (display ? '$$' : '$')
+    else if (display && /^\$[^$\n]+\$$/.test(src)) src = '$$' + src.slice(1, -1) + '$$'
+    return '<span class="fv-tex">' + esc(src) + '</span>'
   }
 
   /* ══════════════ 2. 科目与章节 ══════════════ */
@@ -525,7 +434,12 @@
 
   /* ══════════════ 6. AI 面 ══════════════ */
   function aiOk(ctx) {
-    try { return !!(ctx && ctx.ai && typeof ctx.ai.json === 'function') } catch (e) { return false }
+    /* 【v1.3 修】旧版只查 json 函数在不在 —— 未配置 AI 时函数也在（调用才 reject），
+     * 用户点了「深度解读」会先看到"正在解读…"再等一个 reject 才收到"没配 AI"，
+     * 白等一轮。has() 是站内契约（AI 是否可用），先问它。 */
+    try {
+      return !!(ctx && ctx.ai && typeof ctx.ai.json === 'function' && (typeof ctx.ai.has !== 'function' || ctx.ai.has()))
+    } catch (e) { return false }
   }
   /** 让 AI 给一条公式编记忆线索（严格 JSON，失败返回 null —— 绝不编）
    *  三条防幻觉要求：① 只输出 JSON ② 联想必须挂在公式的**真实结构**上
@@ -545,6 +459,100 @@
       if (!m && !d) return null
       return { mnemonic: m, derivation: d }
     }).catch(function () { return null })
+  }
+
+  /* ══════════════ 6.5 v1.3 深度解读与 AI 制卡 ══════════════
+   * 设计：深度解读**不覆盖** p/w —— 用户手写的记忆要点/易错点永远优先；
+   * AI 内容存进卡片的 d 字段（seed 与 custom 同一形状，随 custom 云同步），
+   * 卡面按需展开（点「AI 深度解读」才拉），拉过之后常驻。
+   * 防幻觉三件套照旧：只回 JSON、拿不准留空、禁止编造公式里没有的性质。 */
+  /** 深度解读：记忆法（多条）/ 推导过程（分步）/ 使用场景 / 注意事项 */
+  function aiDeep(ctx, f) {
+    if (!aiOk(ctx)) return Promise.resolve(null)
+    let sys = '你是考研数学助教，为给定公式写一份"背得动、用得出"的深度解读。只输出 JSON：'
+      + '{"memorize":"记忆法：拆结构口诀+联想锚点，可多条用 \\n 分行，≤160字，必须挂在公式真实结构上",'
+      + '"derive":"推导过程：从定义/已知定理到该公式的关键步骤，用 \\n 分行，≤200字，只写考研范围内的推导",'
+      + '"scene":"使用场景：什么题型/什么信号词出现时该想到它，≤80字",'
+      + '"caution":"注意事项：适用条件、边界、最易踩的坑，≤100字"}。'
+      + '公式一律用 $…$ 包裹。不要解释、不要多余字段；没有把握的字段留空字符串，绝不编造。'
+    let usr = '公式名：' + f.n + '\n科目：' + subjectLabel(f.s) + '\n章节：' + f.c
+      + '\n公式：' + f.t + '\n已有记忆要点：' + (f.p || '') + '\n已有易错点：' + (f.w || '')
+    return ctx.ai.json(sys, usr, { temperature: 0.4, ctx: AI_CTX_DEEP, maxTokens: 1200 }).then(function (o) {
+      if (!o || typeof o !== 'object') return null
+      let d = {
+        memorize: String(o.memorize || '').slice(0, 400),
+        derive: String(o.derive || '').slice(0, 500),
+        scene: String(o.scene || '').slice(0, 200),
+        caution: String(o.caution || '').slice(0, 250)
+      }
+      if (!d.memorize && !d.derive && !d.scene && !d.caution) return null
+      return d
+    }).catch(function () { return null })
+  }
+  /** 口语描述 → 完整公式卡（含深度解读一次到位）；返回 null 表示 AI 没产出可用卡 */
+  function aiTextCard(ctx, text) {
+    if (!aiOk(ctx)) return Promise.resolve(null)
+    let sys = '你是考研数学助教。用户会用口语描述一个公式/定理（可能不完整、可能带错字）。'
+      + '你要：① 认出它是哪个公式 ② 补全成规范的考研级公式卡。只输出 JSON：'
+      + '{"name":"公式名（≤20字）","subject":"calc|linalg|prob 三选一（判不了就 calc）",'
+      + '"chapter":"所属章节名（如：中值定理、二次型）","tex":"公式本体，LaTeX 且用 $…$ 包裹，多段用 $…$，$…$ 混排",'
+      + '"point":"一句话记忆要点（≤60字）","trap":"一句话易错点（≤60字）",'
+      + '"memorize":"记忆法（≤120字）","derive":"推导思路（≤150字）","scene":"使用场景（≤60字）","caution":"注意事项（≤80字）"}。'
+      + '认不出来的公式就把 name/tex 留空，绝不硬编一个。不要解释、不要多余字段。'
+    return ctx.ai.json(sys, text, { temperature: 0.3, ctx: AI_CTX_TEXTCARD, maxTokens: 1400 }).then(function (o) {
+      if (!o || typeof o !== 'object') return null
+      let name = String(o.name || '').trim().slice(0, 40)
+      let tex = String(o.tex || '').trim().slice(0, 500)
+      if (!name || !tex) return null
+      if (tex.indexOf('$') < 0) tex = '$' + tex + '$'
+      let s = String(o.subject || 'calc')
+      return {
+        n: name, s: (s === 'linalg' || s === 'prob') ? s : 'calc',
+        c: String(o.chapter || 'AI 收录').trim().slice(0, 24) || 'AI 收录',
+        t: tex, p: String(o.point || '').slice(0, 120), w: String(o.trap || '').slice(0, 120),
+        d: { memorize: String(o.memorize || '').slice(0, 400), derive: String(o.derive || '').slice(0, 500), scene: String(o.scene || '').slice(0, 200), caution: String(o.caution || '').slice(0, 250) }
+      }
+    }).catch(function () { return null })
+  }
+  /** 拍照/截图 → 提取公式卡（多模态：opts.image 走站内统一图片通道） */
+  function aiPhotoCards(ctx, dataUrl) {
+    if (!aiOk(ctx)) return Promise.resolve(null)
+    let sys = '你是考研数学试卷识别员。图里可能有一个或多个数学公式（印刷体或手写）。'
+      + '逐个识别并补全成考研级公式卡。只输出 JSON：{"cards":[{"name":"公式名","subject":"calc|linalg|prob",'
+      + '"chapter":"章节名","tex":"LaTeX 且 $…$ 包裹","point":"记忆要点","trap":"易错点"}]}。'
+      + '认不出的整条跳过；图里没有任何数学公式就输出 {"cards":[]}。不要解释、不要多余字段。'
+    return ctx.ai.json(sys, '识别这张图里的数学公式，按契约输出 JSON。',
+      { temperature: 0.2, ctx: AI_CTX_MNEMONIC, image: dataUrl, maxTokens: 1600 }).then(function (o) {
+      let arr = o && Array.isArray(o.cards) ? o.cards : []
+      let out = []
+      arr.forEach(function (c) {
+        if (!c || typeof c !== 'object') return
+        let name = String(c.name || '').trim().slice(0, 40)
+        let tex = String(c.tex || '').trim().slice(0, 500)
+        if (!name || !tex) return
+        if (tex.indexOf('$') < 0) tex = '$' + tex + '$'
+        let s = String(c.subject || 'calc')
+        out.push({
+          n: name, s: (s === 'linalg' || s === 'prob') ? s : 'calc',
+          c: String(c.chapter || '拍照收录').trim().slice(0, 24) || '拍照收录',
+          t: tex, p: String(c.point || '').slice(0, 120), w: String(c.trap || '').slice(0, 120), d: null
+        })
+      })
+      return out.length ? out : null
+    }).catch(function () { return null })
+  }
+  /** 把一张卡存进 custom（去重：同名同公式视为已有） */
+  function addCustomCard(ctx, card) {
+    let arr = loadCustom(ctx)
+    let norm = function (s) { return String(s || '').replace(/\s+/g, '').toLowerCase() }
+    for (let i = 0; i < arr.length; i++) {
+      if (norm(arr[i].n) === norm(card.n) && norm(arr[i].t) === norm(card.t)) return { dup: true }
+    }
+    card.id = uid()
+    card.created = Date.now()
+    arr.unshift(card)
+    saveCustom(ctx, arr)
+    return { ok: true, card: card }
   }
 
   /* ---------- 共享层：宿主 css 字段（硬上限 20000 字符）----------
@@ -597,7 +605,10 @@
     '.fv-btn.sm{height:24px;font-size:12px}',
     '.fv-btn.sm.on{color:var(--fv-acc);border-bottom-color:var(--fv-acc)}',
     '.fv-stage{position:relative;z-index:1;width:100%;max-width:var(--fv-w);margin:0 auto;display:flex;flex-direction:column;padding:4px 6px 140px}',
-    '.fv-card{border:0;border-top:1px solid var(--fv-line);border-radius:0;background:transparent;box-shadow:none;padding:18px 0 6px;animation:fvRise .45s cubic-bezier(.22,1,.36,1) both}',
+    '.fv-card{border:0;border-top:1px solid var(--fv-line);border-radius:0;background:transparent;box-shadow:none;padding:18px 0 6px}',
+    /* 【v1.6 零闪烁】进场动画只属于视图切换那一刻（stage 带 .fv-enter）：
+     * 写在基类上会让每次 paint() 重建都重放 —— 搜一个字整页闪一次。 */
+    '.fv-enter .fv-card{animation:fvRise .45s cubic-bezier(.22,1,.36,1) both}',
     '.fv-card:first-child{border-top:0;padding-top:8px}',
     '.fv-card:nth-child(2){animation-delay:45ms}',
     '.fv-card:nth-child(3){animation-delay:85ms}',
@@ -633,7 +644,8 @@
     '.fv-chap.open .fv-chap-arrow{transform:rotate(90deg)}',
     '.fv-chap-h:hover b{color:var(--fv-acc)}',
     '.fv-fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:0 26px;padding:4px 0 14px}',
-    '.fv-fcard{padding:13px 0;border-top:1px dashed var(--fv-line);animation:fvFade .4s cubic-bezier(.22,1,.36,1) both}',
+    '.fv-fcard{padding:13px 0;border-top:1px dashed var(--fv-line)}',
+    '.fv-enter .fv-fcard{animation:fvFade .4s cubic-bezier(.22,1,.36,1) both}',
     '.fv-fcard:first-child{border-top:0}',
     '@keyframes fvFade{from{opacity:0}to{opacity:1}}',
     '.fv-fcard.sel{background:linear-gradient(90deg,color-mix(in srgb,var(--fv-acc) 7%,transparent),transparent 70%)}',
@@ -644,12 +656,9 @@
     '.fv-fstars i{width:5px;height:5px;border-radius:50%;background:var(--fv-line2)}',
     '.fv-fstars i.on{background:var(--fv-acc)}',
     '@keyframes fvReveal{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}',
-    '.fv-fallback{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--fv-sub)}',
-    /* KaTeX 容器：破损 LaTeX 的错误色压成中性（throwOnError:false 时它会渲染红字），
-     * 行间公式允许横向滚动（长公式在小屏上不该把卡片撑破） */
-    '.fv-katex{display:inline-block;max-width:100%}',
-    '.fv-katex .katex-error{color:var(--fv-sub)}',
-    '.fv-katex .katex-display{margin:0;overflow-x:auto;overflow-y:hidden;padding:1px 0}',
+    /* 【v1.2】公式渲染交站点 texauto：.fv-tex 只是输出容器，KaTeX 样式由站点全局供给 */
+    '.fv-tex{display:inline-block;max-width:100%}',
+    '.fv-tex .katex-display{margin:0;overflow-x:auto;overflow-y:hidden;padding:1px 0}',
     '.fv-fp,.fv-fw{font-size:12px;line-height:1.8;color:var(--fv-sub);display:flex;gap:8px}',
     '.fv-fp i,.fv-fw i{font-style:normal;flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.08em;padding-top:2px}',
     '.fv-fp i{color:var(--fv-acc)}',
@@ -657,7 +666,14 @@
     '.fv-fcard-f{display:flex;align-items:center;gap:14px;margin-top:9px;flex-wrap:wrap}',
     '.fv-fnext{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--fv-sub);letter-spacing:.06em}',
     '.fv-fnext .hot{color:#b91c1c}',
-    '.fv-ainote{margin-top:10px;padding:10px 0 10px 14px;border-left:2px solid var(--fv-acc);font-size:12.5px;line-height:1.85;animation:fvFade .35s both}',
+    '.fv-ainote{margin-top:10px;padding:10px 0 10px 14px;border-left:2px solid var(--fv-acc);font-size:12.5px;line-height:1.85}',
+    /* 【v1.3】深度解读面板：四行结构（记忆法/推导/场景/注意），讲义批注式左边线 */
+    '.fv-deep{margin-top:10px;border:1px solid var(--fv-line);border-left:3px solid var(--fv-acc);border-radius:10px;padding:10px 13px;background:color-mix(in srgb,var(--fv-acc) 3%,transparent)}',
+    '.fv-drow{display:flex;gap:10px;font-size:12.5px;line-height:1.85;color:var(--fv-ink);margin-bottom:8px}',
+    '.fv-drow:last-child{margin-bottom:0}',
+    '.fv-drow i{font-style:normal;flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.1em;color:var(--fv-acc);background:color-mix(in srgb,var(--fv-acc) 8%,transparent);border-radius:6px;padding:2px 7px;height:fit-content}',
+    '.fv-drow div{white-space:pre-wrap;word-break:break-word}',
+    '.fv-enter .fv-ainote{animation:fvFade .35s both}',
     '.fv-ainote b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:9.5px;letter-spacing:.14em;color:var(--fv-acc);text-transform:uppercase;margin-top:6px}',
     '.fv-ainote b:first-child{margin-top:0}',
     '.fv-drill-intro{display:flex;gap:34px;flex-wrap:wrap;padding:6px 0 2px}',
@@ -713,7 +729,6 @@
 
   /* ---------- 页面专属层：挂载时注入 <style>、destroy 移除 ---------- */
   let CSS_EXTRA = [
-    '.fv-fallback{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--fv-sub)}',
     '@media print{.fv-top,.fv-dock{display:none}.fv-stage{padding:0}}',
     '.fv-ft{padding:4px 0 6px;overflow-x:auto;font-size:14.5px;line-height:2}',
     '.fv-ft.big{font-size:18px;padding:8px 0;animation:fvReveal .5s cubic-bezier(.22,1,.36,1) both}',
@@ -752,7 +767,8 @@
     '.fv-ov-cell{padding:9px 0;border-bottom:1px solid var(--fv-line)}',
     '.fv-ov-cell b{display:block;font-family:Georgia,serif;font-size:26px;line-height:1.2;font-variant-numeric:tabular-nums}',
     '.fv-ov-cell span{font-size:10.5px;color:var(--fv-sub);letter-spacing:.06em}',
-    '.fv-ring{width:120px;height:120px;animation:fvGrow .6s cubic-bezier(.22,1,.36,1) both}',
+    '.fv-ring{width:120px;height:120px}',
+    '.fv-enter .fv-ring{animation:fvGrow .6s cubic-bezier(.22,1,.36,1) both}',
     '.fv-ring-t{font:700 20px/1 Georgia,serif;fill:var(--fv-ink)}',
     '.fv-ring-l{font:400 9px/1 ui-monospace,Consolas,monospace;fill:var(--fv-sub);letter-spacing:.1em}',
     '.fv-dist{display:flex;flex-direction:column}',
@@ -792,7 +808,8 @@
     '.fv-about p b{color:var(--fv-ink)}',
     /* 易混对比：两条并排才看得出差别；VS 徽标浮在中间 */
     '.fv-confuse{padding-bottom:10px}',
-    '.fv-crow{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:14px 0 12px;border-top:1px dashed var(--fv-line);animation:fvFade .4s both}',
+    '.fv-crow{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:14px 0 12px;border-top:1px dashed var(--fv-line)}',
+    '.fv-enter .fv-crow{animation:fvFade .4s both}',
     '.fv-crow:first-of-type{border-top:0}',
     '.fv-vs{position:absolute;left:50%;top:16px;transform:translateX(-50%);z-index:1;width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:var(--fv-bg);border:1px solid var(--fv-line2);font:700 9.5px/1 ui-monospace,Consolas,monospace;letter-spacing:.02em;color:var(--fv-sub)}',
     '.fv-cside{display:flex;flex-direction:column;gap:3px;min-width:0}',
@@ -918,6 +935,9 @@
     }
     out.push('<div class="fv-more">共 ' + filtered.length + ' 条公式（含自建 ' + S.customCount + ' 条）。'
       + '<button class="fv-btn sm" data-act="newf" style="margin-left:10px">+ 自建公式</button>'
+      /* 【v1.3】AI 制卡双入口：口语描述 → 完整卡；拍照/截图 → 识别提取 */
+      + '<button class="fv-btn sm" data-act="ai-text">✨ AI 口语制卡</button>'
+      + '<button class="fv-btn sm" data-act="ai-photo">📷 拍照识公式</button>'
       + '数据存在浏览器本地，可随时导出备份。</div>')
     return out.join('')
   }
@@ -942,12 +962,26 @@
       + '<button class="fv-btn sm" data-act="drill-one" data-id="' + esc(f.id) + '">自测这条</button>'
       + '<button class="fv-btn sm' + (r && r.fav ? ' on' : '') + '" data-act="fav" data-id="' + esc(f.id) + '">' + (r && r.fav ? '已收藏' : '收藏') + '</button>'
       + '<button class="fv-btn sm ghost" data-act="ai-mnem" data-id="' + esc(f.id) + '">AI 助记</button>'
+      + (f.d ? '<button class="fv-btn sm ghost" data-act="deep" data-id="' + esc(f.id) + '">' + (S.deepOpen === f.id ? '收起解读' : '深度解读') + '</button>'
+        : '<button class="fv-btn sm ghost" data-act="deep" data-id="' + esc(f.id) + '">AI 深度解读</button>')
       + '</div>'
+      + (f.d && S.deepOpen === f.id ? '<div class="fv-deep">'
+        + (function () {
+          let rows = []
+          if (f.d.memorize) rows.push('<div class="fv-drow"><i>记忆法</i><div>' + katexTex(f.d.memorize) + '</div></div>')
+          if (f.d.derive) rows.push('<div class="fv-drow"><i>推导</i><div>' + katexTex(f.d.derive) + '</div></div>')
+          if (f.d.scene) rows.push('<div class="fv-drow"><i>场景</i><div>' + katexTex(f.d.scene) + '</div></div>')
+          if (f.d.caution) rows.push('<div class="fv-drow"><i>注意</i><div>' + katexTex(f.d.caution) + '</div></div>')
+          return rows.join('')
+        })()
+        + '</div>' : '')
       + ((S.aiNote && S.aiNote.id === f.id) || (S.aiNoteBatch && S.aiNoteBatch[f.id]) ? '<div class="fv-ainote">'
       + (function () {
         let n = (S.aiNote && S.aiNote.id === f.id) ? S.aiNote : (S.aiNoteBatch ? S.aiNoteBatch[f.id] : null)
         if (!n) return ''
-        return (n.mnemonic ? '<b>口诀</b>' + esc(n.mnemonic) : '') + (n.derivation ? '<b>线索</b>' + esc(n.derivation) : '')
+        /* 【2026-10-29】AI 口诀/线索也走 katexTex：latexNeed 契约下输出常带 $…$，
+         * 纯 esc 会把公式源码直接晾给用户；katexTex 按段渲染，文本段不受影响。 */
+        return (n.mnemonic ? '<b>口诀</b>' + katexTex(n.mnemonic) : '') + (n.derivation ? '<b>线索</b>' + katexTex(n.derivation) : '')
       })()
       + '</div>' : '')
       + '</article>'
@@ -1506,6 +1540,7 @@
       aiNote: null,
       aiNoteBatch: null,
       aiBusy: false,
+      deepOpen: '', deepBusy: false,
       customCount: loadCustom(ctx).length,
       tick: 0
     }
@@ -1544,6 +1579,14 @@
     let kpisEl = root.querySelector('[data-fv="kpis"]')
     let stage = root.querySelector('[data-fv="stage"]')
     let dockWrap = root.querySelector('[data-fv="dockwrap"]')
+    /* 【v1.6 零闪烁】进场动画只属于「新内容时刻」（切视图/开练/收卷）：
+     * 普通 paint()（搜索一个字、勾个选项）重建 DOM 但不再重放动画。 */
+    let enterT = 0
+    function markEnter() {
+      stage.classList.add('fv-enter')
+      if (enterT) clearTimeout(enterT)
+      enterT = setTimeout(function () { stage.classList.remove('fv-enter') }, 900)
+    }
 
     /* ---- dock：就地生成（视觉对齐站内 isleDock：玻璃胶囊 + 滑动指示器） ---- */
     let dockInd = null
@@ -1576,6 +1619,7 @@
       let items = dockWrap.querySelectorAll('.fv-dock-item')
       for (let i = 0; i < items.length; i++) items[i].classList.toggle('on', items[i].getAttribute('data-view') === v)
       moveInd()
+      markEnter()
       paint()
     }
 
@@ -1718,6 +1762,7 @@
       S.run = { queue: queue, idx: 0, t0: Date.now(), ms: 0, revealed: false, draft: '', draftOpen: false, mode: onlyId ? 'one' : mode }
       S.view = 'drill'
       syncDock()
+      markEnter()
       paint()
       startTick()
     }
@@ -1806,6 +1851,7 @@
       stopTick()
       S.view = 'stats'
       syncDock()
+      markEnter()
       paint()
       let n = run ? run.queue.length : 0
       toast('本轮完成 ' + n + ' 条 —— 统计已更新', 'ok', 2200)
@@ -1849,6 +1895,31 @@
         return
       }
       if (act === 'newf') { openNewFormula(ctx, reload); return }
+      /* 【v1.3】深度解读：已存 → 就地展开/收起；未存 → 拉 AI、写回卡片 d 字段持久化 */
+      if (act === 'deep') {
+        let f = findF(S.all, id)
+        if (!f) return
+        if (f.d) { S.deepOpen = S.deepOpen === id ? '' : id; paint(); return }
+        if (!aiOk(ctx)) { toast('未配置 AI，做不了深度解读', 'warn'); return }
+        if (S.deepBusy) { toast('AI 正在解读上一条', 'info'); return }
+        S.deepBusy = true
+        toast('AI 正在解读这条公式…', 'info', 1800)
+        aiDeep(ctx, f).then(function (d) {
+          S.deepBusy = false
+          if (!d) { toast('AI 没给出可用解读（可能拿不准），可重试或先看记忆要点', 'warn'); paint(); return }
+          f.d = d
+          /* 自建卡：S.all 与 custom 共享对象引用，改完整表落库即持久化；
+           * 种子卡：全站共享库不写脏，解读只活在本会话内存。 */
+          let arr = loadCustom(ctx)
+          if (arr.some(function (c) { return c.id === f.id })) saveCustom(ctx, arr)
+          S.deepOpen = id
+          paint()
+          toast(arr.some(function (c) { return c.id === f.id }) ? '解读已生成并保存' : '解读已生成（种子卡仅本次会话保留）', 'ok')
+        })
+        return
+      }
+      if (act === 'ai-text') { openAiTextCard(ctx, reload); return }
+      if (act === 'ai-photo') { openAiPhotoCard(ctx, reload); return }
       if (act === 'drill-quick') {
         let due = dueList(S.recs, S.today)
         startDrill(due.length ? 'due' : 'mixed')
@@ -1910,9 +1981,10 @@
             total++
             lines.push('### ' + f.n + '　*(' + subjectLabel(f.s) + ')*')
             lines.push('')
-            lines.push('```latex')
-            lines.push(String(f.t || '').replace(/^\$+|\$+$/g, '').trim())
-            lines.push('```')
+            /* 【2026-10-29】原样输出 `$…$` 包裹的公式体，不再剥定界符、不再套 ```latex 围栏
+             * （旧版只剥最外层一对 $，多段混排会被剥坏；围栏里的 $ 在 Obsidian 也不渲染）。
+             * 导出即站内标准：粘进任何吃 LaTeX 的笔记软件都能直接渲染。 */
+            lines.push(String(f.t || '').trim())
             lines.push('')
             if (f.p) lines.push('- 记忆：' + f.p)
             if (f.w) lines.push('- 易错：' + f.w)
@@ -2011,6 +2083,102 @@
           })
         }
       } catch (e) { toast('弹窗打开失败', 'error') }
+    }
+
+    /* ---- 【v1.3】AI 口语制卡：说人话 → AI 补全成完整公式卡（含深度解读）→ 预览可改 → 入库 ---- */
+    function openAiTextCard(ctx, done) {
+      if (!aiOk(ctx)) { toast('未配置 AI，口语制卡用不了 —— 可先用「+ 自建公式」手记', 'warn', 2800); return }
+      try {
+        if (ctx.Modal && typeof ctx.Modal.open === 'function') {
+          let m = ctx.Modal.open({
+            title: 'AI 口语制卡',
+            html: '<div class="fv-form">'
+              + '<label>描述你要记的公式（说人话即可）<b>*</b>'
+              + '<textarea class="fv-input" id="fv-at-t" rows="4" placeholder="例：罗尔定理，闭区间连续开区间可导，两端函数值相等，中间必有一点导数为零"></textarea></label>'
+              + '<div class="fv-quiet">AI 会认公式、补全 LaTeX、并写好记忆法/推导/场景/注意事项，生成一张完整卡片（$…$ 标准格式，站点自动渲染）。识别有误可在下一步直接改。</div>'
+              + '<div id="fv-at-out"></div>'
+              + '</div>',
+            actions: [
+              { label: '取消' },
+              {
+                label: '✨ 生成卡片', kind: 'btn-primary', onClick: function (close) {
+                  let text = modalVal('fv-at-t')
+                  if (text.length < 4) { toast('至少说一句（哪个公式、什么条件）', 'error'); return }
+                  let out = document.getElementById('fv-at-out')
+                  if (out) out.innerHTML = '<div class="fv-quiet">AI 正在识别并制卡…（约 10-30 秒）</div>'
+                  aiTextCard(ctx, text).then(function (card) {
+                    if (!card) { if (out) out.innerHTML = '<div class="fv-quiet" style="color:#b91c1c">AI 没认出这个公式 —— 换个说法再试，或用「+ 自建公式」手记。</div>'; return }
+                    if (out) {
+                      out.innerHTML = '<div class="fv-quiet">生成结果（确认无误再入库；想改名称/公式请关掉后用「自建公式」手记）：</div>'
+                        + '<div class="fv-fcard" style="margin-top:8px"><div class="fv-fcard-h"><span class="fv-fsubj">' + esc(subjectLabel(card.s)) + '</span><b>' + esc(card.n) + '</b></div>'
+                        + '<div class="fv-ft">' + katexTex(card.t, true) + '</div>'
+                        + (card.p ? '<div class="fv-fp"><i>记</i>' + katexTex(card.p) + '</div>' : '')
+                        + (card.w ? '<div class="fv-fw"><i>坑</i>' + katexTex(card.w) + '</div>' : '')
+                        + '<div class="fv-deep" style="margin-top:8px">'
+                        + (card.d.memorize ? '<div class="fv-drow"><i>记忆法</i><div>' + katexTex(card.d.memorize) + '</div></div>' : '')
+                        + (card.d.derive ? '<div class="fv-drow"><i>推导</i><div>' + katexTex(card.d.derive) + '</div></div>' : '')
+                        + (card.d.scene ? '<div class="fv-drow"><i>场景</i><div>' + katexTex(card.d.scene) + '</div></div>' : '')
+                        + (card.d.caution ? '<div class="fv-drow"><i>注意</i><div>' + katexTex(card.d.caution) + '</div></div>' : '')
+                        + '</div></div>'
+                    }
+                    let r = addCustomCard(ctx, card)
+                    if (r.dup) { toast('这张卡库里已经有了（同名同公式）', 'info'); return }
+                    S.customCount = loadCustom(ctx).length
+                    done()
+                    toast('已入库：' + card.n + '（含深度解读，去军火库找它点「自测这条」）', 'ok', 3200)
+                    close()
+                  })
+                }
+              }
+            ]
+          })
+          return m
+        }
+      } catch (e) { toast('弹窗打开失败', 'error') }
+    }
+
+    /* ---- 【v1.3】拍照识公式：选图/拍照 → 压缩 → 多模态提取 → 逐卡入库 ---- */
+    function openAiPhotoCard(ctx, done) {
+      if (!aiOk(ctx)) { toast('未配置 AI，拍照识别用不了', 'warn'); return }
+      let inp = document.createElement('input')
+      inp.type = 'file'
+      inp.accept = 'image/*'
+      inp.setAttribute('capture', 'environment')   /* 手机直连相机，桌面退化成选图 */
+      inp.style.display = 'none'
+      inp.onchange = function () {
+        let f = inp.files && inp.files[0]
+        inp.remove()
+        if (!f) return
+        let U = ctx.U || window.U || {}
+        let compress = typeof U.compressImage === 'function' ? U.compressImage : function (fl) {
+          return new Promise(function (res, rej) {
+            let r = new FileReader()
+            r.onload = function () { res(String(r.result || '')) }
+            r.onerror = function () { rej(new Error('读取失败')) }
+            r.readAsDataURL(fl)
+          })
+        }
+        toast('图片处理中…', 'info', 1500)
+        compress(f, { maxWidth: 1200, quality: 0.7 }).then(function (dataUrl) {
+          toast('AI 正在识别公式…（约 10-40 秒）', 'info', 2500)
+          return aiPhotoCards(ctx, dataUrl)
+        }).then(function (cards) {
+          if (!cards) { toast('没从图里认出公式 —— 拍清楚一点、或改用口语制卡', 'warn', 3000); return }
+          let added = 0, dup = 0
+          cards.forEach(function (c) {
+            let r = addCustomCard(ctx, c)
+            if (r.ok) added++; else dup++
+          })
+          S.customCount = loadCustom(ctx).length
+          done()
+          toast('拍照入库 ' + added + ' 条' + (dup ? '（' + dup + ' 条重复跳过）' : '') + '，点开「AI 深度解读」可补全记忆法', 'ok', 3400)
+        }).catch(function (e) {
+          inp.remove()
+          toast('识别失败：' + String((e && e.message) || e).slice(0, 40), 'error')
+        })
+      }
+      document.body.appendChild(inp)
+      inp.click()
     }
 
     /* ---- 数据进出 ---- */
@@ -2126,11 +2294,8 @@
 
     /* ---- 生命周期 ---- */
     buildDock()
+    markEnter()
     paint()
-    /* 首绘先给纯文本兜底；katex 就绪后重绘一次 → 首屏尽量是渲染后的公式。
-     * 用 paintKeepFocus：就绪那一刻用户可能正在搜索框打字，不能丢焦点。 */
-    katexRepaintHooks.push(paintKeepFocus)
-    loadKatex().then(function () { paintKeepFocus() }).catch(function () { /* 保持兜底 */ })
     window.addEventListener('scroll', onScroll, { passive: true })
     window.addEventListener('resize', moveInd)
     window.addEventListener('keydown', onKey)
@@ -2139,7 +2304,7 @@
 
     return function destroy() {
       stopTick()
-      katexRepaintHooks = katexRepaintHooks.filter(function (h) { return h !== paintKeepFocus })
+      if (enterT) clearTimeout(enterT)
       window.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', moveInd)
       window.removeEventListener('keydown', onKey)
@@ -2282,15 +2447,31 @@
             ctx.ai.registerCtx({
               ctx: AI_CTX_MNEMONIC,
               name: '公式助记生成',
-              desc: '为公式生成记忆钩子与易错提醒',
+              desc: '为公式生成记忆钩子与易错提醒；拍照识公式共用此通道（opts.image）',
               def: 'noThink',
+              latexNeed: true,
+              tools: 'none'
+            })
+            ctx.ai.registerCtx({
+              ctx: AI_CTX_DEEP,
+              name: '公式深度解读',
+              desc: '为一条公式生成记忆法/推导过程/使用场景/注意事项（入卡持久化）',
+              def: 'think',
+              latexNeed: true,
+              tools: 'none'
+            })
+            ctx.ai.registerCtx({
+              ctx: AI_CTX_TEXTCARD,
+              name: '口语公式制卡',
+              desc: '用户口语描述一个公式 → AI 认出并补全成含深度解读的完整卡片',
+              def: 'think',
               latexNeed: true,
               tools: 'none'
             })
           }
         } catch (e) { /* 宿主老版本没有 registerCtx：静态注册表兜底 */ }
         let n = SEED_CALC.length + SEED_LINALG.length + SEED_PROB.length
-        ctx.log('公式军火库 v' + VERSION + ' 就绪（' + n + ' 条公式，渲染=KaTeX' + (window.katex ? '' : '（加载中，先纯文本）') + '）')
+        ctx.log('公式军火库 v' + VERSION + ' 就绪（' + n + ' 条公式，渲染交站点 texauto）')
         /* 到期提示一次（不打扰：只在真的有到期时） */
         if (ctx.config('notify') !== false) {
           let due = dueList(loadRecs(ctx), todayKey())
@@ -2323,7 +2504,8 @@
       scheduleNext: scheduleNext, normRec: normRec, chaptersOf: chaptersOf,
       masteryStars: masteryStars, masteryColor: masteryColor, hintOf: hintOf,
       barsSvg: barsSvg, lastNDays: lastNDays, U_icon: U_icon, stripTex: stripTex,
-      katexTex: katexTex, loadKatex: loadKatex, KATEX_BASE: KATEX_BASE, stripDelims: stripDelims,
+      katexTex: katexTex,
+      aiDeep: aiDeep, aiTextCard: aiTextCard, aiPhotoCards: aiPhotoCards, addCustomCard: addCustomCard,
       TOOL_ID: TOOL_ID, CSS_LEN: CSS.length
     }
   }

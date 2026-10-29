@@ -26,7 +26,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.6.0'
+  let VERSION = '1.7.0'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -395,7 +395,10 @@
     '.ivs-body{flex:1 1 auto;width:100%;max-width:100%;margin:0 auto;box-sizing:border-box;'
       + 'padding:20px calc(var(--vp-x,16px) + 18px) 46px}',
     '.ivs-card{background:var(--iv-bg);border:1px solid var(--iv-line);border-radius:16px;padding:18px;margin-bottom:14px;'
-      + 'box-shadow:0 8px 24px rgba(20,35,70,.05);animation:ivs-rise .42s var(--iv-ease) both;animation-delay:calc(var(--i,0)*45ms)}',
+      + 'box-shadow:0 8px 24px rgba(20,35,70,.05)}',
+    /* 【v1.6 零闪烁】结构件进场只属于阶段切换那一刻（body 带 .ivs-enter）；
+     * paint() 每次全量重建，写在基类上 = 发一条消息整页气泡重放一遍。 */
+    '.ivs-enter .ivs-card{animation:ivs-rise .42s var(--iv-ease) both;animation-delay:calc(var(--i,0)*45ms)}',
     '@keyframes ivs-rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}',
     '.ivs-h{font-size:16px;font-weight:800;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
     '.ivs-h em{font-style:normal;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;'
@@ -455,7 +458,9 @@
     /* ── 面试间（聊天） ── */
     '.ivs-room{display:flex;flex-direction:column;gap:0;height:calc(100vh - 300px);min-height:380px}',
     '.ivs-msgs{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:6px 4px 12px;scroll-behavior:smooth}',
-    '.ivs-msg{display:flex;gap:10px;max-width:88%;animation:ivs-rise .34s var(--iv-ease) both}',
+    '.ivs-msg{display:flex;gap:10px;max-width:88%}',
+    /* 只有最新一条气泡入场（旧气泡随重绘保持静止，不再逐条重放） */
+    '.ivs-msg:last-child{animation:ivs-rise .34s var(--iv-ease) both}',
     '.ivs-msg.user{align-self:flex-end;flex-direction:row-reverse}',
     '.ivs-ava{width:36px;height:36px;border-radius:12px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;'
       + 'font-size:17px;color:var(--iv-on-acc);background:linear-gradient(135deg,var(--iv-acc),var(--iv-acc2));'
@@ -518,8 +523,8 @@
     '.ivs-pitcht{font-weight:800;font-size:13px;font-variant-numeric:tabular-nums;min-width:3em;text-align:right}',
     /* 编年史 */
     '.ivs-hist{display:flex;gap:11px;align-items:flex-start;padding:12px;border:1px solid var(--iv-line);border-radius:13px;'
-      + 'margin-bottom:10px;background:var(--iv-bg);cursor:pointer;transition:border-color .16s,box-shadow .16s,transform .16s}'
-      + ';animation:ivs-rise .36s var(--iv-ease) both;animation-delay:calc(var(--i,0)*40ms)}',
+      + 'margin-bottom:10px;background:var(--iv-bg);cursor:pointer;transition:border-color .16s,box-shadow .16s,transform .16s}',
+    '.ivs-enter .ivs-hist{animation:ivs-rise .36s var(--iv-ease) both;animation-delay:calc(var(--i,0)*40ms)}',
     '.ivs-hist:hover{border-color:color-mix(in oklab,var(--iv-acc) 45%,var(--iv-line));box-shadow:0 8px 20px rgba(20,35,70,.08);transform:translateY(-2px)}',
     '.ivs-hist .n{font-size:22px;font-weight:800;width:56px;flex:0 0 auto;text-align:center;border-radius:11px;'
       + 'background:var(--iv-soft);border:1px solid var(--iv-line);line-height:44px}',
@@ -666,12 +671,23 @@
         + '<div class="ivs-chips">' + heroChips(ctx, !!sess && !sess.report) + '</div>'
     }
 
+    /* 【v1.6 零闪烁】阶段（控制台/房间/成绩单/模拟面）切换才打 .ivs-enter 进场标记；
+     * 同阶段内的 paint()（发消息、改配置）重建 DOM 但不再重放结构动画。 */
+    let lastPhase = '', enterT = 0
     function paint() {
       paintHero()
+      let phase = pitch ? 'pitch' : (!sess ? 'console' : (sess.report ? 'report' : 'room'))
+      let entered = phase !== lastPhase
+      lastPhase = phase
       if (pitch) bodyEl.innerHTML = pitch.report ? pitchResultHtml() : pitchHtml()
       else if (!sess) bodyEl.innerHTML = consoleHtml()
       else if (sess.report) bodyEl.innerHTML = reportHtml()
       else bodyEl.innerHTML = roomHtml()
+      if (entered) {
+        bodyEl.classList.add('ivs-enter')
+        if (enterT) clearTimeout(enterT)
+        enterT = setTimeout(function () { bodyEl.classList.remove('ivs-enter') }, 1100)
+      }
       if (sess && !sess.report) bindCompose()
       /* 【2026-10-23 第 26 轮】成绩单的两处动效必须在**每次重绘**后触发：
        * 模板里 `data-count` 是真值、文本初值是 0，而原来没有任何地方调 countUp()
@@ -1199,6 +1215,7 @@
 
     return function destroy() {
       if (timer) clearInterval(timer)
+      if (enterT) clearTimeout(enterT)
       stopPitchTimer()
       unbind()
       offStuck()

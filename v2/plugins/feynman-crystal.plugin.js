@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.3'
+  let VERSION = '1.4'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -694,6 +694,13 @@
     let topEl = root.querySelector('[data-fx="top"]')
     let kpisEl = root.querySelector('[data-fx="kpis"]')
     let stageEl = root.querySelector('[data-fx="stage"]')
+    /* 【v1.6 零闪烁】视图进场标记：只有切视图/开练/首挂才放进场动画，普通 paint() 不再重放 */
+    let enterT = 0
+    function markEnter() {
+      stageEl.classList.add('fx-enter')
+      if (enterT) clearTimeout(enterT)
+      enterT = setTimeout(function () { stageEl.classList.remove('fx-enter') }, 900)
+    }
     let dockEl = root.querySelector('[data-fx="dock"]')
     let indEl = root.querySelector('[data-fx="ind"]')
     let dotEl = root.querySelector('[data-fx="dot"]')
@@ -760,6 +767,7 @@
       S.view = k
       ctx.data('view', k)
       stopTick()
+      markEnter()
       paint()
       try { window.scrollTo({ top: 0, behavior: 'smooth' }) } catch (e) { /* 旧内核忽略 */ }
     }
@@ -799,7 +807,7 @@
         err: ''
       }
       go('train')
-      if (S.view === 'train') paint()
+      if (S.view === 'train') { markEnter(); paint() }
       askChain(p)
     }
 
@@ -1073,6 +1081,7 @@
     window.addEventListener('keydown', onKey)
     window.addEventListener('resize', moveInd)
     onScroll()
+    markEnter()
     paint()
     /* 首帧字体到位后指示器可能偏窄，补一次（同 isleDock 的处理） */
     if (document.fonts && document.fonts.ready && document.fonts.ready.then) {
@@ -1086,6 +1095,7 @@
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('resize', moveInd)
       stopTick()
+      if (enterT) clearTimeout(enterT)
       if (raf) { cancelAnimationFrame(raf); raf = 0 }
       /* 页面专属样式随页面走：不清掉的话，切到别的模块还留着一张 fx-extra-style 死样式 */
       try {
@@ -2214,7 +2224,10 @@
     '.fx-icobtn.sm svg{width:13px;height:13px}',
     '.fx-icobtn.danger{color:#b91c1c}',
     '.fx-stage{position:relative;z-index:1;width:100%;max-width:var(--fx-w);margin:0 auto;display:flex;flex-direction:column;padding:4px 6px 140px}',
-    '.fx-card{border:0;border-top:1px solid var(--fx-line);border-radius:0;background:transparent;box-shadow:none;padding:18px 0 6px;animation:fxRise .45s cubic-bezier(.22,1,.36,1) both}',
+    '.fx-card{border:0;border-top:1px solid var(--fx-line);border-radius:0;background:transparent;box-shadow:none;padding:18px 0 6px}',
+    /* 【v1.6 零闪烁】进场动画只属于视图切换/开练那一刻（stage 带 .fx-enter）：
+     * 写在基类上会让每次 paint() 重建都重放 —— 点一下筛选整页闪一次。 */
+    '.fx-enter .fx-card{animation:fxRise .45s cubic-bezier(.22,1,.36,1) both}',
     '.fx-card:first-child{border-top:0;padding-top:8px}',
     '.fx-card:nth-child(2){animation-delay:45ms}',
     '.fx-card:nth-child(3){animation-delay:85ms}',
@@ -2603,13 +2616,13 @@
             ctx: AI_CTX_QUIZ,
             name: '费曼晶体 · 递进出题',
             desc: '按掌握度递进生成讲解题（一问一答、难度跟着 crystals 走，不编造教材外结论）',
-            def: 'noThink', latexNeed: false, tools: 'none', recall: false
+            def: 'noThink', latexNeed: true, tools: 'py', recall: false
           })
           ctx.ai.registerCtx({
             ctx: AI_CTX_JUDGE,
             name: '费曼晶体 · 三维判定',
             desc: '按准确性/连贯性/通俗性三维打分的讲解评审（必须给置信度，拿不准就交回自评）',
-            def: 'think', latexNeed: false, tools: 'none', recall: false
+            def: 'think', latexNeed: true, tools: 'none', recall: false
           })
         }
       } catch (e) { /* 注册失败不影响本地模板模式 */ }

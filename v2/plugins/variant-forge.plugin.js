@@ -71,7 +71,7 @@
    * （缺答案/答案非A-D/选项重复/题干过短或不自足/换皮）标记疑点；疑点题须走结构化复核清单
    * （题干自足/答案复算/干扰项成立三项勾选）才能成卷；档案加复核台账。
    * 版本必须涨：已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.2'
+  let VERSION = '1.3'
   let TOOL_ID = 'variant-forge'
   let AI_CTX_GEN = 'plugin.variant-forge.gen'
   let AI_CTX_AUDIT = 'plugin.variant-forge.audit'
@@ -486,7 +486,7 @@
       '',
       '【出题前必须逐题完成的四步自检（写进 JSON 之前过一遍）】',
       '① 条件充分性：只凭题干必须能推出唯一答案——缺条件的补上，冗余条件删掉；',
-      '② 答案正确性：亲手复算一遍，answer 不得为空；选择题答案必须是 A/B/C/D 中的一个字母，且与选项顺序一一对应；',
+      '② 答案正确性：answer 不得为空；选择题答案必须是 A/B/C/D 中的一个字母，且与选项顺序一一对应；凡可计算/可求极限/可解方程的题，先用沙箱 Python 验算再落答案，严禁凭感觉报数值；',
       '③ 选项互斥性：选择题选项互不重叠、无重复项，干扰项按典型误因设计（"像真的"但错误原因唯一），禁止「以上都对/都不对」凑数；',
       '④ 难度一致性：升阶必须真的多一步推理或综合，降阶必须真的少一步；解析末尾用一句「易错提醒」点破本题的坑。'
     ].join('\n')
@@ -2978,14 +2978,14 @@
           ctx.ai.registerCtx({
             ctx: AI_CTX_GEN,
             name: '变式工厂 · 批量开炉',
-            desc: '给定母题按所选策略批量出变式（LaTeX 公式契约、逐路配额、只回 JSON）',
-            def: 'think', latexNeed: true, tools: 'none', recall: false
+            desc: '给定母题按所选策略批量出变式（LaTeX 公式契约、逐路配额、可验算题先 Python 算再作答、只回 JSON）',
+            def: 'think', latexNeed: true, tools: 'py', recall: false
           })
           ctx.ai.registerCtx({
             ctx: AI_CTX_AUDIT,
             name: '变式工厂 · 变式质检',
-            desc: '核对已生成变式的答案自洽性与真变式程度（宁缺毋滥，只标问题不改题）',
-            def: 'noThink', latexNeed: true, tools: 'none', recall: false
+            desc: '核对已生成变式的答案自洽性与真变式程度（可验算题用 Python 复算，宁缺毋滥，只标问题不改题）',
+            def: 'noThink', latexNeed: true, tools: 'py', recall: false
           })
         }
       } catch (e) { /* 注册失败不阻断：AI 照常可用，只是进不了参数中心 */ }

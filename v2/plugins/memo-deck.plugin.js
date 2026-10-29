@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.5.0'
+  let VERSION = '1.6.0'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -262,6 +262,22 @@
       return (st && Array.isArray(st.mistakes)) ? st.mistakes : []
     } catch (e) { return [] }
   }
+  /* 【v1.6】选择题绝不能只留一个光杆字母：脱离选项的「B」在闪卡里毫无意义。
+   * 选项以「A. xxx」行追进卡面；卡背若以答案字母开头（可跟解析），展开成「B. 选项文本」。
+   * 纯函数：错题制卡、跨插件 addCards、旧卡修复三条路共用这一份判据。 */
+  function withOptions(front, back, options) {
+    let opts = (Array.isArray(options) ? options : [])
+      .map(function (o) { return flat(o) }).filter(Boolean).slice(0, 8)
+    if (!opts.length) return { front: front, back: back }
+    let lines = opts.map(function (o, j) { return 'ABCDEFGH'[j] + '. ' + o }).join('\n')
+    let b = String(back || '')
+    let m = /^\s*([A-H])(?![A-Za-z])/.exec(b)
+    if (m) {
+      let idx = 'ABCDEFGH'.indexOf(m[1].toUpperCase())
+      if (idx >= 0 && opts[idx]) b = m[1].toUpperCase() + '. ' + opts[idx] + b.slice(m.index + m[0].length)
+    }
+    return { front: String(front || '') + '\n\n' + lines, back: b }
+  }
   /** 单条错题 → 卡片；不可用（无题干 / 无答案且无解析）返回 null，由调用方计数跳过 */
   function cardFromMistake(m, i) {
     if (!m || typeof m !== 'object') return null
@@ -270,7 +286,8 @@
     let ans = flat(m.answer || '')
     let sol = flat(m.solution || '')
     if (!ans && !sol) return null
-    let c = newCard(front, (ans && sol) ? (ans + '\n\n' + sol) : (ans || sol), {
+    let eo = withOptions(front, (ans && sol) ? (ans + '\n\n' + sol) : (ans || sol), m.options)
+    let c = newCard(eo.front, eo.back, {
       subject: subjectOf(m.subject),
       tags: ['错题'],
       hint: flat(m.note || '')
@@ -278,6 +295,50 @@
     /* srcRef 只在「从站内数据生成」的卡上出现，用于幂等去重；手打/AI 卡没有它 */
     c.srcRef = 'mk:' + (m.dedupKey || m.id || (i + ':' + front.slice(0, 24)))
     return c
+  }
+  /* 【v1.6.1 修复自愈化】v1.5 及以前错题制卡把选项丢了 —— 每次挂载都扫一遍：
+   * ① 先按 srcRef 找回错题；② srcRef 对不上（错题重导过 / id 变过）按题干前 30 字兜底匹配；
+   * ③ 补到才提示，无事静默。旧版按版本一次性旗标、且只在牌库页签跑 ——
+   * 用户升级后直接进「复习」就永远修不到（实测报障「没有选项」的根因）。排期字段一概不动。 */
+  function repairMistakeOptions(ctx) {
+    try {
+      let deck = deckGet(ctx)
+      let mk = siteMistakes(ctx)
+      if (!deck.length || !mk.length) return
+      let byRef = {}
+      let byStem = {}
+      mk.forEach(function (m, i) {
+        if (!m || typeof m !== 'object') return
+        let ref = 'mk:' + (m.dedupKey || m.id || (i + ':' + flat(m.stem || m.desc || '').slice(0, 24)))
+        byRef[ref] = m
+        let sp = flat(m.stem || m.desc || '').slice(0, 30)
+        if (sp.length >= 8) byStem[sp] = m
+      })
+      let n = 0
+      deck.forEach(function (c) {
+        if (!c.srcRef || c.srcRef.indexOf('mk:') !== 0) return
+        if (/(^|\n)[A-H][.、]/.test(c.front)) return          /* 已经有选项行，别叠第二遍 */
+        let m = byRef[c.srcRef]
+        if (!m) m = byStem[flat(c.front).slice(0, 30)]
+        if (!m || !Array.isArray(m.options) || !m.options.length) return
+        let eo = withOptions(flat(m.stem || m.desc || ''), c.back, m.options)
+        c.front = String(eo.front).slice(0, FRONT_MAX)
+        c.back = String(eo.back).slice(0, BACK_MAX)
+        n++
+      })
+      if (n) {
+        deckSave(ctx, deck)
+        ctx.log('错题卡补选项：' + n + ' 张')
+        ctx.Toast.show('已为 ' + n + ' 张错题卡补上选择题选项', 'success', 2600)
+      }
+    } catch (e) { /* 修复失败不打扰使用，下次挂载再试 */ }
+  }
+  /** 【v1.6.1】「选项未入库」诚实判定：错题卡题干以空括号收尾（选择题典型特征）
+   *  而卡面没有选项行 —— 错题本里就没存 options，插件变不出来，提示用户去补。 */
+  function optsMissing(c) {
+    if (!c || !c.srcRef || c.srcRef.indexOf('mk:') !== 0) return false
+    if (/(^|\n)[A-H][.、]/.test(c.front)) return false
+    return /[（(][\s　]*[）)]\s*$/.test(String(c.front || '').trim())
   }
 
   /* 评分排期：返回 {card, requeue} —— requeue=true 表示本场内还要再见 */
@@ -550,10 +611,12 @@
      * 改为吃宿主轨：宽度交给站点轨限，插件不再自带上限。 */
     '.md-body{flex:1 1 auto;width:100%;max-width:100%;margin:0 auto;box-sizing:border-box;'
       + 'padding:20px calc(var(--vp-x,16px) + 18px) 46px}',
-    /* 进场交错上浮：卡片按行索引延迟出现（JS 写 --i 变量），只动 transform/opacity */
+    /* 进场交错上浮：卡片按行索引延迟出现（JS 写 --i 变量），只动 transform/opacity。
+     * 【v1.6 零闪烁】动画从基类挪到 `.md-enter` 作用域：只有切页签那一刻 root 带这个类，
+     * 页内 repaint() 重建 innerHTML 不再重放 md-rise —— 修「每点一下整页抖一次」。 */
     '.md-card{background:var(--md-bg);border:1px solid var(--md-line);border-radius:16px;padding:18px;margin-bottom:14px;'
-      + 'box-shadow:0 8px 24px rgba(20,35,70,.05);'
-      + 'animation:md-rise .42s var(--md-ease) both;animation-delay:calc(var(--i,0)*45ms)}',
+      + 'box-shadow:0 8px 24px rgba(20,35,70,.05)}',
+    '.md-enter .md-card{animation:md-rise .42s var(--md-ease) both;animation-delay:calc(var(--i,0)*45ms)}',
     '@keyframes md-rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}',
     '.md-h{font-size:16px;font-weight:800;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
     '.md-h em{font-style:normal;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;'
@@ -652,6 +715,12 @@
     '@keyframes md-pop{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}',
     '.md-modal-h{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:800;margin-bottom:13px}',
     '.md-modal-h .x{margin-left:auto}',
+    /* 【v1.6】全文弹窗：卡面/卡背完整成文（pre-wrap 保选项行与分段），超长各自内滚 */
+    '.md-dsec{margin:0 0 12px}',
+    '.md-dlab{display:inline-block;font-size:11px;font-weight:800;color:var(--md-sub);letter-spacing:.08em;margin-bottom:5px}',
+    '.md-dtext{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.8;'
+      + 'background:var(--md-soft);border:1px solid var(--md-line);border-radius:12px;padding:12px 14px;'
+      + 'max-height:36vh;overflow:auto}',
     '.md-field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--md-sub);margin-bottom:11px}',
     '.md-chips{display:flex;gap:6px;flex-wrap:wrap;min-height:30px;padding:5px;border:1px solid var(--md-line);'
       + 'border-radius:10px;background:var(--md-bg);cursor:text}',
@@ -720,15 +789,15 @@
     '@keyframes md-flame{0%,100%{transform:scale(1) rotate(-3deg)}30%{transform:scale(1.14) rotate(3deg)}60%{transform:scale(.95) rotate(-2deg)}}',
     /* 会话结算 */
     '.md-result{grid-template-columns:repeat(auto-fit,minmax(130px,1fr));display:grid;gap:11px;margin:13px 0}',
-    '.md-rstat{border:1px solid var(--md-line);border-radius:13px;padding:13px 15px;background:var(--md-bg);text-align:center}'
-      + ';animation:md-rise .4s var(--md-ease) both;animation-delay:calc(var(--i,0)*70ms)}',
+    '.md-rstat{border:1px solid var(--md-line);border-radius:13px;padding:13px 15px;background:var(--md-bg);text-align:center}',
+    '.md-enter .md-rstat{animation:md-rise .4s var(--md-ease) both;animation-delay:calc(var(--i,0)*70ms)}',
     '.md-rstat b{display:block;font-size:23px;font-weight:800;line-height:1.2}',
     '.md-rstat span{font-size:11px;color:var(--md-sub)}',
 
     /* —— 热力格（复习页 14 天 + 统计页全年共用） —— */
     '.md-heat{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,1fr);gap:3px}',
-    '.md-heat i{width:13px;height:13px;border-radius:3.5px;background:var(--md-soft);border:1px solid var(--md-line);'
-      + 'animation:md-cell .3s var(--md-ease) both;animation-delay:calc(var(--i,0)*6ms)}',
+    '.md-heat i{width:13px;height:13px;border-radius:3.5px;background:var(--md-soft);border:1px solid var(--md-line)}',
+    '.md-enter .md-heat i{animation:md-cell .3s var(--md-ease) both;animation-delay:calc(var(--i,0)*6ms)}',
     '@keyframes md-cell{from{transform:scale(.4);opacity:0}to{transform:scale(1);opacity:1}}',
     '.md-heat i.l1{background:color-mix(in oklab,var(--md-acc) 22%,var(--md-bg));border-color:transparent}',
     '.md-heat i.l2{background:color-mix(in oklab,var(--md-acc) 45%,var(--md-bg));border-color:transparent}',
@@ -738,7 +807,8 @@
     /* —— 统计页 —— */
     '.md-statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}',
     '.md-stat{border:1px solid var(--md-line);border-radius:14px;padding:14px 16px;background:var(--md-bg);'
-      + 'animation:md-rise .42s var(--md-ease) both;animation-delay:calc(var(--i,0)*50ms);transition:transform .18s,box-shadow .18s}',
+      + 'transition:transform .18s,box-shadow .18s}',
+    '.md-enter .md-stat{animation:md-rise .42s var(--md-ease) both;animation-delay:calc(var(--i,0)*50ms)}',
     '.md-stat:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(20,35,70,.08)}',
     '.md-stat b{display:block;font-size:25px;font-weight:800;line-height:1.2}',
     '.md-stat span{font-size:11.5px;color:var(--md-sub)}',
@@ -889,9 +959,12 @@
   function mountApp(el, ctx) {
     HOST_CTX = ctx
     injectStyles()
+    /* 【v1.6.1】补选项在入口跑（不是牌库页签）：升级后直接进复习也能修到 */
+    try { repairMistakeOptions(ctx) } catch (e) { /* 挂载期失败不阻断 */ }
     let tab = T_DECK
     let pending = {}            /* 带参跳入：统计页「去攻坚」→ 牌库按失误排序 */
     let curDestroy = null
+    let enterT = 0              /* 进场动画标记的清理计时器 */
 
     el.innerHTML = '<div class="md-root"><header class="md-hero"></header><main class="md-body"></main></div>'
     let root = el.querySelector('.md-root')
@@ -927,6 +1000,11 @@
       if (curDestroy) { try { curDestroy() } catch (e) { } }
       tab = id
       paintHero()
+      /* 【v1.6 零闪烁】进场动画只属于「切页签」这一刻：给 root 打 .md-enter 标记，
+       * 动画跑完自动摘掉。页内 repaint() 不再触发 CSS 里的 .md-enter 作用域动画。 */
+      root.classList.add('md-enter')
+      if (enterT) clearTimeout(enterT)
+      enterT = setTimeout(function () { root.classList.remove('md-enter') }, 1600)
       curDestroy = MODULES[id](bodyEl, ctx, envFor(id)) || null
     }
 
@@ -941,6 +1019,7 @@
 
     return function destroy() {
       if (curDestroy) { try { curDestroy() } catch (e) { } }
+      if (enterT) clearTimeout(enterT)
       unbindNav()
       offStuck()
     }
@@ -1071,6 +1150,7 @@
      * 用户才知道"这叠卡是谁给我生成的"，也才敢按来源批量清理。手打/AI 卡没有 srcLabel。 */
     let from = card.srcLabel ? '<span class="md-tag md-from" title="来自 ' + esc(card.srcLabel) + '">' + esc(card.srcLabel) + '</span>' : ''
     let facts = '<div class="md-facts">'
+      + '<button class="md-iconbtn" data-act="detail" data-id="' + card.id + '" title="查看全文（长题干/选项/解析不截断）">' + I('cpExpand') + '</button>'
       + '<button class="md-iconbtn" data-act="edit" data-id="' + card.id + '" title="编辑">' + I('cpPencil') + '</button>'
       + '<button class="md-iconbtn" data-act="suspend" data-id="' + card.id + '" title="' + (card.suspended ? '恢复' : '暂停（不再排期）') + '">' + (card.suspended ? I('cpPlay') : I('pause')) + '</button>'
       + '<button class="md-iconbtn del" data-act="del" data-id="' + card.id + '" title="删除">' + I('cpTrash') + '</button>'
@@ -1080,12 +1160,35 @@
       : ''
     return '<div class="md-fcard' + (picked ? ' picked' : '') + '" data-act="flip" style="--i:' + Math.min(i || 0, 12) + '">'
       + '<div class="md-fcard-in">'
-      + '<div class="md-face"><div class="md-fmeta" style="margin-bottom:0">' + pick + dueBadge(card, now) + '<span>' + esc(card.subject) + '</span>' + from + tags + '</div>'
+      + '<div class="md-face"><div class="md-fmeta" style="margin-bottom:0">' + pick + dueBadge(card, now) + '<span>' + esc(card.subject) + '</span>' + from + tags
+      + (optsMissing(card) ? '<span class="md-misschip" title="错题本里没存这道题的选项，插件变不出来 —— 去错题本补全后重新「错题制卡」">选项未入库</span>' : '')
+      + '</div>'
       + '<div class="md-ftext">' + esc(card.front) + '</div><div class="md-fmeta">' + facts + '</div></div>'
       + '<div class="md-face back"><div class="md-ftext">' + esc(card.back) + '</div>'
       + (card.hint ? '<div class="md-bighint" style="margin-top:auto">' + I('bulb') + esc(card.hint) + '</div>' : '')
       + '<div class="md-fmeta"><span>难度 ' + card.ease.toFixed(2) + ' · 连续成功 ' + card.reps + ' · 失败 ' + card.lapses + ' 次</span></div></div>'
       + '</div></div>'
+  }
+
+  /* 【v1.6】全文弹窗：网格卡面是 168px 高的预览，长题干/选项行/长解析全在这里看。
+   * 内容走 esc 文本节点 —— 公式由全站 texauto 自动渲染，与卡面同一管线，零注入。 */
+  function openDetail(card) {
+    let m = openModal(
+      '<div class="md-modal-h">' + I('cpExpand') + '卡片全文'
+      + '<button class="md-iconbtn x" data-x="1">×</button></div>'
+      + '<div class="md-dsec"><span class="md-dlab">卡面</span><div class="md-dtext">' + esc(card.front) + '</div></div>'
+      + '<div class="md-dsec"><span class="md-dlab">卡背</span><div class="md-dtext">' + esc(card.back) + '</div></div>'
+      + (card.hint ? '<div class="md-bighint">' + I('bulb') + esc(card.hint) + '</div>' : '')
+      + '<div class="md-fmeta" style="margin-top:13px">'
+      + '<span class="md-tag">' + esc(card.subject) + '</span>'
+      + card.tags.map(function (t) { return '<span class="md-tag">#' + esc(t) + '</span>' }).join('')
+      + '<span style="margin-left:auto">' + (card.suspended ? '已暂停 · ' : '')
+      + '难度 ' + card.ease.toFixed(2) + ' · 连续成功 ' + card.reps + ' · 失败 ' + card.lapses + ' 次</span></div>'
+    )
+    m.box.addEventListener('click', function (ev) {
+      let t = ev.target
+      if (t && t.dataset && t.dataset.x) m.close()
+    })
   }
 
   /* 标签 chips 编辑器（模态内用）：input 回车成 chip，点 × 移除 */
@@ -1228,7 +1331,7 @@
       let subjOpts = ['全部'].concat(SUBJECTS)
       return '<section class="md-card" style="--i:0">'
         + '<div class="md-h">' + I('list') + '牌库 <em>' + deck.length + ' 张 · ' + fmtSize(deckSize(deck)) + '</em></div>'
-        + '<div class="md-desc">卡片是记忆的最小单元。点击卡片 3D 翻面预览；悬停出现编辑/暂停/删除。</div>'
+        + '<div class="md-desc">卡片是记忆的最小单元。点击卡片 3D 翻面预览；悬停出现全文/编辑/暂停/删除。</div>'
         + '<div class="md-tools">'
         + '<input class="md-input md-search" data-f="q" placeholder="搜索卡面 / 卡背 / 标签…" value="' + esc(view.q) + '">'
         + '<div class="md-seg">' + subjOpts.map(function (s) {
@@ -1278,6 +1381,11 @@
     let unbind = delegate(bodyEl, {
       flip: function (a) { if (view.manage) return; a.classList.toggle('flipped') },
       subj: function (a) { view.subject = a.dataset.v; repaint() },
+      detail: function (a, ev) {
+        ev.stopPropagation()
+        let card = cardById(deckGet(ctx), a.dataset.id)
+        if (card) openDetail(card)
+      },
       /* —— 批量管理模式 —— */
       manage: function () { view.manage = !view.manage; if (!view.manage) view.sel = {}; repaint() },
       pick: function (a, ev) {
@@ -1629,6 +1737,26 @@
       return { order: mix, freshCount: q.fresh.length, dueCount: q.due.length, deck: deck }
     }
 
+    /* 【v1.6】评分/提示区独立成函数：翻面时只就地换这一块（见 doFlip）。 */
+    function gradesHtml() {
+      return S && S.flipped
+        ? '<div class="md-grades">' + GRADES.map(function (g, i) {
+            return '<button class="md-grade ' + g.css + '" data-act="grade" data-q="' + g.q + '" style="--i:' + i + '">'
+              + '<b>' + g.label + '</b><span>' + g.hint + '</span><k>按 ' + (i + 1) + '</k></button>'
+          }).join('') + '</div>'
+        : '<div class="md-flipcue">点击卡片或按空格键翻面</div>'
+    }
+    /* 【v1.6 零闪烁】翻面不再整页重建：重建会让新节点直接带着 flipped 类出生
+     * （3D 过渡永远播不出来），还把整页闪一遍。只切卡片的类 + 换底部评分区。 */
+    function doFlip() {
+      if (!S || S.done) return
+      S.flipped = !S.flipped
+      let bc = bodyEl.querySelector('.md-bigcard')
+      if (!bc) { paint(); return }
+      bc.classList.toggle('flipped', S.flipped)
+      let g = bodyEl.querySelector('[data-f=grades]')
+      if (g) g.innerHTML = gradesHtml()
+    }
     function sessionHtml() {
       let card = cardById(S.deck, S.order[S.ptr])
       let total = S.order.length
@@ -1653,12 +1781,7 @@
           + '<div class="md-bigfoot"><span>连续成功 ' + card.reps + ' · 失败 ' + card.lapses + ' 次 · 难度 ' + card.ease.toFixed(2) + '</span></div></div>'
           + '</div></div>'
         : ''
-      let grades = S.flipped
-        ? '<div class="md-grades">' + GRADES.map(function (g, i) {
-            return '<button class="md-grade ' + g.css + '" data-act="grade" data-q="' + g.q + '" style="--i:' + i + '">'
-              + '<b>' + g.label + '</b><span>' + g.hint + '</span><k>按 ' + (i + 1) + '</k></button>'
-          }).join('') + '</div>'
-        : '<div class="md-flipcue">点击卡片或按空格键翻面</div>'
+      let grades = gradesHtml()
       return '<section class="md-card" style="--i:0"><div class="md-stage">'
         + '<aside class="md-sidecard">'
         + '<div class="md-ringwrap">'
@@ -1677,7 +1800,7 @@
         + '<div style="text-align:center;margin-top:7px"><button class="md-btn sm" data-act="undo"' + (last ? '' : ' disabled') + '>'
         + I('cpRefresh') + '撤销上一次评分<k style="opacity:.55;margin-left:6px">Ctrl+Z</k></button></div>'
         + '</aside>'
-        + '<div>' + cardInner + grades + '</div>'
+        + '<div>' + cardInner + '<div data-f="grades">' + grades + '</div></div>'
         + '</div></section>'
     }
 
@@ -1843,7 +1966,7 @@
     bodyEl.innerHTML = idleHtml()
     let unbind = delegate(bodyEl, {
       start: start,
-      flip: function () { if (S && !S.done) { S.flipped = !S.flipped; paint() } },
+      flip: doFlip,
       grade: function (a) { grade(num(a.dataset.q, 4)) },
       undo: function () { undoGrade() },
       quit: quit,
@@ -1865,7 +1988,7 @@
         return
       }
       if (S.done) return
-      if (ev.code === 'Space') { ev.preventDefault(); S.flipped = !S.flipped; paint() }
+      if (ev.code === 'Space') { ev.preventDefault(); doFlip() }
       else if (S.flipped && ev.key >= '1' && ev.key <= '4') { grade(GRADES[num(ev.key, 4) - 1].q) }
     }
     window.addEventListener('keydown', onKey)
@@ -2309,7 +2432,9 @@
           let ref = flat(raw && raw.srcRef)
           if (ref && have[ref]) { dup++; return }
           if (deck.length >= DECK_MAX_CARDS) { full = true; return }
-          let c = newCard(front, back, { subject: raw && raw.subject, tags: raw && raw.tags, hint: raw && raw.hint })
+          /* 【v1.6】调用方带结构化 options 时同样展开进卡面（与错题制卡共用一份判据） */
+          let eo = withOptions(front, back, raw && raw.options)
+          let c = newCard(eo.front.slice(0, FRONT_MAX), eo.back.slice(0, BACK_MAX), { subject: raw && raw.subject, tags: raw && raw.tags, hint: raw && raw.hint })
           if (ref) { c.srcRef = ref; have[ref] = 1 }
           c.srcLabel = flat(raw && raw.srcLabel).slice(0, 24)
           deck.unshift(c); added++
@@ -2351,6 +2476,8 @@
   if (window.__MEMO_DEBUG__) {
     window.__memoInternals = {
       newCard: newCard,
+      withOptions: withOptions,
+      cardFromMistake: cardFromMistake,
       schedule: schedule,
       dueQueue: dueQueue,
       retentionOf: retentionOf,

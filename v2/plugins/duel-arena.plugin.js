@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.3.0'
+  let VERSION = '1.4.0'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -219,7 +219,7 @@
    * 出题与判定全线静默失效。改走契约形态 `ctx.ai.json(sys, usr, opts)`。 */
   function aiJSON(ctx, sys, usr, opts) {
     if (!ctx.ai || typeof ctx.ai.json !== 'function') return Promise.reject(new Error('AI 接口不可用'))
-    return ctx.ai.json(sys, usr, Object.assign({ ctx: AI_CTX, noTools: true, cache: false }, opts || {}))
+    return ctx.ai.json(sys, usr, Object.assign({ ctx: AI_CTX, cache: false }, opts || {}))
   }
   function aiReady(ctx) {
     try {
@@ -561,10 +561,12 @@
     '.du-kbd{display:inline-block;min-width:19px;height:19px;line-height:18px;padding:0 5px;border-radius:5px;text-align:center;'
       + 'font-size:10.5px;font-family:inherit;border:1px solid var(--du-line);border-bottom-width:2px;background:var(--du-soft);color:var(--du-sub)}',
     /* 每日挑战 + 错题复仇入口 */
+    /* 【v1.6 零闪烁】结构件进场动画只属于视图切换那一刻（root 带 .du-enter）；
+     * 选项 .du-opt / 裁决 .du-judge / 横幅 .du-banner 是「新内容时刻」，保留常开。 */
     '.du-daily{display:flex;gap:13px;align-items:center;border:1px solid color-mix(in oklab,var(--du-gold) 40%,var(--du-line));'
       + 'border-radius:14px;padding:13px 15px;margin-bottom:13px;'
-      + 'background:linear-gradient(120deg,color-mix(in oklab,var(--du-gold) 9%,var(--du-bg)),var(--du-bg));'
-      + 'animation:du-rise .4s var(--du-ease) both}',
+      + 'background:linear-gradient(120deg,color-mix(in oklab,var(--du-gold) 9%,var(--du-bg)),var(--du-bg))}',
+    '.du-enter .du-daily{animation:du-rise .4s var(--du-ease) both}',
     '.du-daily .ic{font-size:30px}',
     '.du-daily .tx{flex:1;min-width:0}',
     '.du-daily .tx b{font-size:14px}',
@@ -574,7 +576,8 @@
     /* 成就徽章墙 */
     '.du-badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}',
     '.du-badge{border:1px solid var(--du-line);border-radius:13px;padding:11px 12px;background:var(--du-bg);'
-      + 'transition:transform .16s,box-shadow .16s;animation:du-rise .4s var(--du-ease) both;animation-delay:calc(var(--i,0)*35ms)}',
+      + 'transition:transform .16s,box-shadow .16s}',
+    '.du-enter .du-badge{animation:du-rise .4s var(--du-ease) both;animation-delay:calc(var(--i,0)*35ms)}',
     '.du-badge .t{display:flex;align-items:center;gap:7px;font-weight:800;font-size:13px}',
     '.du-badge .t i{font-style:normal;font-size:19px}',
     '.du-badge p{margin:4px 0 0;font-size:11.5px;color:var(--du-sub);line-height:1.6}',
@@ -608,7 +611,8 @@
     '.du-body{flex:1 1 auto;width:100%;max-width:100%;margin:0 auto;box-sizing:border-box;'
       + 'padding:20px calc(var(--vp-x,16px) + 18px) 46px}',
     '.du-card{background:var(--du-bg);border:1px solid var(--du-line);border-radius:16px;padding:18px;margin-bottom:14px;'
-      + 'box-shadow:0 8px 24px rgba(20,35,70,.05);animation:du-rise .42s var(--du-ease) both;animation-delay:calc(var(--i,0)*45ms)}',
+      + 'box-shadow:0 8px 24px rgba(20,35,70,.05)}',
+    '.du-enter .du-card{animation:du-rise .42s var(--du-ease) both;animation-delay:calc(var(--i,0)*45ms)}',
     '@keyframes du-rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}',
     '.du-h{font-size:16px;font-weight:800;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
     '.du-h em{font-style:normal;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;'
@@ -631,7 +635,8 @@
     /* —— 天梯 —— */
     '.du-ladder{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}',
     '.du-opp{border:1px solid var(--du-line);border-radius:15px;padding:14px;background:var(--du-bg);position:relative;overflow:hidden;'
-      + 'transition:transform .16s,box-shadow .16s,border-color .16s;animation:du-rise .4s var(--du-ease) both;animation-delay:calc(var(--i,0)*40ms)}',
+      + 'transition:transform .16s,box-shadow .16s,border-color .16s}',
+    '.du-enter .du-opp{animation:du-rise .4s var(--du-ease) both;animation-delay:calc(var(--i,0)*40ms)}',
     '.du-opp:hover:not(.locked){transform:translateY(-3px);box-shadow:0 10px 26px rgba(20,35,70,.1);border-color:color-mix(in oklab,var(--du-acc) 45%,var(--du-line))}',
     '.du-opp.locked{opacity:.55;filter:grayscale(.6)}',
     '.du-opp.boss{border-color:color-mix(in oklab,var(--du-danger) 45%,var(--du-line));'
@@ -710,12 +715,12 @@
     '.du-elodelta.down{color:var(--du-danger);background:color-mix(in oklab,var(--du-danger) 9%,transparent)}',
     /* 战绩/编年史 */
     '.du-statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:11px;margin-bottom:13px}',
-    '.du-stat{border:1px solid var(--du-line);border-radius:13px;padding:12px 14px;background:var(--du-bg);text-align:center;'
-      + 'animation:du-rise .4s var(--du-ease) both;animation-delay:calc(var(--i,0)*50ms)}',
+    '.du-stat{border:1px solid var(--du-line);border-radius:13px;padding:12px 14px;background:var(--du-bg);text-align:center}',
+    '.du-enter .du-stat{animation:du-rise .4s var(--du-ease) both;animation-delay:calc(var(--i,0)*50ms)}',
     '.du-stat b{display:block;font-size:23px;font-weight:800;line-height:1.2}',
     '.du-stat span{font-size:11px;color:var(--du-sub)}',
-    '.du-hist{display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px dashed var(--du-line);font-size:12.5px}'
-      + ';animation:du-rise .3s var(--du-ease) both}',
+    '.du-hist{display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px dashed var(--du-line);font-size:12.5px}',
+    '.du-enter .du-hist{animation:du-rise .3s var(--du-ease) both}',
     '.du-hist:last-child{border-bottom:0}',
     '.du-hist .r{font-weight:800;width:44px;flex:0 0 auto}',
     '.du-hist .r.w{color:var(--du-ok)}.du-hist .r.l{color:var(--du-danger)}.du-hist .r.d{color:var(--du-sub)}',
@@ -738,7 +743,8 @@
     /* —— 出题来源选择器（站内数据接入） —— */
     '.du-srcrow{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:9px;margin:4px 0 2px}',
     '.du-src{border:1.5px solid var(--du-line);border-radius:13px;padding:11px 13px;background:var(--du-bg);cursor:pointer;'
-      + 'transition:transform .16s,border-color .16s,box-shadow .16s;animation:du-rise .4s var(--du-ease) both}',
+      + 'transition:transform .16s,border-color .16s,box-shadow .16s}',
+    '.du-enter .du-src{animation:du-rise .4s var(--du-ease) both}',
     '.du-src b{display:block;font-size:13px}',
     '.du-src span{display:block;font-size:11px;color:var(--du-sub);margin-top:2px}',
     '.du-src:hover:not(.off){transform:translateY(-2px);border-color:var(--du-acc)}',
@@ -747,7 +753,8 @@
     '.du-src.off{opacity:.5;cursor:not-allowed;filter:grayscale(.5)}',
     '.du-picklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:8px;margin-top:10px}',
     '.du-pick{border:1px solid var(--du-line);border-radius:11px;padding:9px 12px;background:var(--du-bg);cursor:pointer;'
-      + 'transition:transform .15s,border-color .15s,box-shadow .15s;animation:du-rise .35s var(--du-ease) both}',
+      + 'transition:transform .15s,border-color .15s,box-shadow .15s}',
+    '.du-enter .du-pick{animation:du-rise .35s var(--du-ease) both}',
     '.du-pick b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.du-pick span{display:block;font-size:11px;color:var(--du-sub);margin-top:1px}',
     '.du-pick:hover{border-color:var(--du-acc);transform:translateY(-1px)}',
@@ -1149,6 +1156,9 @@
       examId: '', bookId: ''
     }
     let root = null, body = null, unbind = null, offStuck = null
+    /* 【v1.6 零闪烁】结构件进场动画只属于「换视图」那一刻：render() 每次全量重建，
+     * 若动画写在基类上，大厅里切个题源、战斗里刷一帧都会整页抖一次。 */
+    let lastView = '', enterT = 0
 
     function stopTimer() {
       let bt = state.bt
@@ -1161,6 +1171,13 @@
       el.innerHTML = '<div class="du-root">' + heroHTML(ctx, state.view === 'battle') + '<div class="du-body"></div></div>'
       root = el.firstElementChild || el.children[0]
       body = root.querySelector('.du-body')
+      /* 换视图（含首挂）才打进场标记；同视图内的 render() 不再重放结构动画 */
+      if (state.view !== lastView) {
+        lastView = state.view
+        root.classList.add('du-enter')
+        if (enterT) clearTimeout(enterT)
+        enterT = setTimeout(function () { if (root) root.classList.remove('du-enter') }, 1000)
+      }
       unbind = delegate(root, actions)
       offStuck = bindStuck(root)
       if (state.view === 'lobby') body.innerHTML = lobbyHTML(ctx, state)
@@ -1908,10 +1925,10 @@
           ctx.ai.registerCtx({
             ctx: AI_CTX,
             name: '博弈刷题场 · 整场出题',
-            desc: '一次生成整场选择题（题干/选项/答案/解析）',
+            desc: '一次生成整场选择题（题干/选项/答案/解析；可验算题先 Python 算再作答）',
             def: 'think',
             latexNeed: true,
-            tools: 'none',
+            tools: 'py',
             recall: false
           })
         }

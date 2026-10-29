@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.4.0'
+  let VERSION = '1.5.0'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -868,6 +868,13 @@
     let topEl = root.querySelector('[data-sf="top"]')
     let kpisEl = root.querySelector('[data-sf="kpis"]')
     let stageEl = root.querySelector('[data-sf="stage"]')
+    /* 【v1.6 零闪烁】视图进场标记：只有切视图/开练/首挂才放进场动画，普通 paint() 不再重放 */
+    let enterT = 0
+    function markEnter() {
+      stageEl.classList.add('sf-enter')
+      if (enterT) clearTimeout(enterT)
+      enterT = setTimeout(function () { stageEl.classList.remove('sf-enter') }, 900)
+    }
     let dockEl = root.querySelector('[data-sf="dock"]')
     let indEl = root.querySelector('[data-sf="ind"]')
     let dotEl = root.querySelector('[data-sf="dot"]')
@@ -918,6 +925,7 @@
       S.view = k
       ctx.data('view', k)
       stopTick()
+      markEnter()
       paint()
       try { window.scrollTo({ top: 0, behavior: 'smooth' }) } catch (e) { /* 忽略 */ }
     }
@@ -938,7 +946,7 @@
        * 真机上表现成"点了没反应"（探针也是这么报的）：用户在题库空的时候最想练，
        * 却拿不到任何回执。给一句话告诉他**下一步点哪儿**，别只报"没有题"。 */
       if (!target) {
-        S.view = 'forge'; paint()
+        S.view = 'forge'; markEnter(); paint()
         toast(ctx, '题库还是空的 —— 先「从错题本导入」或点「+ 新建题」放一道进来', 'warn', 3200)
         return
       }
@@ -949,6 +957,7 @@
         manual: false, saved: false
       }
       if (S.view !== 'forge') { S.view = 'forge'; ctx.data('view', 'forge') }
+      markEnter()
       paint()
       startTick()
     }
@@ -1195,6 +1204,7 @@
     window.addEventListener('keydown', onKey)
     window.addEventListener('resize', moveInd)
     onScroll()
+    markEnter()
     paint()
     if (document.fonts && document.fonts.ready && document.fonts.ready.then) {
       document.fonts.ready.then(function () { try { moveInd() } catch (e) { /* 忽略 */ } })
@@ -1207,6 +1217,7 @@
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('resize', moveInd)
       stopTick()
+      if (enterT) clearTimeout(enterT)
       if (raf) { cancelAnimationFrame(raf); raf = 0 }
       try {
         let st = document.getElementById('sf-extra-style')
@@ -2035,7 +2046,10 @@
     '.sf-icobtn.sm svg{width:13px;height:13px}',
     '.sf-icobtn.danger{color:#b91c1c}',
     '.sf-stage{position:relative;z-index:1;width:100%;max-width:var(--sf-w);margin:0 auto;display:flex;flex-direction:column;padding:4px 6px 140px}',
-    '.sf-card{border:0;border-top:1px solid var(--sf-line);border-radius:0;background:transparent;box-shadow:none;padding:18px 0 6px;animation:sfRise .45s cubic-bezier(.22,1,.36,1) both}',
+    '.sf-card{border:0;border-top:1px solid var(--sf-line);border-radius:0;background:transparent;box-shadow:none;padding:18px 0 6px}',
+    /* 【v1.6 零闪烁】进场动画只属于视图切换/开练那一刻（stage 带 .sf-enter）：
+     * 写在基类上会让每次 paint() 重建都重放 —— 点一下筛选整页闪一次。 */
+    '.sf-enter .sf-card{animation:sfRise .45s cubic-bezier(.22,1,.36,1) both}',
     '.sf-card:first-child{border-top:0;padding-top:8px}',
     '.sf-card:nth-child(2){animation-delay:45ms}',
     '.sf-card:nth-child(3){animation-delay:85ms}',
@@ -2343,13 +2357,13 @@
             ctx: AI_CTX_POINTS,
             name: '采分点熔炉 · 拆采分点',
             desc: '按科目/题型把一道题拆成带权重的采分点（读不懂就少拆，不许编造参考答案里没有的点）',
-            def: 'think', latexNeed: false, tools: 'none', recall: false
+            def: 'think', latexNeed: true, tools: 'none', recall: false
           })
           ctx.ai.registerCtx({
             ctx: AI_CTX_JUDGE,
             name: '采分点熔炉 · 逐点判定',
             desc: '把学生答案对到每个采分点上判命中/半对/漏（读不懂就写无法判断，不许抬分）',
-            def: 'think', latexNeed: false, tools: 'none', recall: false
+            def: 'think', latexNeed: true, tools: 'none', recall: false
           })
         }
       } catch (e) { /* 注册失败不影响手动模式 */ }

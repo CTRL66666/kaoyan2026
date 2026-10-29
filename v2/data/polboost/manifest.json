@@ -1,0 +1,83 @@
+{
+  "version": "607e2c33a0a4",
+  "generatedAt": "2026-10-29T04:11:45.664Z",
+  "counts": {
+    "SUBJ": 5,
+    "KP": 65,
+    "KP_PTS": 65,
+    "KP_PTS_N": 153,
+    "KP_META": 65,
+    "ESSAYS": 27,
+    "QUOTES": 60,
+    "NUMS": 36,
+    "QBANK": 307
+  },
+  "groups": {
+    "course": [
+      "SUBJ",
+      "KP",
+      "KP_PTS",
+      "KP_META",
+      "ESSAYS",
+      "QUOTES",
+      "NUMS",
+      "FREQ_W",
+      "FREQ_CN",
+      "TYPE_CN",
+      "DIFF_CN"
+    ],
+    "qbank": [
+      "QBANK"
+    ]
+  },
+  "files": {
+    "SUBJ": {
+      "file": "subj.json",
+      "bytes": 426
+    },
+    "KP": {
+      "file": "kp.json",
+      "bytes": 66736
+    },
+    "KP_PTS": {
+      "file": "kp-pts.json",
+      "bytes": 22225
+    },
+    "KP_META": {
+      "file": "kp-meta.json",
+      "bytes": 3289
+    },
+    "ESSAYS": {
+      "file": "essays.json",
+      "bytes": 36717
+    },
+    "QUOTES": {
+      "file": "quotes.json",
+      "bytes": 8621
+    },
+    "NUMS": {
+      "file": "nums.json",
+      "bytes": 5412
+    },
+    "QBANK": {
+      "file": "qbank.json",
+      "bytes": 106643
+    },
+    "FREQ_W": {
+      "file": "freq-w.json",
+      "bytes": 26
+    },
+    "FREQ_CN": {
+      "file": "freq-cn.json",
+      "bytes": 47
+    },
+    "TYPE_CN": {
+      "file": "type-cn.json",
+      "bytes": 77
+    },
+    "DIFF_CN": {
+      "file": "diff-cn.json",
+      "bytes": 39
+    }
+  }
+}
