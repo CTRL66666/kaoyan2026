@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.0'
+  let VERSION = '1.4.1'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -618,6 +618,11 @@
     '.du-h em{font-style:normal;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;'
       + 'background:var(--du-soft);color:var(--du-sub);border:1px solid var(--du-line)}',
     '.du-desc{color:var(--du-sub);font-size:12.5px;line-height:1.75;margin-bottom:13px}',
+    /* 出题失败重试横幅（大厅内）：琥珀底 + 行内按钮组 */
+    '.du-errbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;margin:0 0 12px;'
+      + 'padding:9px 12px;border-radius:11px;border:1px solid color-mix(in oklab,var(--du-warn) 34%,transparent);'
+      + 'background:color-mix(in oklab,var(--du-warn) 9%,transparent);color:var(--du-warn)}',
+    '.du-errbar .du-btn.sm{margin-left:2px}',
     '.du-btn{height:36px;padding:0 15px;border-radius:10px;border:1px solid var(--du-line);background:var(--du-bg);'
       + 'cursor:pointer;font-weight:600;font-size:13px;color:var(--du-ink2);font-family:inherit;position:relative;overflow:hidden;'
       + 'transition:transform .12s,border-color .16s,color .16s,box-shadow .16s,filter .16s}',
@@ -1023,6 +1028,13 @@
     let d = dailyOpp()
     let dailyClaimed = !!(p.daily && p.daily.key === d.key && p.daily.claimed)
     let s = '<div class="du-card" style="--i:0"><h3 class="du-h">' + ico(t.icon) + ' ' + t.name + ' <em>ELO ' + p.elo + '</em></h3>'
+      /* 【P1 修】出题失败留下可重试的横幅：旧版只弹 3 秒 toast 说「请重试」却没有任何入口 */
+      + (state.lastErr
+        ? '<div class="du-errbar">' + ico('warn') + ' 刚才挑战「' + esc(state.lastErr.oppName) + '」出题失败：' + esc(state.lastErr.msg)
+        + '<button class="du-btn sm" data-act="retry-battle" data-id="' + esc(state.lastErr.oppId) + '">重试</button>'
+        + '<button class="du-btn sm ghost" data-act="retry-bank" data-id="' + esc(state.lastErr.oppId) + '">改用站内题库</button>'
+        + '<button class="du-btn sm ghost" data-act="retry-close">×</button></div>'
+        : '')
       + '<div class="du-desc">与 AI 对手同题竞速：答对造成伤害（速度越快越痛），答错则挨打，双对互相反震；'
       + '问数耗尽比剩余 HP，一方归零提前 KO。ELO 按等级分公式结算，连胜有加成，段位随 ELO 晋升。'
       + '在站内任何工具完成一组刷题（quizDone）都会给本场充能护盾：下一场 +20 HP。</div>'
@@ -1198,6 +1210,14 @@
       if (srcNeedsAI() && !aiReady(ctx)) { ctx.Toast.show('请先在设置里配置 AI 接口', 'warn', 2600); return }
       startBattle(cell.opp)
     }
+    /* 【P0 修】真正开赛才扣护盾（旧版开战即扣，AI 出题失败白烧一场充能）；
+     * 四个 fight 入口（solo/bank/exam/AI 成功）共用这一个扣盾点。 */
+    function beginFight(bt) {
+      if (!bt.shield || bt.friendly) return
+      let p = profileGet(ctx)
+      if (p.shield) { p.shield = false; profileSave(ctx, p) }
+      ctx.Toast.show('护盾生效：本场 +20 HP', 'success', 2200)
+    }
 
     /* —— 开战：消耗护盾（若有）→ AI 一次性生成整场题 ——
      * opts.seed：固定比赛种子（每日挑战用，判定全天可复现）；
@@ -1224,22 +1244,22 @@
         : bt.srcMode === 'bank' ? '站内题库'
           : bt.srcMode === 'exam' ? '题卷挑战'
             : bt.srcMode === 'weak' ? '弱项突击' : 'AI 智能出题'
-      if (bt.shield && !bt.friendly) {
-        p.shield = false
-        profileSave(ctx, p)
-        ctx.Toast.show('护盾生效：本场 +20 HP', 'info', 2200)
-      }
+      /* 【P0 修】护盾扣减从「开战即扣」挪到「真正进入 fight 才扣」：
+       * 旧版 AI 出题失败（网络/JSON 坏/题目不足）弹回大厅时护盾已经烧掉 ——
+       * 用户什么都没打白丢一场 quizDone 充能。beginFight 在四个 fight 入口各调一次。 */
+      if (bt.shield && !bt.friendly) ctx.Toast.show('护盾将生效：本场 +20 HP', 'info', 2200)
       state.view = 'battle'
       render()
       if (bt.solo) {
         bt.srcLabel = '错题复仇'
         bt.qs = opts.soloQs.slice(0, 10)
         bt.phase = 'fight'
+        beginFight(bt)
         renderQuestion()
         return
       }
-      /* 站内题库：直接抽收藏题（零 AI 调用，秒开） */
-      if (bt.srcMode === 'bank') {
+    /* 站内题库：直接抽收藏题（零 AI 调用，秒开） */
+    if (bt.srcMode === 'bank') {
         let pool = bankPool(ctx, subject)
         let bankQs = shuffle(pool).slice(0, n)
         if (bankQs.length < Math.min(3, n)) {
@@ -1249,6 +1269,7 @@
         }
         bt.qs = bankQs; bt.srcLabel = '站内题库 × ' + bankQs.length
         bt.phase = 'fight'
+        beginFight(bt)
         render()
         renderQuestion()
         return
@@ -1269,6 +1290,7 @@
         bt.qs = shuffle(exQs).slice(0, 10)
         bt.srcLabel = trunc(exam.title || '题卷', 16) + ' × ' + bt.qs.length
         bt.phase = 'fight'
+        beginFight(bt)
         render()
         renderQuestion()
         return
@@ -1291,16 +1313,20 @@
           if (state.bt !== bt) return
           let qs = normalizeQs(raw, n)
           if (qs.length < Math.min(3, n)) {
-            ctx.Toast.show('出题失败：AI 返回题目不足，请重试', 'warn', 3000)
+            state.lastErr = { oppId: opp.id, oppName: opp.name, msg: 'AI 返回题目不足' }
+            ctx.Toast.show('出题失败：AI 返回题目不足，可重试或换站内题库', 'warn', 3600)
             state.view = 'lobby'; state.bt = null; render(); return
           }
           bt.qs = qs; bt.phase = 'fight'
+          beginFight(bt)
           render()
           renderQuestion()
         })
         .catch(function (e) {
           if (state.bt !== bt) return
           ctx.log('决斗出题失败：' + (e && e.message || e), 'warn')
+          /* 【P1 修】失败不再只弹一条 3 秒 toast 把人踢回大厅 —— 留一条可重试的横幅 */
+          state.lastErr = { oppId: opp.id, oppName: opp.name, msg: trunc(e && e.message || e, 40) }
           ctx.Toast.show('出题失败：' + trunc(e && e.message || e, 40), 'warn', 3000)
           state.view = 'lobby'; state.bt = null; render()
         })
@@ -1324,7 +1350,7 @@
         + (bt.srcLabel ? esc(bt.srcLabel) + ' · ' : '')
         + (bt.friendly ? I('cpChat') + '友谊赛 · 不计 ELO · ' : '')
         + '键盘：<span class="du-kbd">1</span>-<span class="du-kbd">4</span> 或 <span class="du-kbd">A</span>-<span class="du-kbd">D</span> 作答 · <span class="du-kbd">Enter</span> 下一题</span>'
-        + '<button class="du-btn sm" data-act="forfeit">' + (bt.solo ? I('cpCross') + '退出清算' : I('ban') + '认输') + '</button></div>'
+        + '<button class="du-btn sm" data-act="forfeit">' + (bt.phase === 'loading' ? I('cpCross') + '放弃本场' : bt.solo ? I('cpCross') + '退出清算' : I('ban') + '认输') + '</button></div>'
         + '<div class="du-hps">'
         + '<div class="du-hpbox" id="du-hp-p"><div class="du-hpname"><span class="ic">' + I('graduation') + '</span>你'
         + (bt.shield ? '<span title="quizDone 护盾">' + I('cpCheck') + '</span>' : '')
@@ -1375,10 +1401,19 @@
       area.innerHTML = qHTML(bt)
       bt.locked = false
       bt.tLeft = bt.secs
+      /* 【P0 修】倒计时改「墙上时钟 deadline」基准 + 切后台自动暂停：
+       * 旧版 tick 累减不看真实时间，Chrome 把后台 setInterval 节流到 ≥1s ——
+       * 切页签等于时间冻结，回来还能慢悠悠答，竞速公平被白嫖。
+       * 现在：可见时按 Date.now() 校准；隐藏时记下暂停点，回来把 deadline 顺延
+       * （对手模拟也挂在同一节奏上，暂停对双方对称，诚实且不惩罚误切）。 */
+      bt.deadline = Date.now() + bt.secs * 1000
+      bt._hiddenAt = 0
       paintTimer()
       stopTimer()
       bt.tInt = setInterval(function () {
-        bt.tLeft -= 0.25
+        if (document.hidden) { if (!bt._hiddenAt) bt._hiddenAt = Date.now(); return }
+        if (bt._hiddenAt) { bt.deadline += Date.now() - bt._hiddenAt; bt._hiddenAt = 0 }
+        bt.tLeft = (bt.deadline - Date.now()) / 1000
         paintTimer()
         if (bt.tLeft <= 0) { stopTimer(); onTimeout() }
       }, 250)
@@ -1564,7 +1599,7 @@
       state.bt = null
       state.view = 'lobby'
       render()
-      ctx.Toast.show('清算完成：掌握 ' + cleared + ' 题' + (left ? '，还剩 ' + left + ' 题待复仇' : '，错题本清空'), left ? 'info' : 'ok', 3200)
+      ctx.Toast.show('清算完成：掌握 ' + cleared + ' 题' + (left ? '，还剩 ' + left + ' 题待复仇' : '，错题本清空'), left ? 'info' : 'success', 3200)
       try { ctx.log('错题复仇：' + cleared + '/' + bt.review.length + '，剩余 ' + left) } catch (e) { }
     }
 
@@ -1632,7 +1667,7 @@
         p.badges = p.badges.concat(fresh)
         fresh.forEach(function (id) {
           let b = BADGES.filter(function (x) { return x.id === id })[0]
-          if (b) ctx.Toast.show('成就解锁：' + b.name, 'ok', 3200)
+          if (b) ctx.Toast.show('成就解锁：' + b.name, 'success', 3200)
         })
       }
       p.history.unshift({
@@ -1666,7 +1701,7 @@
         let fko = last.ko ? (fw ? ' · KO！' + esc(last.opp.name) + ' HP 归零' : ' · 被 KO') : ''
         return '<div class="du-card" style="--i:0"><div class="du-banner ' + (fw ? 'win' : 'lose') + '">'
           + '<div class="big">' + I('cpChat') + '友谊赛' + (last.forfeit ? ' · 提前结束' : fw ? ' · 你赢了' : last.score === 0.5 ? ' · 平局' : ' · 输了') + '</div>'
-          + '<div class="sub">vs ' + last.opp.icon + ' ' + esc(last.opp.name) + ' · ' + esc(last.subj)
+          + '<div class="sub">vs ' + ico(last.opp.icon) + ' ' + esc(last.opp.name) + ' · ' + esc(last.subj)
           + (last.srcLabel ? ' · ' + esc(last.srcLabel) : '')
           + ' · 剩余 HP ' + last.pHp + ' : ' + last.oHp + fko + ' · 不计 ELO，纯练手感</div>'
           + '</div>'
@@ -1679,10 +1714,10 @@
           + '</div>'
       }
       let win = last.score === 1
-      let koTxt = last.ko ? (win ? ' · KO！' + esc(last.opp.name) + ' HP 归零' : ' · 被 KO，你的 HP 归零') : ''
+      let koTxt = last.ko ? (win ? ' · KO！' + esc(last.opp.name) + ' HP 归零' : (last.score === 0.5 ? ' · 同归于尽' : ' · 被 KO，你的 HP 归零')) : ''
       let s = '<div class="du-card" style="--i:0"><div class="du-banner ' + (win ? 'win' : 'lose') + '">'
         + '<div class="big">' + (last.forfeit ? I('ban') + '认输' : win ? I('trophy') + '胜利' : last.score === 0.5 ? I('cpChat') + '平局' : I('ban') + '战败') + '</div>'
-        + '<div class="sub">vs ' + last.opp.icon + ' ' + esc(last.opp.name) + '（ELO ' + last.opp.elo + '）· ' + esc(last.subj)
+        + '<div class="sub">vs ' + ico(last.opp.icon) + ' ' + esc(last.opp.name) + '（ELO ' + last.opp.elo + '）· ' + esc(last.subj)
         + (last.srcLabel ? ' · ' + esc(last.srcLabel) : '')
         + (last.forfeit ? ' · 中途认输' : ' · 剩余 HP ' + last.pHp + ' : ' + last.oHp + koTxt) + '</div>'
         + '<span class="du-elodelta ' + (last.delta >= 0 ? 'up' : 'down') + '">' + (last.delta >= 0 ? '+' : '') + last.delta + ' ELO'
@@ -1756,11 +1791,33 @@
         render()
       },
       revenge: function () { startRevenge() },
+      /* 出题失败横幅三键：重试同对手 / 换站内题库再来 / 收起 */
+      'retry-battle': function (t) {
+        let oid = t.dataset.id
+        state.lastErr = null
+        tryPick(oid)
+      },
+      'retry-bank': function (t) {
+        let oid = t.dataset.id
+        state.lastErr = null
+        let opp = ladderState(ctx).filter(function (c) { return c.opp.id === oid })[0]
+        if (!opp) { render(); return }
+        startBattle(opp.opp, { srcMode: 'bank' })
+      },
+      'retry-close': function () { state.lastErr = null; render() },
       'pick-opt': function (t) { pickOpt(Number(t.dataset.i)) },
       'next-q': function () { nextQ() },
       forfeit: function () {
         let bt = state.bt
-        if (!bt || bt.phase === 'loading') return
+        if (!bt) return
+        /* 【P1 修】loading 态（AI 整场出题最长 3 分钟）里「认输」原是死按钮 ——
+         * 现在变成「放弃本场」：直接回大厅、不结算（题都没出，结算个空气）。 */
+        if (bt.phase === 'loading') {
+          ctx.api.confirm('放弃本场？', '题目还在生成中，放弃不会消耗护盾，也不计入战绩。', function () {
+            stopTimer(); state.bt = null; state.view = 'lobby'; render()
+          })
+          return
+        }
         if (bt.solo) {
           ctx.api.confirm('退出清算？', '本次已做的题目保留结果，错题本按已答题更新。', function () {
             state.bt = null; state.view = 'lobby'; render()
@@ -1779,7 +1836,7 @@
       'drop-review': function (t, ev) {
         if (ev) { ev.preventDefault(); ev.stopPropagation() }
         try { ctx.keep.set(REVIEW_KEEP_KEY, null) } catch (e) { }
-        ctx.Toast.show('已清掉上次回顾', 'ok', 1800)
+        ctx.Toast.show('已清掉上次回顾', 'success', 1800)
         render()
       },
       rematch: function () {

@@ -53,7 +53,7 @@
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。
    * 走「主.次」而不是补丁位：市场条目只记两位（见 paper-extract-plugin-1-1.test.ts
    * 那条"市场版本必须等于源码 VERSION 的前两段"），补丁位留给不改变对外行为的修。 */
-  let VERSION = '1.7.1'
+  let VERSION = '1.7.2'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
@@ -949,6 +949,8 @@
     if (cur.length) groups.push({ kind: 'text', pages: cur.slice() })
 
     let aiQs = []
+    state.collected = aiQs          /* v1.7.2 取消保稿：AI 阶段的原始产出也留一份引用 */
+    state.failPages = state.failPages || []
     await pool(groups, 3, async function (g) {
       if (state.cancelled) throw new Error('已取消')
       try {
@@ -960,11 +962,22 @@
             try {
               let qs2 = await extractOnePage(g.pages[k], opts, state)
               qs2.forEach(function (q) { aiQs.push(q) })
-            } catch (e2) { }
+            } catch (e2) {
+              /* v1.7.2：页级失败不再吞干净 —— 记页号，跑完如实报 */
+              if (!state.cancelled) state.failPages.push(g.pages[k].no)
+            }
           }
+        } else if (!state.cancelled) {
+          state.failPages.push(g.pages[0] && g.pages[0].no)
         }
       }
     }, function (d, n) { onProgress(15 + Math.round(d / n * 45), 'AI 拆题 ' + d + '/' + n + ' 组') })
+    /* 失败页如实上报：旧版整段 catch{} 静默，用户以为全卷提取成功，题却莫名少几页 */
+    if (state.failPages && state.failPages.length) {
+      let fp = state.failPages.filter(function (x, i, a) { return a.indexOf(x) === i }).sort(function (a, b) { return a - b })
+      onProgress(62, 'AI 拆题完成')
+      log('注意：第 ' + fp.slice(0, 12).join('、') + (fp.length > 12 ? '…' : '') + ' 页识别失败已跳过（共 ' + fp.length + ' 页）—— 这一卷不完整，可重跑或手动补）')
+    }
 
     if (!aiQs.length && !blocks.length) throw new Error('没有识别到任何题目')
     if (!aiQs.length) throw new Error('AI 未识出题目（可检查接口/视觉能力）')
@@ -996,6 +1009,28 @@
     // 低置信 / 图片按需
     onProgress(65, '整理题目 / 按需裁图')
     let questions = []
+    /* v1.7.2 取消保稿：assembleExam 随时可把「已定稿的题」拼成一卷；
+     * state 上挂引用，run() 的取消分支拿它把已完成的部分存进卷库，
+     * 兑现取消按钮那句「已完成的题会保留」。 */
+    let assembleExam = function (qs, partial) {
+      return {
+        id: 'plugin-' + Date.now().toString(36) + (partial ? '-partial' : ''),
+        title: (opts.title || '导入试卷') + (partial ? '（已取消 · 部分 ' + qs.length + ' 题）' : '（' + qs.length + ' 题）'),
+        subject: opts.subject || 'math',
+        timeLimit: qs.length * 6,
+        totalScore: qs.reduce(function (a, q) { return a + (Number(q.score) || 0) }, 0) || qs.length * 5,
+        questions: qs, imported: true, partial: !!partial,
+        builtBy: 'paper-extract-plugin', generatedAt: new Date().toISOString(),
+        meta: {
+          pages: pinfos.length, scanPages: scanPages.length,
+          images: qs.filter(function (q) { return !!q.diagramImg }).length,
+          imageMode: opts.imageMode, embedded: true, engine: 'paper-extract-plugin', version: VERSION,
+          parked: partial ? [] : parked
+        }
+      }
+    }
+    state.assembleExam = assembleExam
+    state.finalized = questions
     let cropScale = 2.2
     let canvasCache = {}
     for (let qi = 0; qi < merged.length; qi++) {
@@ -1064,27 +1099,7 @@
       onProgress(70 + Math.round((qi + 1) / merged.length * 25), '处理第 ' + (qi + 1) + '/' + merged.length + ' 题')
     }
 
-    return {
-      id: 'plugin-' + Date.now().toString(36),
-      title: (opts.title || '导入试卷') + '（' + questions.length + ' 题）',
-      subject: opts.subject || 'math',
-      timeLimit: questions.length * 6,
-      totalScore: questions.reduce(function (a, q) { return a + (Number(q.score) || 0) }, 0) || questions.length * 5,
-      questions: questions, imported: true,
-      builtBy: 'paper-extract-plugin', generatedAt: new Date().toISOString(),
-      meta: {
-        pages: pinfos.length,
-        scanPages: scanPages.length,
-        images: questions.filter(function (q) { return !!q.diagramImg }).length,
-        imageMode: opts.imageMode,
-        embedded: true,
-        engine: 'paper-extract-plugin',
-        version: VERSION,
-        /* 被剔除的非题目清单（只有摘要，不带图 —— 不占体积）。界面据此告诉用户
-         * «剔掉了什么、为什么剔»，而不是让题目数莫名变少。 */
-        parked: parked
-      }
-    }
+    return assembleExam(questions, false)
   }
 
   function needImage(q, opts) {
@@ -1249,10 +1264,15 @@
    *   · mountExtract 先 restore() 再订阅，回来能看到跑到哪、跑完没有
    *   · 跑完时若已不在提取台 → ctx.notify 推一张通知卡（点「回提取台」跳回来）
    *
-   * 体积纪律：卷本体只在 ≤900KB 时随状态存（配图是数据 URL）；超了靠卷库里的 examId 回读，
+   * 体积纪律：卷本体只在 ≤200KB 时随状态存（配图是数据 URL，ctx.keep 硬顶 256KB）；
+   * 超了靠卷库里的 examId 回读（没开自动入库也会强制兜底入一次），
    * 并如实告诉用户「结果在卷库里，不回显预览」——绝不假装还在。 */
   let JOB_KEY = 'job'
-  let JOB_EXAM_MAX = 900000
+  /* v1.7.2 体积闸重定：ctx.keep 是 localStorage，单键 256KB **字节**硬顶（超了 set 直接抛）。
+   * 旧上限 900KB（≈90万字符）远在 256KB 之上 —— 中文题干 1 字 ≈3 字节，8 万字符就可能顶格。
+   * 于是「明明提取成功」的卷在写回状态时抛异常被当成失败，把好消息报成坏消息。
+   * 收进 8 万字符安全线；真超了还有 jobPatch 的弃 exam 重试兜底（结果走卷库回读）。 */
+  let JOB_EXAM_MAX = 80000
   let JOB_LOG_MAX = 80
   /* 本上下文正在跑的那次 runId：切模块后它还在（同一个 JS 上下文）；
    * 刷新浏览器后它消失 —— 用它区分「还在跑」和「上次跑到一半页面被刷掉了」。 */
@@ -1286,7 +1306,23 @@
     let cur = kp.get(JOB_KEY, null)
     let next = Object.assign({}, (cur && typeof cur === 'object' ? cur : {}), patch || {})
     if (Array.isArray(next.log) && next.log.length > JOB_LOG_MAX) next.log = next.log.slice(-JOB_LOG_MAX)
-    kp.set(JOB_KEY, next)
+    /* v1.7.2：整包塞爆 256KB 配额时先弃 exam 重试，绝不因为「存不进」把跑完的任务判死。
+     * exam 存不下 = 结果回读走卷库 examId（本就有这条路），状态行本身必须落盘。 */
+    try {
+      kp.set(JOB_KEY, next)
+    } catch (e) {
+      if (next.exam) {
+        next = Object.assign({}, next, { exam: null, examDropped: true })
+        try { kp.set(JOB_KEY, next) } catch (e2) {
+          try {
+            next = Object.assign({}, next, { log: [] })
+            kp.set(JOB_KEY, next)
+          } catch (e3) { /* 实在塞不下就不再把错误往上抛成「失败」 */ }
+        }
+      } else {
+        try { next = Object.assign({}, next, { log: [] }); kp.set(JOB_KEY, next) } catch (e4) { }
+      }
+    }
     return next
   }
   function jobClear(ctx) { keepOf(ctx).del(JOB_KEY) }
@@ -1318,20 +1354,23 @@
     recalcExamMeta(exam)
     let list = bankGet(ctx).filter(function (x) { return x.id !== exam.id })
     list.unshift(exam)
-    let keep = [], total = 0, dropped = 0, trimmed = 0
+    let keep = [], total = 0, dropped = 0, trimmed = 0, saved = false
     for (let i = 0; i < list.length; i++) {
       if (keep.length >= BANK_MAX) { dropped++; continue }
       let e = list[i]
       let sz = examChars(e)
-      if (keep.length > 0 && total + sz > BANK_CHAR_BUDGET) {
+      /* v1.7.2 归因修正：超预算时新卷自己也先试「去图保文字」，而不是把刚提取完的
+       * 最新一卷直接挤掉、再把罪名报在「较早的卷」头上。 */
+      if (total + sz > BANK_CHAR_BUDGET) {
         e = stripImages(e); sz = examChars(e); trimmed++
       }
       if (total + sz > BANK_CHAR_BUDGET * 1.4) { dropped++; continue }
       total += sz
       keep.push(e)
+      if (i === 0) saved = true
     }
     ctx.data('bank', keep)
-    return { kept: keep.length, dropped: dropped, trimmed: trimmed, chars: total }
+    return { kept: keep.length, dropped: dropped, trimmed: trimmed, chars: total, saved: saved }
   }
 
   /* ---------------- 子页导航 ---------------- */
@@ -2182,7 +2221,7 @@
     $('[data-cancel]').onclick = function () {
       state.cancelled = true
       try { if (state.abort) state.abort.abort() } catch (e) { }
-      log('正在取消…（已完成的题会保留在结果里）')
+      log('正在取消…（已处理完的题会存进卷库，不会白跑）')
     }
     /* 结果卡的「在卷库里看」：走 jumpSub 就地切子页（v1.4 前是 goTool 跳另一条路由） */
     $('[data-openlib]').onclick = function () { jumpSub(T_LIB, ctx) }
@@ -2248,16 +2287,30 @@
         let autoBank = $('[data-autobank]').value === '1'
         if (autoBank) {
           let r = bankSave(ctx, exam)
-          log('已存入卷库（保留 ' + r.kept + ' 卷 / 约 ' + fmtSize(r.chars)
-            + (r.dropped ? '；' + r.dropped + ' 卷因超出容量未存' : '')
-            + (r.trimmed ? '；' + r.trimmed + ' 卷仅保留文字' : '') + '）')
-          if (r.trimmed || r.dropped) {
-            ctx.Toast.show('卷库空间有限：较早的卷已' + (r.trimmed ? '移除配图' : '') + (r.dropped ? '清理' : '') + '，文字都还在', 'warn', 4000)
+          if (r.saved) {
+            log('已存入卷库（保留 ' + r.kept + ' 卷 / 约 ' + fmtSize(r.chars)
+              + (r.dropped ? '；' + r.dropped + ' 卷因超出容量未存' : '')
+              + (r.trimmed ? '；' + r.trimmed + ' 卷仅保留文字' : '') + '）')
+            if (r.trimmed || r.dropped) {
+              ctx.Toast.show('卷库空间有限：超预算的卷已' + (r.trimmed ? '移除配图' : '') + (r.dropped ? '清理' : '') + '，文字都还在', 'warn', 4000)
+            }
+          } else {
+            log('未存入卷库：这一卷即便去掉配图仍超出卷库容量预算 —— 结果页可直接导出 JSON 保留')
+            ctx.Toast.show('卷库存不下这一卷（去图后仍超预算），请用结果页「导出 JSON」保留', 'warn', 4600)
           }
         }
-        /* 卷本体只在没超体积上限时随状态存（配图是数据 URL）；超了靠卷库的 examId 回读 */
+        /* 卷本体只在没超体积上限时随状态存（配图是数据 URL）；超了靠卷库的 examId 回读。
+         * v1.7.2：没开自动入库且本体存不进状态时强制入一次卷库 —— 否则 done 状态下
+         * exam 与 examId 两头空，跑完的卷直接蒸发。 */
         let examCharsLen = examChars(exam)
         let stash = examCharsLen <= JOB_EXAM_MAX ? exam : null
+        if (!stash && !autoBank) {
+          try {
+            let r2 = bankSave(ctx, exam)
+            if (r2.saved) log('卷本体过大（' + fmtSize(examCharsLen) + '）没随状态存 —— 已兜底存入卷库，可在卷库查看')
+            else { log('卷本体过大且卷库也存不下 —— 请立刻在结果页导出 JSON'); ctx.Toast.show('这一卷太大存不下任何一处，请马上「导出 JSON」保留', 'danger', 6000) }
+          } catch (e3) { }
+        }
         progress(100, '完成：' + exam.questions.length + ' 题（图片 ' + exam.meta.images + ' 张）')
         jobWrite({
           state: 'done', rid: rid, endedAt: Date.now(), title: exam.title,
@@ -2269,7 +2322,25 @@
         let m = (e && e.message) || String(e)
         let canceled = !!state.cancelled
         log((canceled ? '已取消：' : '失败：') + m)
-        jobWrite({ state: canceled ? 'canceled' : 'failed', pct: 0, msg: (canceled ? '已取消：' : '失败：') + m, endedAt: Date.now() })
+        /* v1.7.2 兑现「已完成的题会保留」：取消时把已定稿（或至少已 AI 拆出）的题
+         * 拼成「部分卷」存进卷库，日志给出口 —— 旧版这里整场丢弃还谎称保留。 */
+        let keptN = 0
+        if (canceled && typeof state.assembleExam === 'function') {
+          let qs = (state.finalized && state.finalized.length) ? state.finalized : (state.collected || [])
+          if (qs.length) {
+            try {
+              let pe = state.assembleExam(qs.slice(), true)
+              let r = bankSave(ctx, pe)
+              if (r.saved) {
+                keptN = qs.length
+                log('已保留：' + keptN + ' 道已完成题存进卷库「' + pe.title + '」，可在卷库查看或导出')
+              } else {
+                log('没能保留：' + qs.length + ' 题超出卷库容量预算，本场结果丢弃（可缩小页数重跑）')
+              }
+            } catch (e2) { log('保留部分结果失败：' + ((e2 && e2.message) || e2)) }
+          }
+        }
+        jobWrite({ state: canceled ? 'canceled' : 'failed', pct: canceled ? 0 : 0, msg: (canceled ? '已取消：' : '失败：') + m, endedAt: Date.now(), partialKept: keptN })
         if (!canceled) finishNotify(ctx, null, 'failed', m)
       } finally {
         runBtn.disabled = false; $('[data-cancel]').disabled = true
@@ -2408,6 +2479,10 @@
         let inp = $('[data-file]')
         if (inp) { ev.preventDefault(); inp.click() }
       } else if (ev.key === 'Escape') {
+        /* v1.7.2 灯箱优先：放大图开着时 Esc 应先关灯箱，而不是隔着灯箱把长任务掐了。
+         * 旧版 Esc 无条件打取消按钮 —— 用户只是想关掉题图。 */
+        let lb = document.querySelector('[data-lb-root].on')
+        if (lb) { ev.preventDefault(); closeLb(); return }
         let c = $('[data-cancel]')
         if (c && !c.disabled) { ev.preventDefault(); c.click() }
       }

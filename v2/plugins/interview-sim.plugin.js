@@ -26,7 +26,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.7.0'
+  let VERSION = '1.7.1'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -623,13 +623,21 @@
     return function () { window.removeEventListener('scroll', onScroll) }
   }
 
+  /* v1.7.1：在编弹窗登记 —— 切页/卸载时统一收掉，别让「本场对话」浮层孤挂在 body 上 */
+  let OPEN_MODALS = []
   function openModal(html) {
     let wrap = document.createElement('div')
     wrap.className = 'ivs-modal'
     wrap.innerHTML = '<div class="ivs-modal-box">' + html + '</div>'
     document.body.appendChild(wrap)
     function onKey(ev) { if (ev.key === 'Escape') close() }
-    function close() { window.removeEventListener('keydown', onKey); wrap.remove() }
+    function close() {
+      window.removeEventListener('keydown', onKey)
+      wrap.remove()
+      let ix = OPEN_MODALS.indexOf(close)
+      if (ix >= 0) OPEN_MODALS.splice(ix, 1)
+    }
+    OPEN_MODALS.push(close)
     wrap.addEventListener('mousedown', function (ev) { if (ev.target === wrap) close() })
     window.addEventListener('keydown', onKey)
     requestAnimationFrame(function () { wrap.classList.add('on') })
@@ -647,7 +655,48 @@
     let elapsed = 0
     let pitch = null  /* 自我介绍专项：{left,tInt,text,report} */
     let streamDead = '' /* 流式失败原因（非空时面试间显示「重试」） */
+    let draft = ''      /* v1.7.1：作答输入框的草稿内容，跨 paint 保命 */
     let bookId = (function () { try { return ctx.data('ivsBook') || '' } catch (e) { return '' } })() /* 资料库材料包 */
+
+    /* v1.7.1 在场草稿：每一回合交流后把这场面试落进 ctx.keep（单槽、不进云库）。
+     * 旧 destroy 注释写着「回来可继续答」其实是谎 —— sess 死在 mount 闭包里，
+     * 切个标签再回来整场面试就没了。现在切页/刷新都原样恢复，交卷或弃场即清槽。 */
+    function sessPersist() {
+      try {
+        if (!sess || sess.report || !sess.transcript || !sess.transcript.length) { ctx.keep.set('ivsDraft', null); return }
+        ctx.keep.set('ivsDraft', sess)
+      } catch (e) { }
+    }
+    function dropDraft() { try { ctx.keep.set('ivsDraft', null) } catch (e) { } }
+    try {
+      let d = ctx.keep.get('ivsDraft', null)
+      if (d && typeof d === 'object' && Array.isArray(d.transcript) && d.transcript.length && !d.report) {
+        sess = d
+        elapsed = Math.max(0, Math.floor((Date.now() - (d.startAt || Date.now())) / 1000))
+      } else if (d) dropDraft()
+    } catch (e) { }
+
+    function startClock() {
+      stopClock()
+      timer = setInterval(function () {
+        elapsed++
+        /* v1.7.1 修选择器：钟的节点是 class「ivs-clock」，旧代码按一个根本没渲染的
+         * data 属性去查，永远查不到 → 面试间的钟一直冻在入场那一秒 */
+        let c = bodyEl.querySelector('.ivs-clock')
+        if (c) c.innerHTML = I('clock') + String(Math.floor(elapsed / 60)).padStart(2, '0') + ':' + String(elapsed % 60).padStart(2, '0')
+      }, 1000)
+    }
+    function stopClock() { if (timer) { clearInterval(timer); timer = null } }
+    /* 弃场统一出口：停钟、清草稿、回到控制台；半程弃场先确认 */
+    function dropSession(then) {
+      if (sess && !sess.report && sess.transcript.length && ctx.api && ctx.api.confirm) {
+        ctx.api.confirm('放弃这场面试？', '已经交流 ' + sess.transcript.length + ' 句且未交卷 —— 放弃后这份记录不留存。', function () {
+          stopClock(); sess = null; elapsed = 0; streamDead = ''; draft = ''; dropDraft(); if (then) then(); paint()
+        }, true)
+        return
+      }
+      stopClock(); sess = null; elapsed = 0; streamDead = ''; draft = ''; dropDraft(); if (then) then(); paint()
+    }
 
     el.innerHTML = '<div class="ivs-root"><header class="ivs-hero"></header><main class="ivs-body"></main></div>'
     let root = el.querySelector('.ivs-root')
@@ -679,6 +728,11 @@
       let phase = pitch ? 'pitch' : (!sess ? 'console' : (sess.report ? 'report' : 'room'))
       let entered = phase !== lastPhase
       lastPhase = phase
+      /* v1.7.1：作答内容存 draft 变量（bindCompose 里随输入更新），重建 DOM 后回填，
+       * 旧代码每次 paint 都把用户敲了一半的回答连同光标一起抹掉。 */
+      let oldTa = bodyEl.querySelector('[data-f=answer]')
+      let wasFocus = oldTa && document.activeElement === oldTa
+      let caret = wasFocus && oldTa.selectionStart != null ? oldTa.selectionStart : 0
       if (pitch) bodyEl.innerHTML = pitch.report ? pitchResultHtml() : pitchHtml()
       else if (!sess) bodyEl.innerHTML = consoleHtml()
       else if (sess.report) bodyEl.innerHTML = reportHtml()
@@ -689,6 +743,8 @@
         enterT = setTimeout(function () { bodyEl.classList.remove('ivs-enter') }, 1100)
       }
       if (sess && !sess.report) bindCompose()
+      let newTa = bodyEl.querySelector('[data-f=answer]')
+      if (newTa) { newTa.value = draft; if (wasFocus) { try { newTa.focus(); newTa.setSelectionRange(caret, caret) } catch (e) { try { newTa.focus() } catch (e2) { } } } }
       /* 【2026-10-23 第 26 轮】成绩单的两处动效必须在**每次重绘**后触发：
        * 模板里 `data-count` 是真值、文本初值是 0，而原来没有任何地方调 countUp()
        * → 大号总分永远显示 0（页眉 chips 和编年史却是对的，所以这个 bug 很难被察觉）。
@@ -1029,7 +1085,8 @@
       try { ctx.config('subject', subject); ctx.config('pressure', pressure); ctx.config('mode', mode); ctx.config('rounds', rounds); ctx.data('ivsBook', bookId) } catch (e) { }
       sess = { id: uid('iv'), subject: subject, pressure: pressure, mode: mode, rounds: rounds, transcript: [], exchanges: 0, startAt: Date.now(), at: Date.now(), report: null, bookId: book ? book.id : '', bookTitle: book ? flat(book.title || '') : '' }
       elapsed = 0
-      timer = setInterval(function () { elapsed++; let c = bodyEl.querySelector('[data-f=clock]'); if (c) c.innerHTML = I('clock') + String(Math.floor(elapsed / 60)).padStart(2, '0') + ':' + String(elapsed % 60).padStart(2, '0') }, 1000)
+      draft = ''
+      startClock()
       paint()
       ask('面试开始。请向考生提出第一个复试问题（可从自我介绍或专业基础切入）。只输出你的发言。')
     }
@@ -1065,6 +1122,7 @@
         })
         .then(function () {
           busy = false
+          streamDead = ''   /* v1.7.1：这轮通了就摘掉「重试」横幅 —— 旧代码只在手动「继续」里清，失败后下一轮成功横幅还挂着 */
           let last = sess.transcript[sess.transcript.length - 1]
           if (!last || !flat(last.text)) {
             sess.transcript.pop()
@@ -1074,12 +1132,14 @@
             last.text = last.text.slice(0, PROF_MAX) + '……（打住，先说这么多）'
           }
           lastAsk = ''
+          sessPersist()
           paint()
         })
         .catch(function (e) {
           busy = false
           if (sess.transcript.length && !flat(sess.transcript[sess.transcript.length - 1].text)) sess.transcript.pop()
           streamDead = trunc(e && e.message || e, 50)
+          sessPersist()
           ctx.Toast.show('考官掉线：' + streamDead + ' —— 可点「重试」', 'warn', 2800)
           ctx.log('面试流式失败：' + (e && e.message || e), 'warn')
           paint()
@@ -1089,10 +1149,13 @@
     function send() {
       if (busy || !sess || sess.report) return
       let ta = bodyEl.querySelector('[data-f=answer]')
+      if (!ta) return
       let text = flat(ta.value).slice(0, ANSWER_MAX)
       if (!text) { ctx.Toast.show('先写点回答再发送', 'info', 1400); return }
       sess.transcript.push({ role: 'user', text: text })
       sess.exchanges++
+      draft = ''   /* 已交的答案从输入框清掉，paint 回填才不会把它再贴回去 */
+      sessPersist()
       if (sess.exchanges >= sess.rounds) { paint(); finish() }   /* 轮数到点 → 自动评分 */
       else paint(), ask('考生已作答（第 ' + sess.exchanges + '/' + sess.rounds + ' 轮）。按流程纪律决定追问还是换题。只输出你的发言。')
     }
@@ -1129,6 +1192,7 @@
           sess.total = rep.total /* 顶层冗余一份：编年史/统计/走势线直接可读 */
           sess.at = Date.now()
           sessionSave(ctx, sess)
+          dropDraft()   /* v1.7.1：已交卷归档，在场草稿功成身退 */
           if (timer) { clearInterval(timer); timer = null }
           ctx.log('面试完成：' + sess.subject + ' · ' + sess.pressure + ' · ' + rep.total + ' 分'
             + (rep.missing.length ? '（未评 ' + rep.missing.length + ' 维）' : ''))
@@ -1169,8 +1233,8 @@
         }
         finish()
       },
-      again: function () { sess = null; paint(); },
-      home: function () { sess = null; paint() },
+      again: function () { dropSession(); },
+      home: function () { dropSession() },
       export: exportReport,
       pitch: startPitch,
       'pitch-submit': function () { pitch && submitPitch() },
@@ -1204,22 +1268,29 @@
         })
       })
       let ta = bodyEl.querySelector('[data-f=answer]')
-      if (ta) ta.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); send() }
-      })
+      if (ta) {
+        ta.addEventListener('input', function () { draft = ta.value })
+        ta.addEventListener('keydown', function (ev) {
+          /* 输入法候选词里的 Enter 是「选字」不是「交卷」：等拼音合成结束后才认 */
+          if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); send() }
+        })
+      }
     }
 
     let offStuck = bindStuck(root)
     paint()
     bindCompose()
+    /* 从 ctx.keep 恢复到半程面试：计时器要接着走（elapsed 已按 startAt 回算） */
+    if (sess && !sess.report && !timer) startClock()
 
     return function destroy() {
       if (timer) clearInterval(timer)
       if (enterT) clearTimeout(enterT)
       stopPitchTimer()
+      OPEN_MODALS.slice().forEach(function (c) { try { c() } catch (e) { } })   /* 收掉在编浮层 */
       unbind()
       offStuck()
-      /* 面试进行中切走：transcript 不丢（在 sess 内），但会话不存档 —— 回来可继续答 */
+      /* 切页/卸载：整场面试已按回合落进 ctx.keep('ivsDraft')，回来由 mount 顶部恢复续答 */
     }
   }
 

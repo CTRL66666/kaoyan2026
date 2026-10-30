@@ -101,7 +101,7 @@ function icon(ctx, k) {
 }
 
 /* ---- 1. 领域常量 ---- */
-let VERSION = '1.1'
+let VERSION = '1.1.1'
   /* 【2026-10-28】1.1：只播到期、方向键免手操作、音色预设；修复提问/留白相位「跳过此题」无效与旧语音回调串题(代际守卫)。 */
 let TOOL_ID = 'ear-radio'
 let AI_CTX_SCRIPT = 'plugin.ear-radio.script'
@@ -455,14 +455,14 @@ function makeEngine(ctx, hooks) {
   }
   function speakSeg(text, lang, onEnd) {
     if (E.dead) return
+    let done = false
+    let finish = function () { if (!done) { done = true; if (E.dead) return; onEnd() } }
     if (E.opts.silent || (!ttsOk() && !vpActive())) {
       /* 静音跟读：按字数估显示时长（约每秒 5 字，2~25 秒夹住），如实标注模式 */
       let ms = clamp(String(text || '').length / 5, 2, 25) * 1000
-      T1(onEnd, ms)
+      T1(finish, ms)
       return
     }
-    let done = false
-    let finish = function () { if (!done) { done = true; onEnd() } }
     let cfg = voiceCfg(ctx)
     if (cfg && cfg.mode && cfg.mode !== 'system' && !E.opts.silent) {
       /* AI 音色通道：en 素材可配双音色；失败自动降级系统音色（每档节目只提醒一次） */
@@ -473,7 +473,7 @@ function makeEngine(ctx, hooks) {
           try { ctx.Toast.show('AI 音色失败（' + reason + '），本档已切回系统音色', 'warn', 4000) } catch (e) { }
         }
         speakSys(text, lang, finish)
-      })
+      }, function () { return !E.dead })
       return
     }
     speakSys(text, lang, finish)
@@ -621,6 +621,12 @@ function makeEngine(ctx, hooks) {
   }
   function start(queue, trackName, opts) {
     if (!queue || !queue.length) return false
+    /* 旧场未停就开播新场：先递增代数作废旧回调，再停声/清计时器，否则叠双层语音 */
+    E._gen++
+    if (E.gapTimer) { clearTimeout(E.gapTimer); E.gapTimer = null }
+    if (E.judgeTimer) { clearTimeout(E.judgeTimer); E.judgeTimer = null }
+    try { window.Tts && window.Tts.stop && window.Tts.stop() } catch (e) { }
+    vpStop()
     Object.assign(E.opts, opts || {})
     E.queue = queue
     E.trackName = String(trackName || '')
@@ -941,7 +947,7 @@ function renderStats(env) {
 function kpiCard(v, l, cls) {
   return '<div class="er-kc' + (cls ? ' ' + cls : '') + '"><b>' + esc(v) + '</b><i>' + esc(l) + '</i></div>'
 }
-function buildReport(db) {
+function buildReport(db, ctx) {
   let t = dbTotals(db, ctx)
   let out = ['# 磨耳朵电台 · 收听报告', '', '- 生成日期：' + dkey(new Date()),
     '- 节目单：' + t.tracks + ' 档 ｜ 待复习：' + t.due + ' ｜ 弱项：' + t.weak + ' ｜ 新料：' + t.newCount,
@@ -987,6 +993,8 @@ function mountShell(el, ctx) {
       tune.gapSec = clamp(k.gapSec, 3, 20)
       tune.handsfree = !!k.handsfree
     }
+    let qp = ctx.keep.get('queuePref', null)
+    if (qp && typeof qp === 'object') S.queue.includeNew = !!qp.includeNew
     let sv = String(ctx.data('view') || '')
     for (let i = 0; i < VIEWS.length; i++) if (VIEWS[i].k === sv) S.view = sv
   } catch (e) { }
@@ -1025,7 +1033,7 @@ function mountShell(el, ctx) {
       }
     },
     onJudge: function (verdict, it, E, el) {
-      bumpDay(db, 'items', 1)
+      if (verdict !== 'skip') bumpDay(db, 'items', 1)   /* 跳过没完成自评，不计入当日条数（柱高文案说的就是自评） */
       bumpDay(db, 'secs', el || 0)
       save()
       if (env) updKpis()
@@ -1123,7 +1131,7 @@ function mountShell(el, ctx) {
     'quick': function () {
       let due = dueKeys(db)
       if (due.length) startQueue(sortQueue(db, due), '复习 · ' + fmtDate(todayKey()))
-      else go('studio')
+      else { toast('今天没有到期的内容，去备播台挑一档吧', 'info'); go('studio') }
     },
     'st-gear': function () { go('stats') },
     'go-studio': function () { go('studio') },
@@ -1162,7 +1170,7 @@ function mountShell(el, ctx) {
       db.tracks.unshift(normTrack({ name: name, itemIds: ids }))
       S.studio.pick = new Set()
       save(); render()
-      toast('已建节目单「' + name + '」（' + ids.length + ' 项）', 'ok')
+      toast('已建节目单「' + name + '」（' + ids.length + ' 项）', 'success')
     },
     'st-play': function (t) {
       let tr = null
@@ -1240,7 +1248,7 @@ function mountShell(el, ctx) {
       if (db.custom.length >= MAX_CUSTOM) { toast('自建库已满 ' + MAX_CUSTOM + ' 条', 'warn'); return }
       db.custom.unshift(normCustom({ cue: m.cue, ans: m.ans, subject: m.subject }))
       S.studio.m = { cue: '', ans: '', subject: '', aiText: m.aiText || '' }
-      save(); render(); toast('已存入自建库', 'ok')
+      save(); render(); toast('已存入自建库', 'success')
     },
     'st-cdel': function (t) {
       let id = t.dataset.id
@@ -1252,7 +1260,9 @@ function mountShell(el, ctx) {
     'st-ai': function () {
       let text = String(S.studio.m.aiText || '').trim()
       if (!text) { toast('先粘一段材料', 'warn'); return }
+      if (S.studio.genBusy) { toast('上一次拆解还在进行，等它出结果', 'warn'); return }
       let fill = function (pairs, how) {
+        S.studio.genBusy = false
         let n = 0
         pairs.forEach(function (p) {
           if (db.custom.length >= MAX_CUSTOM) return
@@ -1261,9 +1271,12 @@ function mountShell(el, ctx) {
         })
         S.studio.m.aiText = ''
         save(); render()
-        toast(how + '拆出 ' + n + ' 对脚本', n ? 'ok' : 'warn')
+        toast(how + '拆出 ' + n + ' 对脚本', n ? 'success' : 'warn')
       }
       if (!aiOk(ctx)) { fill(splitScript(text), '本地分段') ; return }
+      S.studio.genBusy = true
+      let inp = document.querySelector('[data-act="st-ai"]')
+      if (inp) inp.disabled = true
       ctx.ai.json(scriptSystem(), buildScriptAsk(text), { ctx: AI_CTX_SCRIPT, maxTokens: 2600 })
         .then(function (raw) {
           let pairs = parseScriptPairs(raw)
@@ -1295,13 +1308,14 @@ function mountShell(el, ctx) {
     /* 音色通道设置 */
     'lv-voice': function () {
       openVoiceCfgModal(ctx, function () {
-        toast('音色通道已更新：' + vpModeLabel(voiceCfg(ctx)), 'ok')
+        toast('音色通道已更新：' + vpModeLabel(voiceCfg(ctx)), 'success')
         render()
       })
     },
 
     /* 待复习 */
-    'qu-new': function (t) { S.queue.includeNew = !!(t && t.checked); save(); render() },    'qu-play': function () {
+    'qu-new': function (t) { S.queue.includeNew = !!(t && t.checked); try { ctx.keep.set('queuePref', { includeNew: S.queue.includeNew }) } catch (e) { }; render() },
+    'qu-play': function () {
       let keys = dueKeys(db)
       if (S.queue.includeNew) {
         let news = allFeedKeys(db, ctx).filter(function (k) {
@@ -1317,7 +1331,7 @@ function mountShell(el, ctx) {
 
     /* 档案数据维护 */
     'st-export': function () {
-      try { ctx.api.download('ear-radio-' + todayKey() + '.json', JSON.stringify(db, null, 2), 'application/json'); toast('电台档案已导出', 'ok') }
+      try { ctx.api.download('ear-radio-' + todayKey() + '.json', JSON.stringify(db, null, 2), 'application/json'); toast('电台档案已导出', 'success') }
       catch (e) { toast('导出失败', 'danger') }
     },
     'st-import': function () {
@@ -1345,11 +1359,19 @@ function mountShell(el, ctx) {
           db.day[k].secs += inc.day[k].secs
           db.day[k].plays += inc.day[k].plays
         })
-        save(); render(); toast('导入完成', 'ok')
+        /* 收听流水也要并入：以前只合素材和状态，导回来的历史流水被整个吞掉 */
+        inc.sessions.forEach(function (s) {
+          let sig = s.at + '|' + (s.trackName || '')
+          if (db.sessions.some(function (x) { return (x.at + '|' + (x.trackName || '')) === sig })) return
+          db.sessions.push(s)
+        })
+        db.sessions.sort(function (a, b) { return String(b.at).localeCompare(String(a.at)) })
+        if (db.sessions.length > 60) db.sessions.length = 60
+        save(); render(); toast('导入完成', 'success')
       }).catch(function () { })
     },
     'st-report': function () {
-      try { ctx.api.download('磨耳朵电台报告-' + todayKey() + '.md', buildReport(db), 'text/markdown'); toast('报告已下载', 'ok') } catch (e) { toast('生成失败', 'danger') }
+      try { ctx.api.download('磨耳朵电台报告-' + todayKey() + '.md', buildReport(db, ctx), 'text/markdown'); toast('报告已下载', 'success') } catch (e) { toast('生成失败', 'danger') }
     },
     'st-clear': function () {
       ctx.api.confirm('清空电台全部档案？', '节目单、自建脚本、排期状态、收听流水一起清（站内素材本体不动）。建议先导出。', function () {
@@ -1411,7 +1433,7 @@ function mountShell(el, ctx) {
       if (sleepT) { clearTimeout(sleepT); sleepT = null }
       if (mins > 0) {
         sleepT = T(function () { engine.stop(); toast('定时收工时间到，电台已停', 'info') }, mins * 60000)
-        toast('将在 ' + mins + ' 分钟后自动收工', 'ok')
+        toast('将在 ' + mins + ' 分钟后自动收工', 'success')
       }
       return
     }
@@ -1425,6 +1447,7 @@ function mountShell(el, ctx) {
   /* 键盘：1-4 切视图；空格=暂停/继续（仅直播间）；Esc=暂停 */
   function onKeyDown(e) {
     if (e.ctrlKey || e.metaKey || e.altKey) return
+    if (document.querySelector('#modal-overlay')) return   /* 弹窗（音色配置/确认框）开着时让位，别让空格/回车抢它的键 */
     let tg = e.target && e.target.tagName
     if (tg === 'INPUT' || tg === 'TEXTAREA' || tg === 'SELECT') return
     if (e.key >= '1' && e.key <= '4') {
@@ -1895,15 +1918,18 @@ function synthesize(text, cfg, voiceOf) {
       return u
     })
 }
-function vpSpeak(text, cfg, voiceOf, onEnd, onError) {
+function vpSpeak(text, cfg, voiceOf, onEnd, onError, isAlive) {
+  let alive = function () { return !isAlive || isAlive() }
   synthesize(text, cfg, voiceOf).then(function (url) {
+    if (!alive()) { try { URL.revokeObjectURL(url) } catch (e) { } return }   /* 合成回来时引擎已销毁：不播孤儿音频 */
     let a = new Audio(url)
     VP_AUDIO = a
-    a.onended = function () { if (VP_AUDIO === a) VP_AUDIO = null; onEnd() }
-    a.onerror = function () { onError('音频播放失败') }
+    a.onended = function () { if (VP_AUDIO === a) VP_AUDIO = null; if (alive()) onEnd() }
+    a.onerror = function () { if (alive()) onError('音频播放失败') }
     let pr = a.play()
-    if (pr && pr.catch) pr.catch(function () { onError('自动播放被拦（先点一下页面）') })
+    if (pr && pr.catch) pr.catch(function () { if (alive()) onError('自动播放被拦（先点一下页面）') })
   }, function (e) {
+    if (!alive()) return
     onError(String((e && e.message) || e).slice(0, 80))
   })
 }
@@ -2065,7 +2091,7 @@ if (window.__ERRADIO_DEBUG__) {
     SOURCES, VIEWS, emptyDb, normDb, normTrack, normCustom, normState, normSession,
     itemKey, dueKeys, sortQueue, splitScript, parseScriptPairs, dbTotals, last14, weakTop,
     feedItems, trackQueue, buildReport, srcOf,
-    synthesize, vpModeLabel, voiceCfg,
+    synthesize, vpSpeak, vpModeLabel, voiceCfg,
     makeEngine, MAX_ITEMS_PER_TRACK, MAX_CUSTOM, TOOL_ID, VERSION,
     CSS_LEN: CSS.length, CSS_EXTRA_LEN: CSS_EXTRA.length
   }

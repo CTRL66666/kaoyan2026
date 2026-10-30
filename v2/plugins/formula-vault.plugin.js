@@ -25,7 +25,7 @@
   'use strict'
 
   let TOOL_ID = 'formula-vault'
-  let VERSION = '1.3'
+  let VERSION = '1.3.2'
   /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
    * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
    * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
@@ -101,6 +101,29 @@
     if (src.indexOf('$') < 0) src = (display ? '$$' : '$') + src + (display ? '$$' : '$')
     else if (display && /^\$[^$\n]+\$$/.test(src)) src = '$$' + src.slice(1, -1) + '$$'
     return '<span class="fv-tex">' + esc(src) + '</span>'
+  }
+  /* ---- v1.3.2 懒渲染：库视图一百多条卡 × 每条 2~4 个 $…$ 段 = 300~400 次 KaTeX，
+   * 过去每次进库/每个搜索按键都全量铺一遍 —— 首屏好几秒就是这么来的。
+   * 现在卡片里的公式先落「占位骨架」（data-tex 存原文），IntersectionObserver
+   * 只在滚到视口附近时才把原文写回 DOM（texauto 那侧依旧自动渲染，插件不碰 KaTeX）。
+   * 详情弹窗/照片预览等单条场景不走这条路，保持立即渲染。 */
+  function lazyTex(s, display) {
+    let src = String(s == null ? '' : s).trim()
+    if (!src) return ''
+    return '<span class="fv-texhold" data-tex="' + esc(src) + '" data-d="' + (display ? 1 : 0) + '"></span>'
+  }
+  function revealHold(el) {
+    if (!el || el.classList.contains('on')) return
+    let src = el.getAttribute('data-tex') || ''
+    let disp = el.getAttribute('data-d') === '1'
+    el.classList.add('on')
+    el.removeAttribute('data-tex')
+    el.innerHTML = katexTex(src, disp)
+  }
+  function revealAllHolds(root) {
+    if (!root || !root.querySelectorAll) return
+    let holds = root.querySelectorAll('.fv-texhold:not(.on)')
+    for (let i = 0; i < holds.length; i++) revealHold(holds[i])
   }
 
   /* ══════════════ 2. 科目与章节 ══════════════ */
@@ -646,6 +669,15 @@
     '.fv-fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:0 26px;padding:4px 0 14px}',
     '.fv-fcard{padding:13px 0;border-top:1px dashed var(--fv-line)}',
     '.fv-enter .fv-fcard{animation:fvFade .4s cubic-bezier(.22,1,.36,1) both}',
+    /* 【v1.3.2】制卡工具条：入口从页脚提到第一屏（搜索框下面、章节列表上面） */
+    '.fv-createbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:2px 0 14px;padding:9px 12px;border:1px dashed var(--fv-acc);border-radius:12px;background:color-mix(in srgb,var(--fv-acc) 4%,transparent)}',
+    '.fv-createbar .fv-btn.primary{flex:0 0 auto}',
+    '.fv-createhint{font-size:11.5px;color:var(--fv-sub);line-height:1.6;flex:1;min-width:160px}',
+    /* 【v1.3.2】懒渲染骨架：占位条不跳动，滚到了才换成 $…$ 交给站点渲染 */
+    '.fv-texhold{display:inline-block;min-width:120px;height:15px;vertical-align:middle;border-radius:4px;background:linear-gradient(90deg,var(--fv-line2) 25%,color-mix(in srgb,var(--fv-line2) 45%,transparent) 50%,var(--fv-line2) 75%);background-size:240px 100%;animation:fvskel 1.1s linear infinite}',
+    '.fv-ft .fv-texhold{display:block;height:30px;min-width:60%}',
+    '.fv-ainote .fv-texhold,.fv-drow .fv-texhold{height:13px;min-width:80%}',
+    '@keyframes fvskel{0%{background-position:60px 0}100%{background-position:-180px 0}}',
     '.fv-fcard:first-child{border-top:0}',
     '@keyframes fvFade{from{opacity:0}to{opacity:1}}',
     '.fv-fcard.sel{background:linear-gradient(90deg,color-mix(in srgb,var(--fv-acc) 7%,transparent),transparent 70%)}',
@@ -676,6 +708,16 @@
     '.fv-enter .fv-ainote{animation:fvFade .35s both}',
     '.fv-ainote b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:9.5px;letter-spacing:.14em;color:var(--fv-acc);text-transform:uppercase;margin-top:6px}',
     '.fv-ainote b:first-child{margin-top:0}',
+    /* 【v1.3.1】AI 思考占位（扫光条）：以前生成中渲染空框，像坏了 */
+    '.fv-think{display:inline-block;font-size:12px;color:var(--fv-sub);'
+      + 'background:linear-gradient(90deg,var(--fv-soft),color-mix(in srgb,var(--fv-acc) 12%,var(--fv-soft)),var(--fv-soft));'
+      + 'background-size:200% 100%;border-radius:8px;padding:6px 12px;animation:fvThink 1.2s linear infinite}',
+    '@keyframes fvThink{from{background-position:180% 0}to{background-position:-80% 0}}',
+    /* 【v1.3.1】拍照识别结果的勾选预览 */
+    '.fv-picklist{display:flex;flex-direction:column;gap:10px;max-height:56vh;overflow:auto}',
+    '.fv-pickrow{display:flex;gap:10px;align-items:flex-start;cursor:pointer}',
+    '.fv-pickrow input{margin-top:14px;accent-color:var(--fv-acc);flex:0 0 auto}',
+    '.fv-pickrow .fv-fcard{flex:1;min-width:0;border:1px solid var(--fv-line);border-radius:12px;padding:10px 13px}',
     '.fv-drill-intro{display:flex;gap:34px;flex-wrap:wrap;padding:6px 0 2px}',
     '.fv-clock{color:var(--fv-acc);font-variant-numeric:tabular-nums}',
     '.fv-q{padding:16px 0 14px 16px;border-left:2px solid var(--fv-acc);margin-bottom:16px}',
@@ -887,6 +929,15 @@
       }).join('')
       + '</div></div>')
 
+    /* 【v1.3.2】制卡入口提到第一屏：新建 / AI 口语制卡 / 拍照识公式 ——
+     * 此前这三枚按钮沉在 100+ 张卡后面的页脚里，想记一个新公式得先翻墙。 */
+    out.push('<div class="fv-createbar">'
+      + '<button class="fv-btn primary sm" data-act="newf">+ 新建公式</button>'
+      + '<button class="fv-btn sm" data-act="ai-text">✨ 说人话，AI 制卡</button>'
+      + '<button class="fv-btn sm" data-act="ai-photo">📷 拍照识公式</button>'
+      + '<span class="fv-createhint">遇到想记的公式：口述一句或拍张照，AI 补全成完整卡片直接纳入背诵</span>'
+      + '</div>')
+
     let q = String(S.q || '').trim().toLowerCase()
     /* 易混对比：搜索词为空且没按学科过滤时才显示（避免和列表抢注意力） */
     if (!q && S.subj === 'all' && S.openChap.confuse !== false) {
@@ -934,10 +985,7 @@
       out.push('</section>')
     }
     out.push('<div class="fv-more">共 ' + filtered.length + ' 条公式（含自建 ' + S.customCount + ' 条）。'
-      + '<button class="fv-btn sm" data-act="newf" style="margin-left:10px">+ 自建公式</button>'
-      /* 【v1.3】AI 制卡双入口：口语描述 → 完整卡；拍照/截图 → 识别提取 */
-      + '<button class="fv-btn sm" data-act="ai-text">✨ AI 口语制卡</button>'
-      + '<button class="fv-btn sm" data-act="ai-photo">📷 拍照识公式</button>'
+      + '<button class="fv-btn ghost sm" data-act="newf" style="margin-left:10px">+ 自建公式</button>'
       + '数据存在浏览器本地，可随时导出备份。</div>')
     return out.join('')
   }
@@ -954,9 +1002,9 @@
       + '<b>' + esc(f.n) + '</b>'
       + '<em class="fv-fstars" title="掌握度 ' + (r ? r.mastery : 0) + '">' + stars + '</em>'
       + '</div>'
-      + '<div class="fv-ft">' + katexTex(f.t, true) + '</div>'
-      + (f.p ? '<div class="fv-fp"><i>记</i>' + katexTex(f.p) + '</div>' : '')
-      + (f.w ? '<div class="fv-fw"><i>坑</i>' + katexTex(f.w) + '</div>' : '')
+      + '<div class="fv-ft">' + lazyTex(f.t, true) + '</div>'
+      + (f.p ? '<div class="fv-fp"><i>记</i>' + lazyTex(f.p) + '</div>' : '')
+      + (f.w ? '<div class="fv-fw"><i>坑</i>' + lazyTex(f.w) + '</div>' : '')
       + '<div class="fv-fcard-f">'
       + '<span class="fv-fnext">' + (r && r.nextAt ? (overdue(S.today, r.nextAt) ? '<b class="hot">已到期</b>' : fmtDate(r.nextAt) + ' 复测') : '未测') + '</span>'
       + '<button class="fv-btn sm" data-act="drill-one" data-id="' + esc(f.id) + '">自测这条</button>'
@@ -968,10 +1016,10 @@
       + (f.d && S.deepOpen === f.id ? '<div class="fv-deep">'
         + (function () {
           let rows = []
-          if (f.d.memorize) rows.push('<div class="fv-drow"><i>记忆法</i><div>' + katexTex(f.d.memorize) + '</div></div>')
-          if (f.d.derive) rows.push('<div class="fv-drow"><i>推导</i><div>' + katexTex(f.d.derive) + '</div></div>')
-          if (f.d.scene) rows.push('<div class="fv-drow"><i>场景</i><div>' + katexTex(f.d.scene) + '</div></div>')
-          if (f.d.caution) rows.push('<div class="fv-drow"><i>注意</i><div>' + katexTex(f.d.caution) + '</div></div>')
+          if (f.d.memorize) rows.push('<div class="fv-drow"><i>记忆法</i><div>' + lazyTex(f.d.memorize) + '</div></div>')
+          if (f.d.derive) rows.push('<div class="fv-drow"><i>推导</i><div>' + lazyTex(f.d.derive) + '</div></div>')
+          if (f.d.scene) rows.push('<div class="fv-drow"><i>场景</i><div>' + lazyTex(f.d.scene) + '</div></div>')
+          if (f.d.caution) rows.push('<div class="fv-drow"><i>注意</i><div>' + lazyTex(f.d.caution) + '</div></div>')
           return rows.join('')
         })()
         + '</div>' : '')
@@ -981,9 +1029,11 @@
         if (!n) return ''
         /* 【2026-10-29】AI 口诀/线索也走 katexTex：latexNeed 契约下输出常带 $…$，
          * 纯 esc 会把公式源码直接晾给用户；katexTex 按段渲染，文本段不受影响。 */
-        return (n.mnemonic ? '<b>口诀</b>' + katexTex(n.mnemonic) : '') + (n.derivation ? '<b>线索</b>' + katexTex(n.derivation) : '')
+        if (!n.mnemonic && !n.derivation) return '<span class="fv-think">AI 思考中…</span>'   /* 占位帧：以前是空框，像坏了 */
+        return (n.mnemonic ? '<b>口诀</b>' + lazyTex(n.mnemonic) : '') + (n.derivation ? '<b>线索</b>' + lazyTex(n.derivation) : '')
       })()
       + '</div>' : '')
+      + (S.deepBusyId === f.id && !f.d ? '<div class="fv-ainote"><span class="fv-think">AI 正在解读这条公式（记忆法/推导/场景/注意）…</span></div>' : '')
       + '</article>'
   }
 
@@ -1540,7 +1590,7 @@
       aiNote: null,
       aiNoteBatch: null,
       aiBusy: false,
-      deepOpen: '', deepBusy: false,
+      deepOpen: '', deepBusy: false, deepBusyId: '',
       customCount: loadCustom(ctx).length,
       tick: 0
     }
@@ -1658,6 +1708,25 @@
       if (dot) dot.classList.toggle('show', k.due > 0)
     }
 
+    /* ---- v1.3.2 懒渲染接线：公式只在滚到视口附近才落回 DOM 交给站点渲染 ---- */
+    let texIO = null
+    let texVisible = false
+    function bindLazyTex() {
+      if (texIO) { try { texIO.disconnect() } catch (e) { } texIO = null }
+      if (S.view !== 'vault') return
+      let holds = stage.querySelectorAll('.fv-texhold:not(.on)')
+      if (!holds.length) return
+      if (!('IntersectionObserver' in window)) { revealAllHolds(stage); return }
+      texIO = new IntersectionObserver(function (entries) {
+        for (let i = 0; i < entries.length; i++) {
+          if (!entries[i].isIntersecting) continue
+          revealHold(entries[i].target)
+          try { texIO.unobserve(entries[i].target) } catch (e) { }
+        }
+      }, { rootMargin: '360px 0px 360px 0px' })
+      for (let i = 0; i < holds.length; i++) texIO.observe(holds[i])
+    }
+
     /* ---- 主渲染 ---- */
     function paint() {
       S.all = allFormulas(ctx)
@@ -1668,9 +1737,18 @@
       else if (S.view === 'ammo') html = viewAmmo(ctx, S)
       else if (S.view === 'stats') html = viewStats(ctx, S)
       else html = viewSetup(ctx, S)
+      /* 【v1.3.2】不可见时推迟重建：切后台时若恰好有 AI 回调/存储变更触发重绘，
+       * 别在背后铺 100 张卡（切回来靠下一次 paint 补上） */
+      if (document.hidden) { texVisible = false; return }
+      texVisible = true
       stage.innerHTML = html
       paintKpis()
       bindSearch()
+      bindLazyTex()
+    }
+    function onVis() {
+      /* 切回前台补一次：后台被推迟的重绘在这里还上（懒渲染只补视口附近的） */
+      if (!document.hidden && !texVisible) paint()
     }
     function reload() { S.recs = loadRecs(ctx); S.logs = loadLogs(ctx); paint() }
 
@@ -1701,16 +1779,25 @@
       }
       let sq = stage.querySelector('[data-fv="q"]')
       if (!sq) return
+      /* 【v1.3.2】搜索防抖 240ms：旧版每敲一个字符就全量重建 100+ 张卡 —— 中文输入法
+       * 连续拼音期间能把主线程打满。输入框保持受控值，重绘只在停手后做一次。 */
+      let _qT = 0
       sq.addEventListener('input', function () {
         let v = sq.value
         let pos = sq.selectionStart
         S.q = v
-        paint()
-        let again = stage.querySelector('[data-fv="q"]')
-        if (again) {
-          again.focus()
-          try { again.setSelectionRange(pos, pos) } catch (e) { /* 忽略 */ }
-        }
+        if (_qT) clearTimeout(_qT)
+        _qT = setTimeout(function () {
+          _qT = 0
+          /* 输入框已被重建摘走（例如别处先触发了 paint）：S.q 已生效，不再多刷一遍 */
+          if (!sq.isConnected) return
+          paint()
+          let again = stage.querySelector('[data-fv="q"]')
+          if (again) {
+            again.focus()
+            try { again.setSelectionRange(pos, pos) } catch (e) { /* 忽略 */ }
+          }
+        }, 240)
       })
     }
 
@@ -1903,9 +1990,12 @@
         if (!aiOk(ctx)) { toast('未配置 AI，做不了深度解读', 'warn'); return }
         if (S.deepBusy) { toast('AI 正在解读上一条', 'info'); return }
         S.deepBusy = true
+        S.deepBusyId = id
         toast('AI 正在解读这条公式…', 'info', 1800)
+        paint()
         aiDeep(ctx, f).then(function (d) {
           S.deepBusy = false
+          S.deepBusyId = ''
           if (!d) { toast('AI 没给出可用解读（可能拿不准），可重试或先看记忆要点', 'warn'); paint(); return }
           f.d = d
           /* 自建卡：S.all 与 custom 共享对象引用，改完整表落库即持久化；
@@ -2164,14 +2254,9 @@
           return aiPhotoCards(ctx, dataUrl)
         }).then(function (cards) {
           if (!cards) { toast('没从图里认出公式 —— 拍清楚一点、或改用口语制卡', 'warn', 3000); return }
-          let added = 0, dup = 0
-          cards.forEach(function (c) {
-            let r = addCustomCard(ctx, c)
-            if (r.ok) added++; else dup++
-          })
-          S.customCount = loadCustom(ctx).length
-          done()
-          toast('拍照入库 ' + added + ' 条' + (dup ? '（' + dup + ' 条重复跳过）' : '') + '，点开「AI 深度解读」可补全记忆法', 'ok', 3400)
+          /* 【v1.3.1】先预览再入库：AI 认错的条目（漏条件/张冠李戴）直接进库就是污染，
+           * 用户勾一遍才落 —— 与变式工厂 AI 制卡同一交互语言。 */
+          previewPhotoCards(ctx, cards, done)
         }).catch(function (e) {
           inp.remove()
           toast('识别失败：' + String((e && e.message) || e).slice(0, 40), 'error')
@@ -2179,6 +2264,50 @@
       }
       document.body.appendChild(inp)
       inp.click()
+    }
+    /** 拍照结果的勾选预览弹窗：全勾默认，挑掉错的再导入 */
+    function previewPhotoCards(ctx, cards, done) {
+      try {
+        if (ctx.Modal && typeof ctx.Modal.open === 'function') {
+          ctx.Modal.open({
+            title: '识别结果 · ' + cards.length + ' 条（勾掉认错的再入库）',
+            wide: true,
+            html: '<div class="fv-picklist">'
+              + cards.map(function (c, i) {
+                return '<label class="fv-pickrow"><input type="checkbox" checked data-i="' + i + '">'
+                  + '<div class="fv-fcard" style="margin:0">'
+                  + '<div class="fv-fcard-h"><span class="fv-fsubj">' + esc(subjectLabel(c.s)) + '</span><b>' + esc(c.n) + '</b>'
+                  + '<em class="fv-fsubj" style="border:0;color:var(--fv-sub)">' + esc(c.c) + '</em></div>'
+                  + '<div class="fv-ft">' + katexTex(c.t, true) + '</div>'
+                  + (c.p ? '<div class="fv-fp"><i>记</i>' + katexTex(c.p) + '</div>' : '')
+                  + '</div></label>'
+              }).join('')
+              + '</div><div class="fv-quiet" style="margin-top:8px">入库后可在卡上点「AI 深度解读」补全记忆法/推导/场景/注意。</div>',
+            actions: [
+              { label: '取消' },
+              {
+                label: '导入选中', kind: 'btn-primary', onClick: function (close) {
+                  let picked = []
+                  let boxes = document.querySelectorAll('.fv-pickrow input[data-i]')
+                  for (let i = 0; i < boxes.length; i++) {
+                    if (boxes[i].checked) { let c = cards[Number(boxes[i].getAttribute('data-i'))]; if (c) picked.push(c) }
+                  }
+                  if (!picked.length) { toast('先勾选要入库的公式', 'warn'); return }
+                  let added = 0, dup = 0
+                  picked.forEach(function (c) {
+                    let r = addCustomCard(ctx, c)
+                    if (r.ok) added++; else dup++
+                  })
+                  S.customCount = loadCustom(ctx).length
+                  done()
+                  toast('已入库 ' + added + ' 条' + (dup ? '（' + dup + ' 条重复跳过）' : ''), 'ok', 3000)
+                  close()
+                }
+              }
+            ]
+          })
+        }
+      } catch (e) { toast('弹窗打开失败', 'error') }
     }
 
     /* ---- 数据进出 ---- */
@@ -2300,11 +2429,14 @@
     window.addEventListener('resize', moveInd)
     window.addEventListener('keydown', onKey)
     root.addEventListener('click', onClick)
+    document.addEventListener('visibilitychange', onVis)
     onScroll()
 
     return function destroy() {
       stopTick()
       if (enterT) clearTimeout(enterT)
+      if (texIO) { try { texIO.disconnect() } catch (e) { } texIO = null }
+      document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', moveInd)
       window.removeEventListener('keydown', onKey)
@@ -2504,7 +2636,7 @@
       scheduleNext: scheduleNext, normRec: normRec, chaptersOf: chaptersOf,
       masteryStars: masteryStars, masteryColor: masteryColor, hintOf: hintOf,
       barsSvg: barsSvg, lastNDays: lastNDays, U_icon: U_icon, stripTex: stripTex,
-      katexTex: katexTex,
+      katexTex: katexTex, lazyTex: lazyTex, revealHold: revealHold, revealAllHolds: revealAllHolds,
       aiDeep: aiDeep, aiTextCard: aiTextCard, aiPhotoCards: aiPhotoCards, addCustomCard: addCustomCard,
       TOOL_ID: TOOL_ID, CSS_LEN: CSS.length
     }

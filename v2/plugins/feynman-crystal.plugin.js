@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4'
+  let VERSION = '1.4.1'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -70,6 +70,12 @@
     if (!isFinite(n)) n = 0
     return n < a ? a : (n > b ? b : n)
   }
+  /* 维度取值：缺项保持 null（判不了 ≠ 判了 0 分），有值夹进 0~100。 */
+  function dimVal(n) {
+    if (n == null || n === '' || !isFinite(Number(n))) return null
+    return clamp(Number(n), 0, 100)
+  }
+  function dimTxt(n) { return n == null ? '未' : String(Math.round(n)) }
   function pad2(n) { return (n < 10 ? '0' : '') + n }
   function uid(p) {
     return (p || 'fx') + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
@@ -245,20 +251,21 @@
   function normSession(raw) {
     if (!raw || typeof raw !== 'object') return null
     let qa = Array.isArray(raw.qa) ? raw.qa.slice(0, 8).map(function (x) {
-      let v = x && x.v && typeof x.v === 'object' ? x.v : {}
+      let v = x && x.v && typeof x.v === 'object' ? x.v : null
       return {
         q: String(x && x.q || '').slice(0, 500),
         a: String(x && x.a || '').slice(0, 4000),
         v: {
-          accuracy: clamp(v.accuracy, 0, 100),
-          coherence: clamp(v.coherence, 0, 100),
-          plainness: clamp(v.plainness, 0, 100),
-          score: clamp(v.score, 0, 100),
-          comment: String(v.comment || '').slice(0, 600),
-          missing: Array.isArray(v.missing) ? v.missing.slice(0, 6).map(function (m) { return String(m).slice(0, 40) }) : [],
-          followUp: String(v.followUp || '').slice(0, 300),
-          confidence: clamp(v.confidence, 0, 100),
-          manual: !!v.manual
+          /* 有判定对象：缺项保持 null（未评）。整个 v 都没有（脏导入）：按旧口径补 0。 */
+          accuracy: v ? dimVal(v.accuracy) : clamp((x.v || {}).accuracy, 0, 100),
+          coherence: v ? dimVal(v.coherence) : clamp((x.v || {}).coherence, 0, 100),
+          plainness: v ? dimVal(v.plainness) : clamp((x.v || {}).plainness, 0, 100),
+          score: v ? dimVal(v.score) : clamp((x.v || {}).score, 0, 100),
+          comment: String((v || {}).comment || '').slice(0, 600),
+          missing: Array.isArray((v || {}).missing) ? v.missing.slice(0, 6).map(function (m) { return String(m).slice(0, 40) }) : [],
+          followUp: String((v || {}).followUp || '').slice(0, 300),
+          confidence: clamp((v || {}).confidence, 0, 100),
+          manual: !!(v || {}).manual
         }
       }
     }) : []
@@ -307,6 +314,11 @@
     ctx.data('points', arr)
     return arr
   }
+  /* 淘汰不许静默：新条目顶掉了老知识点必须当场说清（数据不可逆操作的知情线） */
+  function warnEvicted(ctx, beforeLen, after) {
+    let gone = (beforeLen || 0) - (after || []).length
+    if (gone > 0) toast(ctx, '知识点库到 ' + MAX_POINTS + ' 条上限：清掉了 ' + gone + ' 条「最久没碰」的老知识（建议先去档案页导出备份）', 'warn', 5600)
+  }
   function saveSessions(ctx, list) {
     let arr = (list || []).slice(-MAX_SESSIONS)
     ctx.data('sessions', arr)
@@ -320,10 +332,18 @@
   /* ============================================================
    * 3. 会话评分（把 N 道题的三维判定揉成一个分数 + 一句结论）
    * ============================================================ */
-  /** 单题综合分：准确权重最高（讲错了，再通俗也是错的） */
+  /** 单题综合分：准确权重最高（讲错了，再通俗也是错的）；缺项按已有权重归一，不虚报 0 */
   function qScore(v) {
     if (!v) return 0
-    return Math.round(clamp(v.accuracy, 0, 100) * 0.5 + clamp(v.coherence, 0, 100) * 0.3 + clamp(v.plainness, 0, 100) * 0.2)
+    let parts = [[v.accuracy, 0.5], [v.coherence, 0.3], [v.plainness, 0.2]]
+    let sw = 0, sv = 0
+    parts.forEach(function (p) {
+      if (p[0] == null) return
+      sv += clamp(p[0], 0, 100) * p[1]
+      sw += p[1]
+    })
+    if (!sw) return 0
+    return Math.round(sv / sw)
   }
   /** 会话分：取均值，但**最后一层加权**（最后一问通常最接近"能不能重建"） */
   function sessionScore(qa) {
@@ -348,10 +368,11 @@
   function weakestDim(v) {
     if (!v) return { k: 'accuracy', label: '准确', tip: '先确认定义与条件，再谈理解' }
     let arr = [
-      { k: 'accuracy', n: clamp(v.accuracy, 0, 100), label: '准确', tip: '把定义、条件、适用范围的原文再过一遍' },
-      { k: 'coherence', n: clamp(v.coherence, 0, 100), label: '自洽', tip: '检查有没有自相矛盾或跳步：把推导一句句念出来' },
-      { k: 'plainness', n: clamp(v.plainness, 0, 100), label: '通俗', tip: '换成一个不学这门课的人也能听懂的说法，重讲一次' }
-    ]
+      { k: 'accuracy', n: v.accuracy == null ? null : clamp(v.accuracy, 0, 100), label: '准确', tip: '把定义、条件、适用范围的原文再过一遍' },
+      { k: 'coherence', n: v.coherence == null ? null : clamp(v.coherence, 0, 100), label: '自洽', tip: '检查有没有自相矛盾或跳步：把推导一句句念出来' },
+      { k: 'plainness', n: v.plainness == null ? null : clamp(v.plainness, 0, 100), label: '通俗', tip: '换成一个不学这门课的人也能听懂的说法，重讲一次' }
+    ].filter(function (x) { return x.n != null })
+    if (!arr.length) return { k: 'accuracy', n: 0, label: '准确', tip: '先确认定义与条件，再谈理解' }
     arr.sort(function (a, b) { return a.n - b.n })
     return arr[0]
   }
@@ -457,10 +478,10 @@
        * 那是把"判不了"说成"你不行"。改成 manual，让用户自评。 */
       if (r.accuracy == null && r.score == null && r.coherence == null) return manualVerdict()
       let v = {
-        accuracy: clamp(r.accuracy, 0, 100),
-        coherence: clamp(r.coherence, 0, 100),
-        plainness: clamp(r.plainness, 0, 100),
-        score: clamp(r.score, 0, 100),
+        accuracy: dimVal(r.accuracy),
+        coherence: dimVal(r.coherence),
+        plainness: dimVal(r.plainness),
+        score: dimVal(r.score),
         comment: String(r.comment || '').slice(0, 300),
         missing: Array.isArray(r.missing) ? r.missing.slice(0, 6).map(function (m) { return String(m).slice(0, 60) }) : [],
         followUp: String(r.followUp || '').slice(0, 200),
@@ -780,7 +801,13 @@
     }
 
     /** 开始一次复述（指定知识点；不指定则取到期最久的那条） */
-    function startRun(point) {
+    function startRun(point, force) {
+      /* v1.4.1：半程开新局要确认 —— 旧代码直接把 in-flight run 覆盖掉，写到一半的答案无声蒸发 */
+      let R = S.run
+      if (!force && R && R.phase !== 'done' && (R.phase === 'answer' || R.phase === 'judge' || (R.answers || []).length)) {
+        ctx.api.confirm('放弃当前这轮复述？', '已经写了 ' + (R.answers || []).length + ' 条还没收尾。开新一轮这一轮就地作废（不进历史）。', function () { startRun(point, true) }, true)
+        return
+      }
       let p = point
       if (!p) {
         let due = dueList(S.points, todayKey())
@@ -826,13 +853,17 @@
         run.idx = 0
         run.phase = 'answer'
         run.busy = false
+        run.startedAt = Date.now()
+        startTick()                             /* 此前只有挂载时才会 startTick：计时器一直冻在 0:00 */
         paint()
       })['catch'](function (e) {
         if (S.run !== run) return
         run.busy = false
         run.phase = 'answer'
         run.chain = localChain(p, levels)
+        run.startedAt = Date.now()
         run.err = '出题失败，已用本地模板：' + ((e && e.message) || e)
+        startTick()
         paint()
       })
     }
@@ -1006,6 +1037,7 @@
        * 只 paint 的话「新建的卡不出现」，用户会以为没建成（真机踩到）。 */
       if (act === 'newpoint') { openNewPoint(ctx, reload); return }
       if (act === 'addpoint') { openNewPoint(ctx, reload); return }
+      if (act === 'goto-crystal') { go('crystal'); return }   /* 空态与统计页的三枚「去晶体图」按钮此前是死键 */
       if (act === 'editpoint') { openEditPoint(ctx, findPoint(S.points, id), reload); return }
       if (act === 'delpoint') {
         let p = findPoint(S.points, id)
@@ -1391,6 +1423,8 @@
     out.push('<span>第 ' + (run.idx + 1) + ' / ' + run.chain.length + ' 层</span>')
     out.push('<span class="fx-clock" data-fx="clock">' + fmtDur(Date.now() - (run.startedAt || Date.now())) + '</span>')
     out.push('</div>')
+    /* v1.4.1：run.err 此前只写不读 —— AI 出题失败降级本地模板这事必须让用户看见，别假装一切正常 */
+    if (run.err) out.push('<div class="fx-errbar"><i>!</i><span>' + esc(run.err) + '（不影响本轮继续；可在设置页查 AI 状态）</span></div>')
 
     out.push('<div class="fx-q"><b>' + esc(q.q) + '</b>'
       + (q.why ? '<span class="fx-qwhy">考的是：' + esc(q.why) + '</span>' : '')
@@ -1443,11 +1477,11 @@
     out.push('<div class="fx-dims">')
     for (let i = 0; i < dims.length; i++) {
       let d = dims[i]
-      let c = masteryColor(d.n)
-      out.push('<div class="fx-dim" style="--c:' + c.c + '">'
-        + '<div class="fx-dim-h"><b>' + d.t + '</b><em>' + Math.round(d.n) + '</em></div>'
-        + '<div class="fx-dim-bar"><i style="width:' + clamp(d.n, 0, 100) + '%"></i></div>'
-        + '<span>' + d.tip + '</span></div>')
+      let c = masteryColor(d.n || 0)
+      out.push('<div class="fx-dim" style="--c:' + (d.n == null ? 'var(--fx-line2)' : c.c) + '">'
+        + '<div class="fx-dim-h"><b>' + d.t + '</b><em>' + (d.n == null ? '未评' : Math.round(d.n)) + '</em></div>'
+        + '<div class="fx-dim-bar"><i style="width:' + (d.n == null ? 0 : clamp(d.n, 0, 100)) + '%"></i></div>'
+        + '<span>' + (d.n == null ? 'AI 没给出这一维（不按 0 分算）' : d.tip) + '</span></div>')
     }
     out.push('</div>')
     if (v.comment) out.push('<div class="fx-comment">' + esc(v.comment) + '</div>')
@@ -1520,7 +1554,7 @@
     })
     if (!p) { toast(ctx, '标题不能为空', 'warn'); return }
     list.push(p)
-    savePoints(ctx, list)
+    warnEvicted(ctx, list.length, savePoints(ctx, list))
     if (done) done(p)
   }
   function openNewPoint(ctx, done) {
@@ -1948,7 +1982,7 @@
           out.push('<div class="fx-hqa">'
             + '<b>Q' + (j + 1) + '　' + esc(shortTitle(qa.q, 60)) + '</b>'
             + '<p>' + esc(shortTitle(String(qa.a || '').replace(/\s+/g, ' '), 220)) + '</p>'
-            + '<span>准 ' + qa.v.accuracy + ' · 洽 ' + qa.v.coherence + ' · 俗 ' + qa.v.plainness
+            + '<span>准 ' + dimTxt(qa.v.accuracy) + ' · 洽 ' + dimTxt(qa.v.coherence) + ' · 俗 ' + dimTxt(qa.v.plainness)
             + (qa.v.manual ? ' · 自评' : '') + (qa.v.comment ? '　' + esc(qa.v.comment) : '') + '</span>'
             + '</div>')
         }
@@ -2060,7 +2094,7 @@
         let qa = s.qa[j]
         lines.push('- 问：' + qa.q)
         lines.push('  答：' + String(qa.a || '').replace(/\n/g, ' ').slice(0, 160))
-        if (qa.v && qa.v.comment) lines.push('  评：' + qa.v.comment + '（准 ' + qa.v.accuracy + ' / 洽 ' + qa.v.coherence + ' / 俗 ' + qa.v.plainness + '）')
+        if (qa.v && qa.v.comment) lines.push('  评：' + qa.v.comment + '（准 ' + dimTxt(qa.v.accuracy) + ' / 洽 ' + dimTxt(qa.v.coherence) + ' / 俗 ' + dimTxt(qa.v.plainness) + '）')
       }
       lines.push('')
     }
@@ -2092,7 +2126,7 @@
           }
           let merged = []
           for (let k in map) if (Object.prototype.hasOwnProperty.call(map, k)) merged.push(map[k])
-          savePoints(ctx, merged)
+          warnEvicted(ctx, merged.length, savePoints(ctx, merged))
           let oldS = loadSessions(ctx)
           let seen = {}
           for (let i = 0; i < oldS.length; i++) seen[oldS[i].id] = 1
@@ -2110,14 +2144,19 @@
     })
   }
   /** AI 体检：真打一次最小请求，比"配置里填了 key"更可信 */
+  let selfTestBusy = false
   function aiSelfTest(ctx) {
+    if (selfTestBusy) { toast(ctx, '上一次测试还在跑，稍等一下', 'info', 1600); return }
     if (!aiOk(ctx)) { toast(ctx, '未配置 AI：设置页填好接口后就能自动判定', 'warn', 2600); return }
+    selfTestBusy = true
     toast(ctx, '正在测试…', 'info', 1200)
     /* 探活走伪场景 probe.connect（全站「连通性测试」共用一桶），
      * 不占用业务场景的 Token/温度配置，也不该在参数中心里多出一行。 */
     ctx.ai.json('只输出 JSON：{"ok":true}', '回一个 {"ok":true} 即可。', { ctx: 'probe.connect' }).then(function () {
+      selfTestBusy = false
       toast(ctx, 'AI 可用：出题与判定都会自动跑', 'success', 2600)
     })['catch'](function (e) {
+      selfTestBusy = false
       toast(ctx, 'AI 调用失败：' + ((e && e.message) || '') + '（不影响本地模板模式）', 'warn', 3200)
     })
   }
@@ -2261,9 +2300,11 @@
     '.fx-sel{flex:0 0 auto;width:auto;cursor:pointer}',
     '.fx-clock{margin-left:auto;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--fx-acc);font-variant-numeric:tabular-nums}',
     '.fx-q{padding:16px 0 14px 16px;border-left:2px solid var(--fx-acc);margin-bottom:16px}',
-    '.fx-q b{display:block;font-family:Georgia,"Songti SC",serif;font-size:17.5px;line-height:1.65;font-weight:700;letter-spacing:.01em}',
+    '.fx-q b{display:block;font-family:Georgia,"Songti SC",serif;font-size:17.5px;line-height:1.65;font-weight:700;letter-spacing:.01em;overflow-wrap:break-word}',
     '.fx-qwhy{display:block;margin-top:7px;font-size:11.5px;color:var(--fx-sub);letter-spacing:.03em}',
     '.fx-qlocal{display:inline-block;margin-top:9px;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.08em;color:#b45309;border-bottom:1px solid rgba(180,83,9,.4);padding-bottom:1px}',
+    '.fx-errbar{display:flex;gap:8px;align-items:flex-start;margin:8px 0 2px;padding:9px 12px;border-radius:10px;font-size:12.5px;line-height:1.6;color:#b45309;background:rgba(180,83,9,.08);border:1px solid rgba(180,83,9,.28)}',
+    '.fx-errbar i{flex:0 0 18px;width:18px;height:18px;border-radius:50%;background:#b45309;color:#fff;font-style:normal;font-weight:700;font-size:12px;line-height:18px;text-align:center}',
     '@keyframes fxSpin{to{transform:rotate(360deg)}}',
     '@keyframes fxShimmer{0%,100%{opacity:.35}50%{opacity:1}}',
     '.fx-dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0 22px;margin-bottom:14px}',

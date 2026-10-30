@@ -71,7 +71,7 @@
    * （缺答案/答案非A-D/选项重复/题干过短或不自足/换皮）标记疑点；疑点题须走结构化复核清单
    * （题干自足/答案复算/干扰项成立三项勾选）才能成卷；档案加复核台账。
    * 版本必须涨：已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.3'
+  let VERSION = '1.3.1'
   let TOOL_ID = 'variant-forge'
   let AI_CTX_GEN = 'plugin.variant-forge.gen'
   let AI_CTX_AUDIT = 'plugin.variant-forge.audit'
@@ -613,7 +613,7 @@
       return Promise.resolve({ ok: sk.length > 0, count: sk.length, skeleton: true })
     }
     return ctx.ai.json(genSystem(), buildGenAsk(L, stratKeys, count), {
-      ctx: AI_CTX_GEN, maxTokens: 3800, temperature: 0.8
+      ctx: AI_CTX_GEN, maxTokens: 3800, temperature: 0.8, timeout: 120000
     }).then(function (raw) {
       let r = parseGenResult(raw)
       if (!r.ok) return { ok: false, count: 0, error: r.error }
@@ -638,13 +638,16 @@
     let doneArr = []
     let failedArr = []
     let i = 0
+    /* count 可以是数字，也可以是 (L)=>数字：批量开炉按母题分别算剩余配额，
+       统一传请求数会把已到上限的炉子灌爆（v1.3.1 修） */
+    function cntOf(L) { return (typeof count === 'function') ? Math.max(1, count(L) | 0) : count }
     function step() {
       if (cancelled || i >= list.length) {
         return Promise.resolve({ done: doneArr, failed: failedArr, cancelled: cancelled })
       }
       let L = list[i]
       i++
-      return forgeOne(ctx, L, stratKeys, count).then(function (r) {
+      return forgeOne(ctx, L, stratKeys, cntOf(L)).then(function (r) {
         if (r.ok) doneArr.push(L.id)
         else failedArr.push({ id: L.id, why: r.error || '失败' })
         if (onProgress) { try { onProgress(i, list.length, L, r) } catch (e) { /* 回调炸了不拦主链 */ } }
@@ -799,7 +802,9 @@
     })
     return { drafts: drafts, groups: gs, skipped: skipped }
   }
-  /* 入库并记账；PaperKit 的 skipped 原样并入返回值（如实拒绝，不静默） */
+  /* 入库并记账；PaperKit 的 skipped 原样并入返回值（如实拒绝，不静默）。
+     逐卷调用 addDrafts：它按通过顺序返回 ids，被闸掉的卷没有对应 id ——
+     一次灌一批再把 ids 按 index 对回 groups，错位会把 A 卷记到 B 谱系头上（v1.3.1 修）。 */
   function commitPapers(ctx, db, build, createdAt) {
     let res = { ids: [], skipped: (build.skipped || []).slice() }
     if (!build.drafts.length) return res
@@ -808,15 +813,14 @@
       res.skipped.push('宿主 PaperKit 不可用（题卷能力未加载）')
       return res
     }
-    let add = kit.addDrafts(build.drafts)
-    res.ids = (add && add.ids) || []
-    let addSkipped = (add && add.skipped) || []
-    addSkipped.forEach(function (s) { res.skipped.push(String(s)) })
-    /* addDrafts 按传入顺序返回；某卷被闸掉则该组无对应 id，如实跳过 */
-    res.ids.forEach(function (id, gi) {
+    build.drafts.forEach(function (d, gi) {
       let g = build.groups[gi]
-      let d = build.drafts[gi]
-      if (!g || !d) return
+      if (!g) return
+      let add = kit.addDrafts([d])
+      let id = (add && add.ids && add.ids[0]) || ''
+      ;((add && add.skipped) || []).forEach(function (s) { res.skipped.push(String(s)) })
+      if (!id) return
+      res.ids.push(id)
       let title = d.title
       db.papers.unshift(normPaper({
         id: id, title: title, subject: g.subject, count: g.count, score: g.score,
@@ -1189,7 +1193,7 @@
     let list = S.forge.showAll ? visible : visible.slice(0, 4)
     let cards = ''
     if (!db.lineages.length) {
-      cards = emptyBox('还没有开过炉', '托盘放好母题、勾上策略，按下「开炉」。')
+      cards = emptyBox('还没有开过炉', '托盘放好母题、勾上策略，按下「开炉」。', '<button class="vf-btn" data-act="go-bench">去选题台挑母题</button>')
     } else if (!visible.length) {
       cards = emptyBox('筛选后没有谱系', '换个条件，或展开全部档案。', '<button class="vf-btn" data-act="forge-showall">展开全部</button>')
     } else {
@@ -1707,7 +1711,7 @@
 
     /* ---- 基础设施 ---- */
     function toast(msg, type) { try { ctx.Toast.show(msg, type || 'info', 3600) } catch (e) { } }
-    function save() { saveDb(ctx, db) }
+    function save() { if (destroyed) return; saveDb(ctx, db) }
     /* 勾选后同步筛选条：送炉按钮增/改/删、全选文案 —— 与 renderBench 首画共用 pickGoHtml 模板 */
     function syncPickBar() {
       let bar = stageEl.querySelector('.vf-filter')
@@ -1837,8 +1841,12 @@
       'bench-all': function () {
         let cands = candList(ctx, S.bench.src)
         if (S.bench.subj !== 'all') cands = cands.filter(function (c) { return c.subject === S.bench.subj })
-        let q = String(S.bench.q || '').trim()
-        if (q) cands = cands.filter(function (c) { return String(c.stem).indexOf(q) >= 0 })
+        let q = String(S.bench.q || '').trim().toLowerCase()
+        /* 与 renderBench 同一把筛子：只看题干字面会把「列表里明明搜到」的题从全选里漏掉（v1.3.1 修） */
+        if (q) cands = cands.filter(function (c) {
+          return fingerprint(c.stem + ' ' + c.point + ' ' + c.trap).indexOf(fingerprint(q)) >= 0
+            || String(c.stem).toLowerCase().indexOf(q) >= 0
+        })
         if (S.bench.pick.size) S.bench.pick = new Set()
         else cands.slice(0, Math.max(0, MAX_STAGED - db.staged.length)).forEach(function (c) { S.bench.pick.add(c.key) })
         render()
@@ -2005,6 +2013,7 @@
         let r = findV(t.dataset.id); if (!r) return
         if (r.v.status === 'kept') {
           let s = db.stratStat[r.v.strategy]; if (s && s.keep > 0) s.keep-- /* 撤销留用要退账 */
+          bumpDay(db, 'keep', -1)                                          /* 当日留用数同样要退，别虚高 */
         }
         r.v.status = 'drop'; r.v.updatedAt = nowIso(); save(); render()
       },
@@ -2285,14 +2294,22 @@
         S.traySel = ''
       }
       if (!targets.length) { save(); render(); return }
-      /* 每母题按「单炉上限 − 现存非弃用」定配额；没配额就跳过并如实报 */
+      /* 每母题按「单炉上限 − 现存非弃用」定配额；没配额就跳过并如实报（多条并成一句，别刷 toast 屏） */
       let plan = []
+      let quota = {}
+      let capped = []
       targets.forEach(function (L) {
         let room = Math.max(0, S.forge.cap - (L.variants || []).filter(function (v) { return v.status !== 'drop' }).length)
         let q = Math.min(S.forge.count, room)
-        if (q <= 0) { toast('「' + shortText(L.stem, 16) + '」变式已到单炉上限，跳过（可调高上限或删旧变式）', 'warn'); return }
+        if (q <= 0) { capped.push(shortText(L.stem, 16)); return }
+        quota[L.id] = q
         plan.push(L)
       })
+      if (capped.length) {
+        toast(capped.length === 1
+          ? '「' + capped[0] + '」变式已到单炉上限，跳过（可调高上限或删旧变式）'
+          : capped.length + ' 道母题变式已到单炉上限，本轮跳过（可调高上限或删旧变式）', 'warn')
+      }
       if (!plan.length) {
         /* 一道都没配额：回滚本轮刚建档的空谱系，母题请回托盘 —— 不留孤儿档案 */
         targets.forEach(function (L) {
@@ -2306,7 +2323,7 @@
       S.forge.running = true; S.forge.done = 0; S.forge.total = plan.length; S.forge.phase = ''
       S.lastBatch = null
       render()
-      let h = forgeBatch(ctx, plan, S.forge.strats, S.forge.count, function (done, total, L, r) {
+      let h = forgeBatch(ctx, plan, S.forge.strats, function (L) { return quota[L.id] || S.forge.count }, function (done, total, L, r) {
         S.forge.done = done; S.forge.phase = shortText(L.stem, 18) + (r.ok ? (r.skeleton ? '（骨架）' : '') : ' ✗')
         bumpDay(db, 'gen', r.ok ? r.count : 0)
         save()
@@ -2452,6 +2469,7 @@
     /* 键盘：1-5 切视图、N 直达熔炉、Esc 收起编辑（输入场景与组合键不拦）——站内多插件同惯例 */
     function onKeyDown(e) {
       if (e.ctrlKey || e.metaKey || e.altKey) return
+      if (document.querySelector('#modal-overlay')) return   /* 确认框/弹窗开着：别让 1~5/n 抢走焦点视图 */
       let tg = e.target && e.target.tagName
       if (tg === 'INPUT' || tg === 'TEXTAREA' || tg === 'SELECT') return
       if (e.key >= '1' && e.key <= '5') {
@@ -2698,7 +2716,7 @@
     '.vf-vrow.drop{opacity:.5}',
     '.vf-vrow.editing{border:1px solid var(--vf-acc2);border-radius:10px;padding:12px 13px}',
     '.vf-vhead{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:7px}',
-    '.vf-vstem{font-size:13.5px;line-height:1.75;padding:2px 0 2px 12px;border-left:2px solid color-mix(in srgb,var(--vf-acc) 55%,transparent)}',
+    '.vf-vstem{font-size:13.5px;line-height:1.75;padding:2px 0 2px 12px;border-left:2px solid color-mix(in srgb,var(--vf-acc) 55%,transparent);overflow-wrap:break-word;word-break:normal}',
     '.vf-vstem.skel{color:var(--vf-sub);font-style:italic;border-left-color:var(--vf-line2)}',
     '.vf-fold{margin-top:7px;font-size:12.5px;color:var(--vf-sub)}',
     '.vf-fold summary{cursor:pointer;font-weight:600;color:var(--vf-acc);font-size:12px}',
@@ -3077,7 +3095,8 @@
       lineageStat, dbTotals, last14, weakPoints, strategyReport, skinCheck, stemDup,
       buildGenAsk, parseGenResult, buildAuditAsk, parseAudit,
       skeletonVariants, trimVariants,
-      buildDrafts, variantToQuestion, subjectSplit, buildPaperMd, buildReport,
+      buildDrafts, commitPapers, variantToQuestion, subjectSplit, buildPaperMd, buildReport,
+      forgeBatch,
       quickIssues, issueLabel, genSystem,
       MAX_STAGED, MAX_LINEAGES, MAX_VARIANTS,
       PAPER_TAG, TOOL_ID, VERSION,

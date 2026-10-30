@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.6.0'
+  let VERSION = '1.6.2'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -211,6 +211,23 @@
    */
 
   /* 新卡出厂状态 */
+  /** 导入/备份恢复专用：带排期字段的卡原样接回（旧版一律 newCard 重建，
+   *  把"迁移设备"变成"排期清零"——due/ivl/ease/reps/lapses/studied 全丢）。 */
+  function importCard(c) {
+    let base = newCard(c.front, c.back, c)
+    if (c.studied === true) base.studied = true
+    base.reps = Math.max(0, num(c.reps, 0))
+    base.lapses = Math.max(0, num(c.lapses, 0))
+    base.ease = clamp(num(c.ease, EASE_INIT), EASE_MIN, EASE_MAX)
+    base.ivl = Math.max(0, num(c.ivl, 0))
+    base.due = num(c.due, Date.now())
+    base.lastQ = num(c.lastQ, null)
+    base.lastSeen = num(c.lastSeen, 0)
+    if (c.id) base.id = String(c.id).slice(0, 24)
+    if (c.srcRef) base.srcRef = String(c.srcRef).slice(0, 60)
+    if (c.srcLabel) base.srcLabel = String(c.srcLabel).slice(0, 24)
+    return base
+  }
   function newCard(front, back, opts) {
     opts = opts || {}
     return {
@@ -321,6 +338,8 @@
         let m = byRef[c.srcRef]
         if (!m) m = byStem[flat(c.front).slice(0, 30)]
         if (!m || !Array.isArray(m.options) || !m.options.length) return
+        /* 【P2 修】用户手改过卡面的不覆写：只补「卡面仍是原题干」的（改过的以用户为准） */
+        if (flat(c.front) !== flat(m.stem || m.desc || '')) return
         let eo = withOptions(flat(m.stem || m.desc || ''), c.back, m.options)
         c.front = String(eo.front).slice(0, FRONT_MAX)
         c.back = String(eo.back).slice(0, BACK_MAX)
@@ -683,6 +702,10 @@
       + 'color:var(--md-ink2);border:1px solid var(--md-line)}',
     /* 来源标记：和 #标签 区分开（虚线边 + 强调色文字），一眼看出"这张卡是别的插件塞进来的" */
     '.md-tag.md-from{background:transparent;border-style:dashed;color:var(--md-acc-text);font-weight:700}',
+    /* 【v1.6.1】「选项未入库」诚实提示：错题本没存选项时挂这枚黄 chip，悬停说清下一步去哪补 */
+    '.md-misschip{display:inline-block;font-size:10.5px;border-radius:999px;padding:1px 8px;cursor:help;'
+      + 'background:color-mix(in oklab,var(--md-warn) 10%,transparent);color:var(--md-warn);'
+      + 'border:1px solid color-mix(in oklab,var(--md-warn) 32%,transparent);font-weight:700}',
     '.md-due{font-weight:700;padding:1px 8px;border-radius:999px;border:1px solid transparent}',
     '.md-due.new{background:color-mix(in oklab,var(--md-acc) 10%,transparent);color:var(--md-acc-text);border-color:color-mix(in oklab,var(--md-acc) 28%,transparent)}',
     '.md-due.now{background:color-mix(in oklab,var(--md-warn) 12%,transparent);color:var(--md-warn);border-color:color-mix(in oklab,var(--md-warn) 30%,transparent)}',
@@ -1511,7 +1534,7 @@
             if (!c || typeof c.front !== 'string' || typeof c.back !== 'string') return
             if (flat(c.front).length < 2 || !flat(c.back)) return
             if (deck.length >= DECK_MAX_CARDS) return
-            deck.unshift(newCard(c.front, c.back, c))
+            deck.unshift(importCard(c))
             added++
           })
           deckSave(ctx, deck)
@@ -1776,6 +1799,7 @@
           + (card.hint ? '<div class="md-bighint">' + I('bulb') + esc(card.hint) + '</div>' : '')
           + '<div class="md-bigfoot"><span class="md-tag">' + esc(card.subject) + '</span>'
           + card.tags.map(function (t) { return '<span class="md-tag">#' + esc(t) + '</span>' }).join('')
+          + (optsMissing(card) ? '<span class="md-misschip" title="错题本里没存这道题的选项，插件变不出来 —— 去错题本补全后重新「错题制卡」">选项未入库</span>' : '')
           + '<span style="margin-left:auto">' + (card.studied ? '复习 · 间隔 ' + card.ivl + ' 天' : '新卡首见') + '</span></div></div>'
           + '<div class="md-bigface back"><div class="md-bigtext">' + esc(card.back) + '</div>'
           + '<div class="md-bigfoot"><span>连续成功 ' + card.reps + ' · 失败 ' + card.lapses + ' 次 · 难度 ' + card.ease.toFixed(2) + '</span></div></div>'
@@ -1842,6 +1866,10 @@
       let deck = deckGet(ctx)
       let b = buildQueue(deck, Date.now())
       if (!b.order.length) { ctx.Toast.show('没有到期的卡片', 'info', 1600); return }
+      /* 【P0 修】新一场必须清空上一场的撤销快照：旧版没清，新场第一张还没评
+       * 「撤销上一次评分」就可点，一点把**上一场**的卡/队列/计数/日志长度灌进当前会话，
+       * 还会按旧 logLen 截短云端日志 —— 幽灵撤销搅乱真数据。 */
+      last = null
       S = {
         deck: deck, order: b.order, ptr: 0, flipped: false,
         answered: 0, graded: 0, again: 0, requeueCount: 0, newLearned: 0,
@@ -1983,6 +2011,8 @@
       if (!S) return
       let tag = (ev.target && ev.target.tagName) || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      /* 【P2 修】全文/复核弹窗开着时快捷键全部让路：旧版按 1 会在弹窗背后给卡评分 */
+      if (document.querySelector('.md-modal')) return
       if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && (ev.key === 'z' || ev.key === 'Z')) {
         if (undoGrade()) ev.preventDefault()
         return
@@ -2226,17 +2256,34 @@
           let n1 = 0, n2 = 0
           if (Array.isArray(data.cards)) {
             let cur = deckGet(ctx)
+            let have = {}
+            cur.forEach(function (c) { if (c.id) have[c.id] = 1 })
             data.cards.slice(0, DECK_MAX_CARDS).forEach(function (c) {
               if (!c || typeof c.front !== 'string' || !flat(c.front) || typeof c.back !== 'string' || !flat(c.back)) return
               if (cur.length >= DECK_MAX_CARDS) return
-              cur.unshift(newCard(c.front, c.back, c)); n1++
+              if (c.id && have[c.id]) return                       /* 同 id 视为已在库，不复制第二份 */
+              cur.unshift(importCard(c)); n1++
             })
             deckSave(ctx, cur)
           }
           if (Array.isArray(data.log)) {
-            ctx.data('log', data.log.slice(-LOG_MAX)); n2 = Math.min(data.log.length, LOG_MAX)
+            /* 【P1 修】旧版整体覆盖却 toast 说「已合并不覆盖」——备份较旧时真实丢复习史。
+             * 真合并：按 t:id 去重后追加，再截 LOG_MAX。 */
+            let curLog = logGet(ctx)
+            let seen = {}
+            curLog.forEach(function (x) { seen[x.t + ':' + (x.id || '')] = 1 })
+            let merged = curLog.slice()
+            data.log.forEach(function (x) {
+              if (!x || typeof x !== 'object') return
+              let k = x.t + ':' + (x.id || '')
+              if (seen[k]) return
+              seen[k] = 1; merged.push(x)
+            })
+            merged.sort(function (a, b) { return (a.t || 0) - (b.t || 0) })
+            ctx.data('log', merged.slice(-LOG_MAX))
+            n2 = merged.length - curLog.length
           }
-          ctx.Toast.show('导入完成：' + n1 + ' 张卡 / ' + n2 + ' 条日志（已合并，不覆盖）', 'success', 2600)
+          ctx.Toast.show('导入完成：' + n1 + ' 张卡 / 新增 ' + n2 + ' 条日志（按时间合并，旧记录不丢）', 'success', 2600)
           ctx.log('导入备份：+' + n1 + ' 卡 / +' + n2 + ' 日志')
         }).catch(function () { })
       },
@@ -2478,6 +2525,8 @@
       newCard: newCard,
       withOptions: withOptions,
       cardFromMistake: cardFromMistake,
+      optsMissing: optsMissing,
+      repairMistakeOptions: repairMistakeOptions,
       schedule: schedule,
       dueQueue: dueQueue,
       retentionOf: retentionOf,

@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.5.0'
+  let VERSION = '1.5.1'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -435,6 +435,11 @@
     ctx.data('questions', arr)
     return arr
   }
+  /* 题库淘汰不许静默：新增把老题挤掉时必须当场说清（不可逆数据操作的知情线） */
+  function evictWarn(ctx, beforeLen, after) {
+    let gone = (beforeLen || 0) - (after || []).length
+    if (gone > 0) toast(ctx, '题库到 ' + MAX_Q + ' 题上限：挤掉了 ' + gone + ' 道「最久没复练」的老题（建议先去设置页导出备份）', 'warn', 5600)
+  }
   function saveAs(ctx, list) {
     let arr = (list || []).slice(-MAX_A)
     ctx.data('attempts', arr)
@@ -530,8 +535,11 @@
         for (let i = 0; i < r.judge.length; i++) {
           let row = r.judge[i]
           if (!row) continue
-          let idx = clamp(row.i, 0, q.points.length - 1)
-          let pt = q.points[idx]
+          /* v1.5.1：AI 报了不存在的序号就把这行整条丢弃 —— 旧代码 clamp 到端点，
+           * 等于把第 99 题的判定盖在最后一条采分点上，张冠李戴还看不出来。 */
+          let raw = Number(row.i)
+          if (!isFinite(raw) || raw < 0 || raw >= q.points.length) continue
+          let pt = q.points[raw | 0]
           if (!pt) continue
           let ratio = row.ratio == null ? (row.ok ? 1 : 0) : clamp(row.ratio, 0, 1)
           if (ratio >= 0.85) hits.push(pt.id)
@@ -942,6 +950,12 @@
         let due = dueList(S.qs, todayKey())
         target = due[0] || S.qs[0] || null
       }
+      /* v1.5.1：半程切题不再无声覆盖 —— 当前这题写了一半就先确认（草稿在本机，回来还在） */
+      let R = S.run
+      if (target && R && R.phase !== 'done' && R.qid !== target.id && String(R.answer || '').trim()) {
+        ctx.api.confirm('换一道练？', '当前这题写了 ' + R.answer.length + ' 字还没交。草稿会留在本机，回到这题自动找回。', function () { startRun(q) }, false)
+        return
+      }
       /* 【2026-10-23 空库点「开始练」】原先是 `S.view='forge'; paint(); return` —— 一声不响。
        * 真机上表现成"点了没反应"（探针也是这么报的）：用户在题库空的时候最想练，
        * 却拿不到任何回执。给一句话告诉他**下一步点哪儿**，别只报"没有题"。 */
@@ -951,15 +965,29 @@
         return
       }
       S.selId = target.id
+      if (S.view !== 'forge') { S.view = 'forge'; ctx.data('view', 'forge') }
+      /* v1.5.1 草稿保命：未提交的作答存本机（单槽、不进云库），重开这道题原样回来 */
+      let savedDraft = ''
+      try {
+        let d = ctx.keep.get('draftCur', null)
+        if (d && d.qid === target.id) savedDraft = String(d.text || '')
+      } catch (e) { }
       S.run = {
         qid: target.id, phase: 'answer', busy: false,
-        startedAt: Date.now(), answer: '', judge: null, comment: '',
+        startedAt: Date.now(), answer: savedDraft, judge: null, comment: '',
         manual: false, saved: false
       }
-      if (S.view !== 'forge') { S.view = 'forge'; ctx.data('view', 'forge') }
+      if (savedDraft.trim()) { toast(ctx, '已找回上次未提交的作答（' + savedDraft.length + ' 字）', 'info', 2600); draftKeep(ctx, target.id, savedDraft) }
       markEnter()
       paint()
       startTick()
+    }
+    /* 统一「结束当前练习并回到题库」：草稿留在本机（draftKeep 已实时落盘），只清内存 run、停钟。
+     * 回到同一道题 startRun 会自动找回；只有 finishRun（已落成 attempt）才真正丢弃草稿。 */
+    function clearRun() {
+      S.run = null
+      stopTick()
+      paint()
     }
     /** 拆点：AI 或手动（手动=先给 4 个空位模板，用户自己写） */
     function askPointsFor(q) {
@@ -1076,6 +1104,7 @@
       run.due = sp.due
       run.wb = wb
       stopTick()
+      draftDrop(ctx, run.qid)   /* v1.5.1：这一份作答已落成 attempt，本机草稿功成身退 */
       paint()
       if (score >= 85) confetti(root)
       toast(ctx, '已记录 ' + score + ' 分' + (wb.mistake ? ' · 已进错题本' : ''), 'success', 2600)
@@ -1114,8 +1143,8 @@
       }
       if (act === 'mark') { togglePoint(id, btn.getAttribute('data-mode') || 'hit'); return }
       if (act === 'finish') { finishRun(); return }
-      if (act === 'abort') { S.run = null; stopTick(); paint(); return }
-      if (act === 'restart') { S.run = null; paint(); return }
+      if (act === 'abort') { clearRun(); return }
+      if (act === 'restart') { clearRun(); return }
       if (act === 'undo-run') { undoRun(); return }
       if (act === 'newq') { openNewQuestion(ctx, reload); return }
       if (act === 'editq') { openEditQuestion(ctx, findQ(S.qs, id), reload); return }
@@ -1178,6 +1207,7 @@
       })
     }
     function onKey(ev) {
+      if (document.querySelector('#modal-overlay')) return   /* 弹窗开着：Esc/数字键/⌘Enter 全部让位 */
       let t = ev.target
       let typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
       if (typing) {
@@ -1196,7 +1226,7 @@
         return
       }
       if (ev.key === 'n' || ev.key === 'N') { ev.preventDefault(); openNewQuestion(ctx, reload); return }
-      if (ev.key === 'Escape' && S.run && S.run.phase !== 'done') { S.run = null; stopTick(); paint() }
+      if (ev.key === 'Escape' && S.run && S.run.phase !== 'done') { clearRun() }
     }
 
     root.addEventListener('click', onClick)
@@ -1344,6 +1374,10 @@
       let score = scoreAttempt(q.points, j.hits, j.partial)
       out.push('<div class="sf-prog"><span>' + (run.manual ? '逐点自评' : 'AI 初判 · 请复核') + '</span>'
         + '<span class="sf-score">当前 ' + score + ' 分</span></div>')
+      /* v1.5.1：复核却看不见自己写了什么，等于闭卷改卷 —— 把作答亮出来对照采分点 */
+      out.push('<details class="sf-myans"' + (String(run.answer || '').trim().length <= 600 ? ' open' : '') + '>'
+        + '<summary>我的作答（' + String(run.answer || '').length + ' 字）</summary>'
+        + '<div>' + (esc(run.answer || '') || '<i>（空）</i>') + '</div></details>')
       out.push('<div class="sf-ptlist">')
       for (let i = 0; i < q.points.length; i++) {
         let pt = q.points[i]
@@ -1397,11 +1431,30 @@
     return out.join('')
   }
 
+  /* ---- v1.5.1 本机草稿：单槽（最后动笔的那题），400ms 防抖进 ctx.keep（不进云库）。
+   * 不做多槽是因为 per-qid 键会随题量涨爆 256KB keep 配额；一槽就覆盖了真实场景：
+   * 误 Esc / 切页离开 / 中途换题 —— 回到原本题自动找回；在新题上动笔才会顶掉旧稿。 ---- */
+  let _draftT = null
+  function draftKeep(ctx, qid, text) {
+    if (!qid) return
+    if (_draftT) clearTimeout(_draftT)
+    _draftT = setTimeout(function () {
+      try { ctx.keep.set('draftCur', { qid: qid, text: String(text || '').slice(0, 20000), at: Date.now() }) } catch (e) { }
+    }, 400)
+  }
+  function draftDrop(ctx, qid) {
+    if (!qid) return
+    try {
+      let d = ctx.keep.get('draftCur', null)
+      if (d && d.qid === qid) ctx.keep.set('draftCur', null)
+    } catch (e) { }
+  }
+
   function bindForge(ctx, S, stage, paint) {
     let ta = stage.querySelector('[data-sf="answer"]')
     if (ta) {
       try { ta.focus({ preventScroll: true }) } catch (e) { try { ta.focus() } catch (e2) { /* 忽略 */ } }
-      ta.addEventListener('input', function () { if (S.run) S.run.answer = ta.value })
+      ta.addEventListener('input', function () { if (S.run) { S.run.answer = ta.value; draftKeep(ctx, S.run.qid, ta.value) } })
       ta.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
           ev.preventDefault()
@@ -1441,7 +1494,7 @@
             })
             let list = loadQs(ctx)
             list.push(q)
-            saveQs(ctx, list)
+            evictWarn(ctx, list.length, saveQs(ctx, list))
             if (close) close()
             if (done) done()
             toast(ctx, '已加入题库', 'success')
@@ -1838,7 +1891,7 @@
           cur.push(q)
           added++
         }
-        saveQs(ctx, cur)
+        evictWarn(ctx, cur.length, saveQs(ctx, cur))
         if (done) done()
         toast(ctx, '导入了 ' + added + ' 道（跳过 ' + (cands.length - added) + ' 道重复）', 'success', 2600)
       })
@@ -1951,7 +2004,7 @@
         }
         let merged = []
         for (let k in map) if (Object.prototype.hasOwnProperty.call(map, k)) merged.push(map[k])
-        saveQs(ctx, merged)
+        evictWarn(ctx, merged.length, saveQs(ctx, merged))
         let oldA = loadAs(ctx)
         let seen = {}
         for (let i = 0; i < oldA.length; i++) seen[oldA[i].id] = 1
@@ -2164,6 +2217,9 @@
     '.sf-pmark[data-mode="half"].on{background:#b45309;border-color:#b45309}',
     '.sf-pmark[data-mode="miss"].on{background:#475569;border-color:#475569}',
     '.sf-comment{margin-top:14px;padding:12px 0 12px 16px;border-left:2px solid var(--sf-line2);font-size:13px;line-height:1.85}',
+    '.sf-myans{margin:10px 0 6px;font-size:12.5px;color:var(--sf-sub)}',
+    '.sf-myans summary{cursor:pointer;font-weight:600;color:var(--sf-acc)}',
+    '.sf-myans>div{margin:8px 0 2px;padding:11px 13px;border:1px solid var(--sf-line);border-radius:9px;white-space:pre-wrap;overflow-wrap:break-word;line-height:1.8;font-size:13px;color:var(--sf-ink)}',
     '.sf-done{display:flex;align-items:center;gap:24px;padding:8px 0 4px;flex-wrap:wrap}',
     '.sf-done-ring{animation:sfGrow .6s cubic-bezier(.22,1,.36,1) both}',
     '@keyframes sfGrow{from{transform:scale(.9);opacity:0}to{transform:none;opacity:1}}',
@@ -2379,6 +2435,9 @@
     window.__sfInternals = {
       normalizeWeights: normalizeWeights,
       scoreAttempt: scoreAttempt,
+      askJudge: askJudge,
+      draftKeep: draftKeep,
+      draftDrop: draftDrop,
       verdictOf: verdictOf,
       leakProfile: leakProfile,
       topMissed: topMissed,
