@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.1'
+  let VERSION = '1.4.2'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -763,7 +763,10 @@
     '.du-pick b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.du-pick span{display:block;font-size:11px;color:var(--du-sub);margin-top:1px}',
     '.du-pick:hover{border-color:var(--du-acc);transform:translateY(-1px)}',
-    '.du-pick.on{border-color:var(--du-gold);box-shadow:0 0 0 2px color-mix(in oklab,var(--du-gold) 22%,transparent)}'
+    '.du-pick.on{border-color:var(--du-gold);box-shadow:0 0 0 2px color-mix(in oklab,var(--du-gold) 22%,transparent)}',
+    /* 预览态（站内题库列表只看不选）：不给可点的错觉 */
+    '.du-pick.view{cursor:default}',
+    '.du-pick.view:hover{transform:none;border-color:var(--du-line)}'
   ].join('\n')
 
   /* 【2026-10-24 改走宿主托管】原先自己 createElement('style') 挂 head —— 宿主看不见，代价三条：
@@ -1021,6 +1024,23 @@
     }
     return h
   }
+  /* 【v1.4.2】站内题库选中后必须**看得见题**：旧版只有 exam/weak 有下钻列表，
+   * 题库模式点完只剩一行「N 道可选」，用户以为"不显示"。 */
+  function bankPickerHTML(ctx, subject) {
+    let pool = bankPool(ctx, subject)
+    if (!pool.length) {
+      return '<div class="du-empty" style="margin-top:10px"><b>站内题库没有「' + esc(subject) + '」的可选选择题</b>'
+        + '去「题库」模块收藏带 A/B/C/D 选项的题，或切回 AI 智能</div>'
+    }
+    let shown = pool.slice(0, 8)
+    return '<div class="du-note" style="margin-top:10px">开战时从下面这 ' + pool.length + ' 道里随机抽（零 AI 调用，秒开）：</div>'
+      + '<div class="du-picklist">' + shown.map(function (q, i) {
+        return '<div class="du-pick view" style="--i:' + i + '" title="' + esc(q.stem) + '">'
+          + '<b>' + I('archive') + esc(trunc(q.stem, 26)) + '</b>'
+          + '<span>' + esc(q.topic) + ' · ' + q.options.length + ' 个选项</span></div>'
+      }).join('') + '</div>'
+      + (pool.length > shown.length ? '<div class="du-note">还有 ' + (pool.length - shown.length) + ' 道未列出，抽题时同样在池子里。</div>' : '')
+  }
 
   function lobbyHTML(ctx, state) {
     let p = profileGet(ctx)
@@ -1093,6 +1113,7 @@
         + srcChip('exam', I('fileText'), '题卷挑战', examN + ' 张整卷', mode, examN > 0)
         + srcChip('weak', I('target'), '弱项突击', mkN + ' 条错题驱动', mode, mkN > 0)
         + '</div>'
+        + (mode === 'bank' ? bankPickerHTML(ctx, subject) : '')
         + (mode === 'exam' ? examPickerHTML(ctx, state) : '')
         + (mode === 'weak' ? weakPickerHTML(ctx, state) : '')
         + '</div>'

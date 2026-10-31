@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4.1'
+  let VERSION = '1.4.2'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -318,6 +318,19 @@
   function warnEvicted(ctx, beforeLen, after) {
     let gone = (beforeLen || 0) - (after || []).length
     if (gone > 0) toast(ctx, '知识点库到 ' + MAX_POINTS + ' 条上限：清掉了 ' + gone + ' 条「最久没碰」的老知识（建议先去档案页导出备份）', 'warn', 5600)
+  }
+  /* 【v1.4.2】删除的唯一出口：列表行 / 详情动作行 / 编辑弹窗三个入口共用同一段确认+落库。
+   * 此前删除只藏在详情卡顶部一枚 24px 的图标按钮里（行上没有、弹窗里也没有），
+   * 用户找不到入口就等于"知识点删不掉"。 */
+  function deletePoint(ctx, p, done) {
+    if (!p) return
+    ctx.api.confirm('删除这个知识点？', '<div class="muted-sm">「' + esc(p.title) + '」以及它的复述记录都会删除（会话历史保留在统计里）。<b>不可撤销，建议先去「设置」导出 JSON 备份。</b></div>', function () {
+      let list = loadPoints(ctx).filter(function (x) { return x.id !== p.id })
+      savePoints(ctx, list)
+      try { ctx.log('删除知识点：' + shortTitle(p.title, 24)) } catch (e) { }
+      toast(ctx, '已删除「' + shortTitle(p.title, 14) + '」', 'info')
+      if (done) done()
+    }, true)
   }
   function saveSessions(ctx, list) {
     let arr = (list || []).slice(-MAX_SESSIONS)
@@ -1011,7 +1024,16 @@
       if (act === 'goto-setup') { go('setup'); return }
       if (act === 'goto-train') { go('train'); return }
       if (act === 'start') { startRun(findPoint(S.points, id) || null); return }
-      if (act === 'pick') { S.selId = id; S.run = null; paint(); return }
+      if (act === 'pick') {
+        S.selId = id; S.run = null; paint()
+        /* 【v1.4.2】详情卡在长列表**下方**：不滚过去，点行看起来像没反应
+         * （"删不了/管不了"观感的另一半来源）。 */
+        let det = stageEl.querySelector('.fx-detail')
+        if (det && det.scrollIntoView) {
+          try { det.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch (e) { try { det.scrollIntoView() } catch (e2) { } }
+        }
+        return
+      }
       if (act === 'submit') {
         let ta = stageEl.querySelector('[data-fx="answer"]')
         submitAnswer(ta ? ta.value : '')
@@ -1042,13 +1064,12 @@
       if (act === 'delpoint') {
         let p = findPoint(S.points, id)
         if (!p) return
-        ctx.api.confirm('删除这个知识点？', '<div class="muted-sm">「' + esc(p.title) + '」以及它的复述记录都会删除（会话历史保留在统计里）。</div>', function () {
-          S.points = savePoints(ctx, S.points.filter(function (x) { return x.id !== id }))
+        deletePoint(ctx, p, function () {
+          /* 走 reload 而非 paint：删除写在 ctx.data，S.points 必须跟着重读（同 newpoint 的真机教训） */
           if (S.selId === id) S.selId = ''
-          if (S.run && S.run.pid === id) S.run = null
-          paint()
-          toast(ctx, '已删除', 'info')
-        }, true)
+          if (S.run && S.run.pid === id) { S.run = null; stopTick() }   /* 顺手收钟：旧版删掉正在复述的点会漏一个计时器 */
+          reload()
+        })
         return
       }
       if (act === 'exp-json') { exportJson(ctx, S); return }
@@ -1311,6 +1332,8 @@
           + (p.nextAt ? ' · ' + (od ? '逾期 ' + od + ' 天' : fmtDate(p.nextAt) + ' 复习') : '') + '</span>'
           + '</button>'
           + '<button class="fx-btn sm" data-act="start" data-id="' + esc(p.id) + '">开始</button>'
+          /* 【v1.4.2】行级删除入口：删除不该只藏在详情卡顶的一枚小图标里 */
+          + '<button class="fx-btn sm ghost fx-pdel" data-act="delpoint" data-id="' + esc(p.id) + '" title="删除这个知识点">删除</button>'
           + '</div>')
       }
       out.push('</div>')
@@ -1354,8 +1377,7 @@
     }
     return '<section class="fx-card fx-detail">'
       + '<div class="fx-card-h"><b>' + esc(p.title) + '</b><em>' + esc(subjectLabel(p.subject)) + (p.topic ? ' · ' + esc(p.topic) : '') + '</em>'
-      + '<button class="fx-icobtn sm" data-act="editpoint" data-id="' + esc(p.id) + '" title="编辑">' + icon({ U: window.U }, 'cpPencil') + '</button>'
-      + '<button class="fx-icobtn sm danger" data-act="delpoint" data-id="' + esc(p.id) + '" title="删除">' + icon({ U: window.U }, 'cpTrash') + '</button></div>'
+      + '<button class="fx-icobtn sm" data-act="editpoint" data-id="' + esc(p.id) + '" title="编辑">' + icon({ U: window.U }, 'cpPencil') + '</button></div>'
       + '<div class="fx-detail-body">'
       + '<div class="fx-detail-ring">' + ringSvg(p.mastery || 0, 72, col.c, String(p.mastery || 0)) + '<i>' + masteryLabel(p.mastery) + '</i></div>'
       + '<div class="fx-detail-meta">'
@@ -1367,7 +1389,9 @@
       + '</div>'
       + (p.note ? '<details class="fx-note"><summary>我记的要点</summary><div>' + esc(p.note).replace(/\n/g, '<br>') + '</div></details>' : '')
       + '<div class="fx-acts"><button class="fx-btn primary" data-act="start" data-id="' + esc(p.id) + '">' + icon({ U: window.U }, 'cpPlay') + ' 开始复述</button>'
-      + '<button class="fx-btn ghost" data-act="goto-crystal">去晶体图</button></div>'
+      + '<button class="fx-btn ghost" data-act="goto-crystal">去晶体图</button>'
+      /* 【v1.4.2】删除从头部图标升级为动作行文字按钮（图标按钮看不清含义，用户以为删不掉） */
+      + '<button class="fx-btn ghost danger" data-act="delpoint" data-id="' + esc(p.id) + '">删除知识点</button></div>'
       + '</section>'
   }
 
@@ -1610,6 +1634,14 @@
         + '</div>',
       actions: [
         { label: '取消' },
+        /* 【v1.4.2】改着改着想删不用先关窗再进详情找图标 */
+        {
+          label: '删除', kind: 'btn-danger', onClick: function (closer) {
+            (closer || close)()
+            deletePoint(ctx, p, done)
+            return false
+          }
+        },
         {
           label: '保存', kind: 'btn-primary', onClick: function () {
             let t = document.getElementById('fx-ep-title')
@@ -2472,6 +2504,9 @@
     '.fx-plist{display:flex;flex-direction:column}',
     '.fx-prow{display:flex;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid var(--fx-line)}',
     '.fx-prow:last-child{border-bottom:0}',
+    /* 【v1.4.2】行级删除：淡显、触碰即红（不靠 hover 才出现，触屏也要能用） */
+    '.fx-pdel{color:var(--fx-sub);flex:0 0 auto}',
+    '.fx-pdel:hover{color:#b91c1c}',
     '.fx-prow-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;border:0;background:none;text-align:left;cursor:pointer;padding:0;font:inherit;color:inherit}',
     '.fx-prow-main b{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.fx-prow-main span{font-size:11px;color:var(--fx-sub)}',

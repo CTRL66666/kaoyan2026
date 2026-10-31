@@ -101,7 +101,7 @@ function icon(ctx, k) {
 }
 
 /* ---- 1. 领域常量 ---- */
-let VERSION = '1.1.1'
+let VERSION = '1.1.2'
   /* 【2026-10-28】1.1：只播到期、方向键免手操作、音色预设；修复提问/留白相位「跳过此题」无效与旧语音回调串题(代际守卫)。 */
 let TOOL_ID = 'ear-radio'
 let AI_CTX_SCRIPT = 'plugin.ear-radio.script'
@@ -1090,6 +1090,7 @@ function mountShell(el, ctx) {
   /* ---- 路由（入场动画只在切视图时播 —— 变式工厂 1.1 同款零闪烁纪律） ---- */
   let RENDER = { studio: renderStudio, live: renderLive, queue: renderQueue, stats: renderStats }
   let lastView = null
+  let lastSig = ''
   let stageEl = null
   function go(v) {
     if (!RENDER[v]) v = 'studio'
@@ -1111,6 +1112,27 @@ function mountShell(el, ctx) {
       stageEl.classList.add('er-enter')
       T(function () { stageEl.classList.remove('er-enter') }, 650)
     }
+    lastSig = erStoreSig()
+  }
+  /* 【v1.1.2】store:change 回声防护（与变式工厂同款）：ctx.data 的写（存视图/存档）
+   * 都会广播 store:change，onStore 再 render 一次 —— 切子导航"闪两下"的根因。
+   * 签名没变（素材池与档案数量、视图都没动）就不重画。 */
+  function erStoreSig() {
+    let s = null
+    try { s = ctx.Store && ctx.Store.get ? ctx.Store.get() : null } catch (e) { return '' }
+    if (!s) return ''
+    let pol = Array.isArray(s.polRecite) ? s.polRecite.length : 0
+    let vo = Array.isArray(s.vocab) ? s.vocab.length : 0
+    let wr = Array.isArray(s.writingAssets) ? s.writingAssets.length : 0
+    let mk = Array.isArray(s.mistakes) ? s.mistakes.length : 0
+    /* 档案部分读 ctx.data（云端合并后的新档要能被察觉），不读内存里的旧 db */
+    let tl = 0, cl = 0
+    try {
+      let d = ctx.data('db')
+      if (d && Array.isArray(d.tracks)) tl = d.tracks.length
+      if (d && Array.isArray(d.custom)) cl = d.custom.length
+    } catch (e) { }
+    return [pol, vo, wr, mk, tl, cl, S.view].join('/')
   }
 
   /* ---- 动作总线 ---- */
@@ -1527,8 +1549,10 @@ function mountShell(el, ctx) {
   function onStore() {
     T(function () {
       if (destroyed) return
-      /* 云同步/他页改了素材池：只在没播放时轻同步一次（播放中绝不重画） */
+      /* 云同步/他页改了素材池：只在没播放时轻同步一次（播放中绝不重画）。
+       * 签名相同 = 这次广播是我们自己的写（存视图/存档）回声，不重画。 */
       if (engine.state().phase === 'idle' || engine.state().phase === 'done') {
+        if (erStoreSig() === lastSig) return
         db = loadDb(ctx); ctx.__db = db
         render()
       } else updKpis()

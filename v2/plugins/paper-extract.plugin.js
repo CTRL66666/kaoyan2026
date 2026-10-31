@@ -53,7 +53,7 @@
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。
    * 走「主.次」而不是补丁位：市场条目只记两位（见 paper-extract-plugin-1-1.test.ts
    * 那条"市场版本必须等于源码 VERSION 的前两段"），补丁位留给不改变对外行为的修。 */
-  let VERSION = '1.7.2'
+  let VERSION = '1.7.3'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
@@ -316,6 +316,12 @@
     s = String(s || '').trim()
     return !!s && s.length > 18 && '。！？；：)）]】.”"\''
       .indexOf(s.charAt(s.length - 1)) < 0
+  }
+  /* 【v1.7.3】乱码闸：视觉模型认不出的公式会吐「$[乱码]$」这类占位（用户截图里整屏 $[乱码]$）。
+   * 这不是题面，是"我没看清"的自白 —— 必须强制配图，让用户至少能看到原卷长什么样。
+   * 只认关键词：空 $ 对（$  $）与「$a$ $b$」相邻公式在文本层面无法区分，宁可漏判不误伤。 */
+  function looksGarbled(s) {
+    return /乱码|无法辨认|不清晰|识别失败/.test(String(s || ''))
   }
 
   /* ---------------- 卷头/非题目闸 · 几何层 ----------------
@@ -737,24 +743,33 @@
     return merged
   }
 
+  /* 【v1.7.3 重写】配图归属：一道题的图十有八九**在题干下方**（控制框图/电路图都是这样），
+   * 旧版先放行"图心在段下方 30px 内"、又用二维重叠面积一票否决 —— 下方的图永远挂不上，
+   * 裁图就只截到题干那一条（用户截图里那条薄薄的全页条）。
+   * 新逻辑：每张图找**最近的**文字段（横向有重叠、纵向距离 ≤150px），只归一个主人；
+   * 段框扩到包住图（下方扩 bottom、上方扩 top），裁图天然把配图带进同一张。 */
   function attachFigures(blocks, pi, figs) {
     if (!figs.length) return
-    blocks.forEach(function (b) {
-      b.segments.forEach(function (seg) {
-        if (seg.page !== pi.no) return
-        figs.forEach(function (f) {
-          let cy = (f.top + f.bottom) / 2
-          if (cy < seg.rect.top - 10 || cy > seg.rect.bottom + 30) return
-          let ox = Math.max(0, Math.min(f.x1, seg.rect.x1) - Math.max(f.x0, seg.rect.x0))
-          let oy = Math.max(0, Math.min(f.bottom, seg.rect.bottom) - Math.max(f.top, seg.rect.top))
-          if (ox * oy <= 0) return
-          if (f.isFigure) {
-            b.hasFigure = true
-            b.figureRects.push({ page: pi.no, x0: f.x0, top: f.top, x1: f.x1, bottom: f.bottom })
-            seg.rect.bottom = Math.max(seg.rect.bottom, f.bottom + 4)
-          }
+    figs.forEach(function (f) {
+      if (!f.isFigure) return
+      let best = null, bestD = 1e9
+      blocks.forEach(function (b) {
+        b.segments.forEach(function (seg) {
+          if (seg.page !== pi.no) return
+          let ox = Math.min(f.x1, seg.rect.x1) - Math.max(f.x0, seg.rect.x0)
+          if (ox <= 0) return
+          let dy = f.top > seg.rect.bottom ? f.top - seg.rect.bottom
+            : (f.bottom < seg.rect.top ? seg.rect.top - f.bottom : 0)
+          if (dy > 150) return
+          let d = dy * 3 - ox * 0.08
+          if (d < bestD) { bestD = d; best = { b: b, seg: seg } }
         })
       })
+      if (!best) return
+      best.b.hasFigure = true
+      best.b.figureRects.push({ page: pi.no, x0: f.x0, top: f.top, x1: f.x1, bottom: f.bottom })
+      best.seg.rect.bottom = Math.max(best.seg.rect.bottom, f.bottom + 4)
+      best.seg.rect.top = Math.min(best.seg.rect.top, f.top - 4)
     })
   }
 
@@ -1048,9 +1063,12 @@
         opts4 = []; type = 'solve'; note = '选择题缺选项'
       }
       let conf = q.confidence == null ? null : num(q.confidence, null)
-      let low = !stem || note !== '' || (conf != null && conf < opts.lowConf)
+      /* 【v1.7.3】乱码题：note 标注 + 强制低置信 + 强制配图 —— 图里才有真题面 */
+      let garbled = looksGarbled(stem)
+      if (garbled) note = note ? note + '·含乱码' : '识别含乱码'
+      let low = !stem || note !== '' || (conf != null && conf < opts.lowConf) || garbled
       if (q.geometry === 'projection' || q.geometry === 'ai-only') low = true
-      let needImg = needImage({ hasFigure: q.hasFigure, confidence: conf, stem: stem }, opts)
+      let needImg = (garbled && opts.imageMode !== 'none') || needImage({ hasFigure: q.hasFigure, confidence: conf, stem: stem }, opts)
       let img = ''
       if (needImg && q._segments && q._segments.length) {
         try {
@@ -3036,6 +3054,8 @@
       bodySize: bodySize,
       findAnchors: findAnchors,
       buildTextBlocks: buildTextBlocks,
+      attachFigures: attachFigures,
+      looksGarbled: looksGarbled,
       isNoise: isNoise,
       stripNoise: stripNoise,
       looksLikeHeaderText: looksLikeHeaderText,

@@ -71,7 +71,7 @@
    * （缺答案/答案非A-D/选项重复/题干过短或不自足/换皮）标记疑点；疑点题须走结构化复核清单
    * （题干自足/答案复算/干扰项成立三项勾选）才能成卷；档案加复核台账。
    * 版本必须涨：已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.3.1'
+  let VERSION = '1.4.0'
   let TOOL_ID = 'variant-forge'
   let AI_CTX_GEN = 'plugin.variant-forge.gen'
   let AI_CTX_AUDIT = 'plugin.variant-forge.audit'
@@ -505,7 +505,7 @@
     return lines.join('\n')
   }
   /* 生成 ask：策略清单 + 轮转配额 + 严格 schema（一次母题一次调用） */
-  function buildGenAsk(L, stratKeys, count) {
+  function pickStrats(L, stratKeys) {
     let picked = stratKeys.map(stratOf).filter(Boolean)
     if (!picked.length) picked = [STRATS[0], STRATS[1], STRATS[4]]
     /* 选项扰动只对选择题可用；非选择题时静默剔除 */
@@ -513,6 +513,26 @@
       picked = picked.filter(function (s) { return !s.onlyChoice })
       if (!picked.length) picked = [STRATS[0], STRATS[1], STRATS[4]]
     }
+    return picked
+  }
+  /* 输出契约（批量与单发共用一份，两处各写迟早分叉）；countLine 由调用方给 */
+  function genContract(L, keys, countLine) {
+    return '\n\n== 输出 JSON 契约 ==\n' +
+      '{\n  "variants": [\n    {\n' +
+      '      "strategy": "策略键，只能取：' + keys + '",\n' +
+      '      "stem": "题干（公式用 $…$）",\n' +
+      '      "options": ["选项A文本","选项B文本","选项C文本","选项D文本"] 或 null（非选择题填 null）,\n' +
+      '      "answer": "标准答案；选择题为单个大写字母",\n' +
+      '      "solution": "完整解析：方法路线 + 关键步骤；选项扰动题须逐干扰项写明误因",\n' +
+      '      "trap": "本题埋的坑（一句话）",\n' +
+      '      "diff": "easy|medium|real|hard 四档之一",\n' +
+      '      "changeNote": "和母题比改了什么（≤40字）"\n    }\n  ]\n}\n' +
+      countLine + '\n' +
+      '契约重申：answer 必填不得为空；' + (L.options && L.options.length ? ('选择题 options 数量必须为 ' + L.options.length + ' 个、与母题一致，答案字母与选项顺序一一对应；') : '') +
+      '公式一律 $…$ 包裹，不得裸写反斜杠；每道题 trap 必填；题干不得引用「原题/母题/上文」。'
+  }
+  function buildGenAsk(L, stratKeys, count) {
+    let picked = pickStrats(L, stratKeys)
     let n = clamp(count, 1, MAX_VARIANTS)
     /* 配额轮转：3 策略出 6 题 = 各 2 题；除不尽前面的策略多拿 */
     let per = []
@@ -528,19 +548,90 @@
     let keys = picked.map(function (s) { return s.k }).join('/')
     return '【变式工厂 · 批量开炉】\n\n== 母题信息 ==\n' + srcBlock(L) +
       '\n\n== 各路策略要求 ==\n' + req +
-      '\n\n== 输出 JSON 契约 ==\n' +
-      '{\n  "variants": [\n    {\n' +
-      '      "strategy": "策略键，只能取：' + keys + '",\n' +
-      '      "stem": "题干（公式用 $…$）",\n' +
-      '      "options": ["选项A文本","选项B文本","选项C文本","选项D文本"] 或 null（非选择题填 null）,\n' +
-      '      "answer": "标准答案；选择题为单个大写字母",\n' +
-      '      "solution": "完整解析：方法路线 + 关键步骤；选项扰动题须逐干扰项写明误因",\n' +
-      '      "trap": "本题埋的坑（一句话）",\n' +
-      '      "diff": "easy|medium|real|hard 四档之一",\n' +
-      '      "changeNote": "和母题比改了什么（≤40字）"\n    }\n  ]\n}\n' +
-      '共 ' + n + ' 道，按策略顺序排列；diff 围绕母题水平允许 ±1 档浮动。\n' +
-      '契约重申：answer 必填不得为空；' + (L.options && L.options.length ? ('选择题 options 数量必须为 ' + L.options.length + ' 个、与母题一致，答案字母与选项顺序一一对应；') : '') +
-      '公式一律 $…$ 包裹，不得裸写反斜杠；每道题 trap 必填；题干不得引用「原题/母题/上文」。'
+      genContract(L, keys, '共 ' + n + ' 道，按策略顺序排列；diff 围绕母题水平允许 ±1 档浮动。')
+  }
+  /* 【v1.4】单发 ask：一道子题一轮对话。同一次对话里连出多题，模型会「顺着自己的上一题
+   * 换皮」—— 用户实测同对话出的子题相似度很高。拆成一题一对话 + 策略轮转 + 撞车清单，
+   * 并行调度见 makeSched/runGenPool（站内 smartPool 同款策略）。 */
+  function buildGenAskOne(L, picked, slot, avoid) {
+    let s = picked[slot % picked.length]
+    let keys = picked.map(function (x) { return x.k }).join('/')
+    return '【变式工厂 · 单发开炉 · 第 ' + (slot + 1) + ' 题】\n\n== 母题信息 ==\n' + srcBlock(L) +
+      '\n\n== 本题主攻策略 ==\n【' + s.name + '】' + s.ask +
+      '（只出这一道；换别的切入角度，别走常规套路）' +
+      (avoid && avoid.length
+        ? '\n\n== 本批已出的题干（再撞车会被丢弃 —— 换数据/情境/问法，另起一张脸）==\n'
+          + avoid.map(function (t, i) { return (i + 1) + '. ' + shortText(t, 90) }).join('\n')
+        : '') +
+      genContract(L, keys, '只输出 1 道（variants 数组长度=1，strategy 用「' + s.k + '」）；diff 围绕母题水平允许 ±1 档浮动。')
+  }
+  /* 兄弟撞车判据：与 skinCheck 同口径（文本高度相似且数字集合没变），但比的是同批兄弟题 */
+  function sibClash(aStem, bStem) {
+    let fa = fingerprint(aStem), fb = fingerprint(bStem)
+    if (fa && fa === fb) return true
+    return sim2(aStem, bStem) >= 0.86 && digitsOf(aStem) === digitsOf(bStem)
+  }
+  /* 智能并发调度器：站内 core/smartPool.ts 同款策略的插件内移植（插件碰不到宿主内部模块）：
+   * 起步按题量给档；攒够快样本（平均 <30s）升 1；失败降 1；429 额外降 1 + 10s 冷却；
+   * 下限 1（限流接口必须能收敛到单路），上限 5（一次母题最多几路，别真打爆 API）。 */
+  function makeSched(initial, maxc) {
+    let MAX = maxc || 5
+    let cur = clamp(initial, 1, MAX)
+    let recent = []
+    let coolUntil = 0
+    return {
+      level: function () { return cur },
+      permit: function () { return cur > 0 },
+      observe: function (ms, ok, err) {
+        if (ok) {
+          recent.push(ms)
+          if (recent.length >= 2) {
+            let avg = (recent[0] + recent[1]) / 2
+            recent = []
+            if (avg < 30000 && Date.now() >= coolUntil) cur = Math.min(MAX, cur + 1)
+          }
+        } else {
+          recent = []
+          cur = Math.max(1, cur - 1)
+          if (/429|rate|quota|限流|频繁|too many/i.test(String(err || ''))) {
+            cur = Math.max(1, cur - 1)
+            coolUntil = Date.now() + 10000
+          }
+        }
+      }
+    }
+  }
+  /* 并发运行器：按调度档位派发 tasks（保留索引秩序），isCancelled 后不再派新任务，
+   * 在途的自然跑完；每个任务的 ms/ok 都会喂回调度器。 */
+  function runGenPool(tasks, sched, isCancelled) {
+    return new Promise(function (resolve) {
+      let results = new Array(tasks.length).fill(null)
+      let next = 0, active = 0, done = false
+      function finish() { if (!done) { done = true; resolve(results) } }
+      function pump() {
+        if (done) return
+        if (active === 0 && (next >= tasks.length || (isCancelled && isCancelled()))) { finish(); return }
+        while (next < tasks.length && !(isCancelled && isCancelled()) && active < sched.level()) {
+          let idx = next++
+          active++
+          ;(function (j) {
+            let t0 = Date.now()
+            let p
+            try { p = Promise.resolve(tasks[j]()) } catch (e) { p = Promise.reject(e) }
+            p.then(function (r) {
+              r = (r && typeof r === 'object') ? r : { ok: !!r }
+              r.ms = Date.now() - t0
+              results[j] = r
+              sched.observe(r.ms, r.ok !== false, r.error)
+            }, function (e) {
+              results[j] = { ok: false, error: String((e && e.message) || e || '调用失败'), ms: Date.now() - t0 }
+              sched.observe(results[j].ms, false, e)
+            }).then(function () { active--; pump() })
+          })(idx)
+        }
+      }
+      pump()
+    })
   }
   /* 解析 AI 返回：顶层给数组也认；坏条目丢进 dropped 如实报数 */
   function parseGenResult(raw) {
@@ -601,7 +692,10 @@
     L.variants = keep.concat(fresh.slice(Math.max(0, fresh.length - room))) /* 挤最旧的 new,保最新的（与承诺文案一致） */
   }
   /* 开炉单体：返回 Promise，绝不 reject */
-  function forgeOne(ctx, L, stratKeys, count) {
+  /* 【v1.4】一子题一轮对话、并行出题：同一次对话连出多题会「顺着上一题换皮」（用户实测），
+   * 现在拆成 count 路独立对话，策略轮转主攻 + 撞车即重试（带已出清单）+ 仍撞则丢弃。
+   * 并发档位由 makeSched 自适应（站内 smartPool 同款）：快则升、错则降、429 急降冷却。 */
+  function forgeOne(ctx, L, stratKeys, count, isCancelled) {
     /* db 在入口一次抓取：destroy 会把 ctx.__db 置空,在途微任务再摸就是 null 崩账 */
     let db = ctx.__db || loadDb(ctx)
     if (!aiOk(ctx)) {
@@ -612,27 +706,60 @@
       sk.forEach(function (v) { bumpStrat(db, v.strategy, 'gen', 1) })
       return Promise.resolve({ ok: sk.length > 0, count: sk.length, skeleton: true })
     }
-    return ctx.ai.json(genSystem(), buildGenAsk(L, stratKeys, count), {
-      ctx: AI_CTX_GEN, maxTokens: 3800, temperature: 0.8, timeout: 120000
-    }).then(function (raw) {
-      let r = parseGenResult(raw)
-      if (!r.ok) return { ok: false, count: 0, error: r.error }
-      r.variants.forEach(function (v) {
-        let chk = skinCheck(L.stem, v)
-        v.similar = chk.similar
-        v.skin = chk.skin
-        if (v.skin) v.note = '疑似换皮：与母题文本相似度 ' + Math.round(v.similar * 100) + '% 且数值未变'
-        bumpStrat(db, v.strategy, 'gen', 1)
-      })
-      L.variants = (L.variants || []).concat(r.variants)
+    let picked = pickStrats(L, stratKeys)
+    let n = clamp(count, 1, MAX_VARIANTS)
+    let baseStems = (L.variants || []).map(function (v) { return v.stem })
+    let accepted = []
+    let droppedDup = 0
+    let errs = []
+    let sched = makeSched(n >= 6 ? 4 : n >= 3 ? 3 : 2, 5)
+    function avoidList() { return baseStems.concat(accepted.map(function (v) { return v.stem })) }
+    let tasks = []
+    for (let slot = 0; slot < n; slot++) {
+      tasks.push((function (slotIdx) {
+        return function () {
+          let lastErr = ''
+          function attempt(att) {
+            return ctx.ai.json(genSystem(), buildGenAskOne(L, picked, slotIdx, avoidList()), {
+              ctx: AI_CTX_GEN, maxTokens: 1600, temperature: 0.9, timeout: 120000
+            }).then(function (raw) {
+              let r = parseGenResult(raw)
+              if (!r.ok) { lastErr = r.error; if (att === 0) return attempt(1); return { ok: false, error: lastErr } }
+              let v = r.variants[0]
+              let chk = skinCheck(L.stem, v)
+              v.similar = chk.similar
+              v.skin = chk.skin
+              if (v.skin) v.note = '疑似换皮：与母题文本相似度 ' + Math.round(v.similar * 100) + '% 且数值未变'
+              let clash = avoidList().some(function (st) { return sibClash(st, v.stem) })
+              if (clash) {
+                if (att === 0) return attempt(1)   /* 撞了：带着「已出清单」再要一道 */
+                droppedDup++                        /* 重试仍撞：如实丢弃，不灌重复题 */
+                return { ok: true, dup: true }
+              }
+              accepted.push(v)
+              bumpStrat(db, v.strategy, 'gen', 1)
+              return { ok: true }
+            }, function (e) {
+              lastErr = (e && e.message) ? String(e.message).slice(0, 80) : 'AI 调用失败'
+              if (att === 0) return attempt(1)
+              errs.push(lastErr)
+              return { ok: false, error: lastErr }
+            })
+          }
+          return attempt(0)
+        }
+      })(slot))
+    }
+    return runGenPool(tasks, sched, isCancelled).then(function () {
+      if (!accepted.length) return { ok: false, count: 0, error: errs[0] || '各次对话都没出可用变式' }
+      L.variants = (L.variants || []).concat(accepted)
       trimVariants(L)
-      return { ok: true, count: r.variants.length, dropped: r.dropped }
-    }, function (e) {
-      return { ok: false, count: 0, error: (e && e.message) ? String(e.message).slice(0, 80) : 'AI 调用失败' }
+      return { ok: true, count: accepted.length, dropped: droppedDup, failedSlots: errs.length, par: Math.max(1, Math.min(n, sched.level())) }
     })
   }
-  /* 批量开炉：串行队列（并行会打爆单家 API，站内出题链同款节奏）；
-   * onProgress(done,total,L,r)；cancel() 后当前一题跑完就不再发下一题 */
+  /* 批量开炉：母题之间串行（一炉一炉来，进度条不骗人）；
+   * 每炉内部 count 道**并行**（一子题一轮对话，见 forgeOne）。
+   * onProgress(done,total,L,r)；cancel() 后当前炉跑完就不再开下一炉 */
   function forgeBatch(ctx, list, stratKeys, count, onProgress) {
     let cancelled = false
     let doneArr = []
@@ -647,7 +774,7 @@
       }
       let L = list[i]
       i++
-      return forgeOne(ctx, L, stratKeys, cntOf(L)).then(function (r) {
+      return forgeOne(ctx, L, stratKeys, cntOf(L), function () { return cancelled }).then(function (r) {
         if (r.ok) doneArr.push(L.id)
         else failedArr.push({ id: L.id, why: r.error || '失败' })
         if (onProgress) { try { onProgress(i, list.length, L, r) } catch (e) { /* 回调炸了不拦主链 */ } }
@@ -1712,6 +1839,19 @@
     /* ---- 基础设施 ---- */
     function toast(msg, type) { try { ctx.Toast.show(msg, type || 'info', 3600) } catch (e) { } }
     function save() { if (destroyed) return; saveDb(ctx, db) }
+    /* 【v1.3.2】store:change 回声防护：ctx.data(...) 的写（存视图、存 db）都会广播
+     * store:change，onStore 再 render 一次 —— 用户看到的就是「切个子导航闪两下」。
+     * 解法：render 后记下"本视图消费的数据"的签名；回声到达时签名没变就不重画。 */
+    let lastSig = ''
+    function storeSig() {
+      let s = null
+      try { s = storeOf(ctx) } catch (e) { return '' }
+      if (!s) return ''
+      let m = Array.isArray(s.mistakes) ? s.mistakes.length : 0
+      let b = Array.isArray(s.quizBank) ? s.quizBank.length : 0
+      let x = s.sprintData && Array.isArray(s.sprintData.mockExams) ? s.sprintData.mockExams.length : 0
+      return [m, b, x, db.staged.length, db.lineages.length, db.papers.length, S.view].join('/')
+    }
     /* 勾选后同步筛选条：送炉按钮增/改/删、全选文案 —— 与 renderBench 首画共用 pickGoHtml 模板 */
     function syncPickBar() {
       let bar = stageEl.querySelector('.vf-filter')
@@ -1799,6 +1939,7 @@
           } catch (e) { }
         }
       }
+      lastSig = storeSig()
     }
 
     /* ============================================================
@@ -2324,7 +2465,7 @@
       S.lastBatch = null
       render()
       let h = forgeBatch(ctx, plan, S.forge.strats, function (L) { return quota[L.id] || S.forge.count }, function (done, total, L, r) {
-        S.forge.done = done; S.forge.phase = shortText(L.stem, 18) + (r.ok ? (r.skeleton ? '（骨架）' : '') : ' ✗')
+        S.forge.done = done; S.forge.phase = shortText(L.stem, 18) + (r.ok ? (r.skeleton ? '（骨架）' : (r.par > 1 ? '（并行 ' + r.par + ' 路·一题一对话）' : '')) : ' ✗')
         bumpDay(db, 'gen', r.ok ? r.count : 0)
         save()
         render()
@@ -2463,7 +2604,7 @@
     window.addEventListener('scroll', onScroll, { passive: true })
 
     /* 数据/主题变化轻同步一次（云同步合并、主题切换都可能改到配色与账本） */
-    function onStore() { T(function () { if (!destroyed && !S.forge.running) render() }, 80) }
+    function onStore() { T(function () { if (destroyed || S.forge.running) return; if (storeSig() === lastSig) return; render() }, 80) }
     document.addEventListener('store:change', onStore)
 
     /* 键盘：1-5 切视图、N 直达熔炉、Esc 收起编辑（输入场景与组合键不拦）——站内多插件同惯例 */
@@ -3093,10 +3234,11 @@
       diffOf, diffStep, stratOf, STRATS, DIFFS, VIEWS,
       emptyDb, normDb, normVariant, normLineage, normStaged, normPaper,
       lineageStat, dbTotals, last14, weakPoints, strategyReport, skinCheck, stemDup,
-      buildGenAsk, parseGenResult, buildAuditAsk, parseAudit,
+      buildGenAsk, buildGenAskOne, pickStrats, genContract, sibClash, makeSched, runGenPool,
+      parseGenResult, buildAuditAsk, parseAudit,
       skeletonVariants, trimVariants,
       buildDrafts, commitPapers, variantToQuestion, subjectSplit, buildPaperMd, buildReport,
-      forgeBatch,
+      forgeBatch, forgeOne,
       quickIssues, issueLabel, genSystem,
       MAX_STAGED, MAX_LINEAGES, MAX_VARIANTS,
       PAPER_TAG, TOOL_ID, VERSION,
