@@ -478,11 +478,32 @@
   }
 
   /* ---------------- PDF：文字行 / 渲染 ---------------- */
+  /* 【v1.7.7】pdf.js 异常分类成人话：加密卷/坏卷旧版只抛 "Invalid PDF structure"
+   * 或一串英文，用户不知道下一步该干什么。 */
+  function describePdfError(e) {
+    let n = String((e && e.name) || '')
+    let m = String((e && e.message) || e || '')
+    if (n === 'PasswordException' || /password|encrypt/i.test(m)) {
+      return new Error('这份 PDF 带打开密码（加密文档）—— 请先在 PDF 阅读器里「另存为」去掉密码，或用无密码版重导；本插件不代收口令')
+    }
+    if (n === 'InvalidPDFException' || /invalid pdf|structure/i.test(m)) {
+      return new Error('PDF 结构损坏或不是标准 PDF —— 试试用浏览器/阅读器打开它，能打开再「打印为 PDF」导一份干净的来')
+    }
+    return e instanceof Error ? e : new Error(m || 'PDF 打不开')
+  }
   async function openPdf(buf) {
+    /* 魔数校验：扩展名可随便改，拖拽也只认名字 —— 内容说了算 */
+    let head = new Uint8Array(buf, 0, Math.min(1024, buf.byteLength))
+    let headStr = ''
+    for (let i = 0; i < head.length; i++) headStr += String.fromCharCode(head[i])
+    if (headStr.indexOf('%PDF-') !== 0) throw new Error('这不是有效的 PDF 文件（开头没有 %PDF 魔数）—— 请确认导出格式，别把扫描件改个后缀塞进来')
     let k = window.PdfKit
     if (k && typeof k.open === 'function') {
-      let r = await k.open(buf)
-      if (r && r.promise) r = await r.promise   // 兼容返回 LoadingTask 的桥实现
+      let r
+      try {
+        r = await k.open(buf)
+        if (r && r.promise) r = await r.promise   // 兼容返回 LoadingTask 的桥实现
+      } catch (e) { throw describePdfError(e) }
       return r
     }
     let lib = window.pdfjsLib
@@ -1028,6 +1049,8 @@
     function note(s) { notes.push(s) }
     let pinfos = []
     let maxPages = Math.min(opts.maxPages || MAX_PAGES_DEFAULT, doc.numPages)
+    /* 【v1.7.7】超上限静默跳页 = 用户以为整卷提完了。当场说清。 */
+    if (maxPages < doc.numPages) note('提醒：本卷共 ' + doc.numPages + ' 页，只处理前 ' + maxPages + ' 页（「最多页数」在设置里可调）—— 后面的页没有提取')
     onProgress(3, '解析 PDF：' + doc.numPages + ' 页')
     for (let i = 1; i <= maxPages; i++) {
       if (state.cancelled) throw new Error('已取消')
@@ -2353,7 +2376,13 @@
       if (f) takeFile(f)
     }
     function takeFile(f) {
+      /* 【v1.7.7】体积闸：>80MB 大概率把标签页撑爆（pdf.js 全量进内存 + 每页 canvas），
+       * 直接拦；>30MB 提醒但放行（慢是慢点，能跑完）。 */
+      if (f.size > 80 * 1048576) { ctx.Toast.show('文件超 80MB：浏览器整卷进内存大概率直接卡死，请先拆分再导', 'danger', 4600); return }
+      if (f.size > 30 * 1048576) log('提醒：文件 ' + (f.size / 1048576).toFixed(0) + 'MB，提取会偏慢偏吃内存（建议 ≤30MB）')
       state.file = f
+      /* 清空 input：选完再选同一份文件也要能触发 change（旧版第二次选不动，只能刷新） */
+      try { fileInput.value = '' } catch (e) { }
       drop.classList.add('has')
       drop.querySelector('.ico').innerHTML = I('fileText')
       drop.querySelector('b').textContent = f.name
