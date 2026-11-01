@@ -101,7 +101,7 @@ function icon(ctx, k) {
 }
 
 /* ---- 1. 领域常量 ---- */
-let VERSION = '1.1.2'
+let VERSION = '1.1.3'
   /* 【2026-10-28】1.1：只播到期、方向键免手操作、音色预设；修复提问/留白相位「跳过此题」无效与旧语音回调串题(代际守卫)。 */
 let TOOL_ID = 'ear-radio'
 let AI_CTX_SCRIPT = 'plugin.ear-radio.script'
@@ -501,14 +501,29 @@ function makeEngine(ctx, hooks) {
   function runGap() {
     setPhase('gap')
     let total = Math.max(2, E.opts.gapSec)
-    let left = total
-    try { hooks.onGap(left, total) } catch (e) { }
+    /* 【v1.1.3】墙上时钟 deadline 基准 + 切后台暂停：留白环是 setInterval 盲减，
+     * 手机锁屏/切标签回来，Chrome 把后台计时器掐成每分钟一发 —— 环还在慢慢爬，
+     * 答案却早该播了（与博弈刷题场倒计时同款病，同款药）。 */
+    E.deadline = Date.now() + total * 1000
+    E._hiddenAt = 0
+    let lastShown = total
+    try { hooks.onGap(total, total) } catch (e) { }
     E.gapTimer = T1(function tick() {
-      left--
-      try { hooks.onGap(left, total) } catch (e) { }
-      if (left > 0) { E.gapTimer = T1(tick, 1000); return }
+      if (E.phase !== 'gap') return
+      if (document.hidden) {
+        if (!E._hiddenAt) E._hiddenAt = Date.now()
+        E.gapTimer = T1(tick, 1000)   /* 链不能断：后台只是被掐慢，回来还要能续算 */
+        return
+      }
+      if (E._hiddenAt) { E.deadline += Date.now() - E._hiddenAt; E._hiddenAt = 0 }
+      let left = Math.max(0, Math.ceil((E.deadline - Date.now()) / 1000))
+      if (left !== lastShown) {
+        lastShown = left
+        try { hooks.onGap(left, total) } catch (e) { }
+      }
+      if (left > 0) { E.gapTimer = T1(tick, 300); return }
       runAns()
-    }, 1000)
+    }, 300)
   }
   function skipGap() {
     if (E.phase !== 'gap') return

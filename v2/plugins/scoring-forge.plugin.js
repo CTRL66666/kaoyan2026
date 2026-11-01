@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.5.1'
+  let VERSION = '1.5.2'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -441,7 +441,10 @@
     if (gone > 0) toast(ctx, '题库到 ' + MAX_Q + ' 题上限：挤掉了 ' + gone + ' 道「最久没复练」的老题（建议先去设置页导出备份）', 'warn', 5600)
   }
   function saveAs(ctx, list) {
-    let arr = (list || []).slice(-MAX_A)
+    let full = (list || []).slice()
+    let arr = full.slice(-MAX_A)
+    /* 【v1.5.2】练习史到 600 条封顶时不再静默吞旧记录：调用方拿 evicted 数说人话 */
+    arr.evicted = Math.max(0, full.length - MAX_A)
     ctx.data('attempts', arr)
     return arr
   }
@@ -935,6 +938,9 @@
       stopTick()
       markEnter()
       paint()
+      /* 【v1.5.2】切走再切回答题页：计时器要续上（旧版只有挂载时补钟，
+       * 中途去瞄一眼题库回来，钟就冻在切走那一秒） */
+      if (S.view === 'forge' && S.run && S.run.phase === 'answer') startTick()
       try { window.scrollTo({ top: 0, behavior: 'smooth' }) } catch (e) { /* 忽略 */ }
     }
     function reload() {
@@ -1095,7 +1101,10 @@
         hits: hits, partial: partial, score: score,
         note: (run.judge && run.judge.comment) || ''
       })
-      if (at) S.as = saveAs(ctx, S.as.concat([at]))
+      if (at) {
+        S.as = saveAs(ctx, S.as.concat([at]))
+        if (S.as.evicted) toast(ctx, '练习史满 ' + 600 + ' 条：最早 ' + S.as.evicted + ' 条已滚出（分数/错题本记录不受影响）', 'warn', 4200)
+      }
       S.undo = { question: before, attemptId: at ? at.id : '', qid: q.id, wb: wb }
       run.phase = 'done'
       run.score = score
@@ -2435,6 +2444,7 @@
     window.__sfInternals = {
       normalizeWeights: normalizeWeights,
       scoreAttempt: scoreAttempt,
+      saveAs: saveAs,
       askJudge: askJudge,
       draftKeep: draftKeep,
       draftDrop: draftDrop,

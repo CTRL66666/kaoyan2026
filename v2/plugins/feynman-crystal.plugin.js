@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4.2'
+  let VERSION = '1.4.3'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -270,10 +270,14 @@
       }
     }) : []
     if (!qa.length) return null
+    /* 【v1.4.3】脏日期（导入/手改的 at 解析成 NaN）当场归今：
+     * 否则 dkey(NaN) → "NaN-NaN-NaN"，编年史/今日统计/走势线全被毒到。 */
+    let atS = String(raw.at || '')
+    let atOk = !atS || !isNaN(new Date(atS).getTime())
     return {
       id: String(raw.id || uid('ss')),
       pid: String(raw.pid || ''),
-      at: String(raw.at || new Date().toISOString()),
+      at: atOk ? (atS || new Date().toISOString()) : new Date().toISOString(),
       level: clamp(raw.level, 1, 4),
       ms: clamp(raw.ms, 0, 86400000),
       score: clamp(raw.score, 0, 100),
@@ -1107,6 +1111,9 @@
 
     /* ---- 快捷键：输入框里只认 Ctrl/Cmd+Enter，避免打字被劫持 ---- */
     function onKey(ev) {
+      /* 【v1.4.3】弹窗（编辑/新建/确认）开着时键盘全让位：旧版 1~5/n 会切走底层视图，
+       * Esc 还会把 in-flight 的 run 无声掐掉 —— 弹窗自己没关，底下已经换了一页。 */
+      if (document.querySelector('#modal-overlay')) return
       let t = ev.target
       let typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
       if (typing) {
@@ -1550,6 +1557,9 @@
     if (qt) {
       qt.addEventListener('keydown', function (ev) {
         if (ev.key !== 'Enter') return
+        /* 【v1.4.3】输入法候选词的 Enter 是「选字」不是「建卡」（与复试模拟舱同款守卫）；
+         * 按住不放连发也认作一次提交。 */
+        if (ev.isComposing || ev.keyCode === 229 || ev.repeat) return
         ev.preventDefault()
         let title = String(qt.value || '').trim()
         if (!title) return
