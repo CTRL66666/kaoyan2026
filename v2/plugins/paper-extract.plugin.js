@@ -131,6 +131,11 @@
     + '③公式保留 LaTeX（$...$），拿不准就降低 confidence，不要猜。'
     + '④题号 no 用卷面原题号。'
     + '⑤star 为难度粗评（1=送分，5=压轴）。'
+    /* 【v1.7.5】用户实测：模型把「四、…1.求X 2.求Y」拆成 no=1/2 两道题，10 题卷被拆出
+     * 17 道、裁图各框半页（串题）。大题/小问合并必须写进三段提示词。 */
+    + '⑥**大题与小问不可拆**：同一道大题下的 1. 2. (1) (2) 小问连同共用配图必须合并为一道题'
+    + '输出（小问文本按卷面顺序换行并入 stem），no 用大题号（“四、”→4）；'
+    + '一页通常就是一到两道大题，把小问报成独立题是严重错误。'
     + NOT_QUESTION
     + '只输出 JSON：{"questions":[' + Q_SCHEMA + ']}'
 
@@ -140,6 +145,8 @@
     + '②卷面没答案就 answer:"" + noAnswer:true，严禁用你的知识顺手解题冒充卷面答案。'
     + '③公式用 LaTeX（$...$）。④题号 no 用卷面原题号。'
     + '⑤题干含函数图像/几何图/表格/流程图时 hasFigure=true，figureKind 填类别，figureDesc 用 ≤80 字描述图中信息。'
+    + '⑥**大题与小问不可拆**：同一道大题（如“八、”）下的 1. 2. 小问连同共用配图必须合并为一道题'
+    + '输出（小问换行并入 stem，no 用大题号）；把小问报成 no=1/2 的独立题是严重错误。'
     + NOT_QUESTION
     + '只输出 JSON：{"questions":[' + Q_SCHEMA + ']}'
 
@@ -150,6 +157,8 @@
     + '⑤**只框真正要求作答的题目**：卷首学校名/考试名称/科目名称、页眉横条、页脚页码水印、'
     + '大题标题（一、选择题）、考生须知都不是题目，一个框都不要给；'
     + '⑥一道题的高度通常不小于整页的 8% —— 你框出来的东西如果只是页面顶部一条又矮又宽的横条，那就是页眉，别框。'
+    + '⑦**小问不拆框**：同一道大题的若干小问（1. 2. (1) (2)）连同它们的共用配图算一个框、一条记录；'
+    + '一页通常一到两道大题，按小问拆成多条、各框半页是严重错误。'
     /* 三段提示词（文字 / 视觉 / 定位）共用同一份负例清单：
      * 「什么不算题目」的类别只在一处维护，避免某一段漏掉时（定位段最容易被漏）
      * 卷头又被框回来 —— 那正是"AI 把标题当题目"的直接入口。 */
@@ -415,6 +424,57 @@
       figureDesc: q.figureDesc == null ? '' : String(q.figureDesc).trim(),
       _groupPages: g && g.pages ? g.pages.slice() : []
     }
+  }
+
+  /* 【v1.7.5】大题/小问缝合（确定性兜底，配合三段提示词的硬规则）：
+   * 用户实测 10 题卷被真模型拆成 17 题 —— 症状是「题号按页重启」：第 3 页报 no=1,2、
+   * 第 4 页又报 no=1,2。真实卷面的题号跨页单调递增，回落只可能是小问号。
+   * 判据：按页排序后出现 no 回落（且回落值 ≤8，小问号都短）→ 认定模型报的是小问，
+   * 按主页面合并：stem 换行拼接、配图取并、置信取低、答案/解析顺次拼接。
+   * 正常连续编号（1..N 递增）原样返回，null 题号不参与回落判定。 */
+  function mergeSubQuestions(qs) {
+    if (!Array.isArray(qs) || qs.length < 2) return qs
+    let numbered = qs.filter(function (q) { return q && q.no != null })
+    if (numbered.length < 2) return qs
+    let seq = numbered.slice().sort(function (a, b) {
+      let pa = (a.sourcePages && a.sourcePages[0]) || 0, pb = (b.sourcePages && b.sourcePages[0]) || 0
+      return pa - pb || (a.no || 0) - (b.no || 0)
+    })
+    let restart = false
+    for (let i = 1; i < seq.length; i++) {
+      if ((seq[i].no || 0) <= (seq[i - 1].no || 0) && (seq[i].no || 0) <= 8) { restart = true; break }
+    }
+    if (!restart) return qs
+    let byPage = {}, order = []
+    qs.forEach(function (q) {
+      let pg = (q && q.sourcePages && q.sourcePages[0]) || 0
+      if (!byPage[pg]) { byPage[pg] = []; order.push(pg) }
+      byPage[pg].push(q)
+    })
+    let out = []
+    order.forEach(function (pg) {
+      let g = byPage[pg].slice().sort(function (a, b) { return (a.no || 0) - (b.no || 0) })
+      if (g.length < 2) { out.push(g[0]); return }
+      let m = Object.assign({}, g[0])
+      m.stem = g.map(function (q) { return String(q.stem || '').trim() }).filter(Boolean).join('\n')
+      let optHit = g.filter(function (q) { return Array.isArray(q.options) && q.options.length })
+      m.options = optHit.length ? optHit[0].options : []
+      m.answer = g.map(function (q) { return String(q.answer || '').trim() }).filter(Boolean).join('　')
+      m.noAnswer = g.every(function (q) { return !String(q.answer || '').trim() })
+      m.solution = g.map(function (q) { return String(q.solution || '').trim() }).filter(Boolean).join('\n')
+      m.hasFigure = g.some(function (q) { return !!q.hasFigure })
+      m.figureKind = g.map(function (q) { return q.figureKind }).filter(Boolean).join('+')
+      m.figureDesc = g.map(function (q) { return q.figureDesc }).filter(Boolean).join('；')
+      let confs = g.map(function (q) { return q.confidence == null ? 1 : q.confidence })
+      m.confidence = Math.min.apply(null, confs)
+      m.topicName = g.map(function (q) { return q.topicName }).filter(Boolean).join(' / ')
+      let pages = {}
+      g.forEach(function (q) { (q.sourcePages || []).forEach(function (p) { pages[p] = 1 }) })
+      m.sourcePages = Object.keys(pages).map(Number).sort(function (a, b) { return a - b })
+      m._subMerged = g.length
+      out.push(m)
+    })
+    return out.sort(function (a, b) { return ((a.sourcePages && a.sourcePages[0]) || 0) - ((b.sourcePages && b.sourcePages[0]) || 0) })
   }
 
   /* ---------------- PDF：文字行 / 渲染 ---------------- */
@@ -887,6 +947,11 @@
       let x1 = clamp(+b[2] || 0, 0, 1000) / 1000 * W
       let bottom = clamp(+b[3] || 0, 0, 1000) / 1000 * H
       if (x1 - x0 < 60 || bottom - top < 24) return
+      /* 【v1.7.5】安全边距：视觉模型的框普遍偏紧，真机实测右缘切字（「如下图所示」被切成
+       * 「下图所」）。先向外让 2.5% 页宽 / 1.5% 页高，随后 trimBoxByInk 按墨迹收回，只赚不亏。 */
+      let padX = W * 0.025, padY = H * 0.015
+      x0 = Math.max(0, x0 - padX); x1 = Math.min(W, x1 + padX)
+      top = Math.max(0, top - padY); bottom = Math.min(H, bottom + padY)
       let box = trimBoxByInk(canvas, { x0: x0, top: top, x1: x1, bottom: bottom }, scale)
       if (box.x1 - box.x0 > W * 0.45) { box.x0 = W * 0.06; box.x1 = W * 0.94 }
       let fig = null
@@ -1039,6 +1104,15 @@
       let fp = state.failPages.filter(function (x, i, a) { return a.indexOf(x) === i }).sort(function (a, b) { return a - b })
       onProgress(62, 'AI 拆题完成')
       log('注意：第 ' + fp.slice(0, 12).join('、') + (fp.length > 12 ? '…' : '') + ' 页识别失败已跳过（共 ' + fp.length + ' 页）—— 这一卷不完整，可重跑或手动补）')
+    }
+
+    /* 【v1.7.5】缝合兜底：模型把大题小问拆成独立题（no 按页重启 1,2）时，
+     * 提示词未必压得住 —— 确定性地把「同页 + 题号回落」的碎片缝回一道大题。 */
+    let beforeMerge = aiQs.length
+    aiQs = mergeSubQuestions(aiQs)
+    if (aiQs.length < beforeMerge) {
+      state.mergedFrags = beforeMerge - aiQs.length
+      log('缝合了 ' + (beforeMerge - aiQs.length) + ' 道被拆散的小问（同页题号回落 → 并回大题）')
     }
 
     if (!aiQs.length && !blocks.length) throw new Error('没有识别到任何题目')
@@ -3113,6 +3187,7 @@
       dropNonQuestions: dropNonQuestions,
       looksTruncated: looksTruncated,
       normQuestion: normQuestion,
+      mergeSubQuestions: mergeSubQuestions,
       /* 【第 26 期】成果整理：删题视图与统计重算也都是纯入口，
        * 「删了题统计得跟着变」「撤销要回原位」这类承诺只能在 DOM 上验，所以一并挂出来。 */
       mountQView: mountQView,

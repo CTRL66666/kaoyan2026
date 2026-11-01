@@ -25,7 +25,7 @@
   'use strict'
 
   let TOOL_ID = 'formula-vault'
-  let VERSION = '1.3.2'
+  let VERSION = '1.3.3'
   /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
    * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
    * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
@@ -684,6 +684,11 @@
     '.fv-texhold{display:inline-block;min-width:120px;height:15px;vertical-align:middle;border-radius:4px;background:linear-gradient(90deg,var(--fv-line2) 25%,color-mix(in srgb,var(--fv-line2) 45%,transparent) 50%,var(--fv-line2) 75%);background-size:240px 100%;animation:fvskel 1.1s linear infinite}',
     '.fv-ft .fv-texhold{display:block;height:30px;min-width:60%}',
     '.fv-ainote .fv-texhold,.fv-drow .fv-texhold{height:13px;min-width:80%}',
+    /* 【v1.3.3】reveal 完必须摘掉骨架皮：旧版只加 .on 不清背景/动画，
+     * 公式都渲染出来了还压着一层流光（用户截图点名「停留在加载态动画」）。 */
+    '.fv-texhold.on{background:none;animation:none;min-width:0;min-height:0;display:inline;height:auto}',
+    '.fv-ft .fv-texhold.on{display:block}',
+    '.fv-plain{font-style:normal}',
     '@keyframes fvskel{0%{background-position:60px 0}100%{background-position:-180px 0}}',
     '.fv-fcard:first-child{border-top:0}',
     '@keyframes fvFade{from{opacity:0}to{opacity:1}}',
