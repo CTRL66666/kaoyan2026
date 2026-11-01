@@ -1021,6 +1021,11 @@
 
   /* ---------------- 主编排 ---------------- */
   async function runPipeline(doc, opts, onProgress, state) {
+    /* 【v1.7.6】log 住在 mount 作用域，runPipeline 是模块级纯函数——直接调用会
+     * ReferenceError 把整场提取炸掉（用户实测：张宇八套卷「失败: log is not defined」）。
+     * 管线内要说话一律攒进 state.notes，由 run() 统一落日志。 */
+    let notes = state.notes = (state.notes || [])
+    function note(s) { notes.push(s) }
     let pinfos = []
     let maxPages = Math.min(opts.maxPages || MAX_PAGES_DEFAULT, doc.numPages)
     onProgress(3, '解析 PDF：' + doc.numPages + ' 页')
@@ -1103,7 +1108,7 @@
     if (state.failPages && state.failPages.length) {
       let fp = state.failPages.filter(function (x, i, a) { return a.indexOf(x) === i }).sort(function (a, b) { return a - b })
       onProgress(62, 'AI 拆题完成')
-      log('注意：第 ' + fp.slice(0, 12).join('、') + (fp.length > 12 ? '…' : '') + ' 页识别失败已跳过（共 ' + fp.length + ' 页）—— 这一卷不完整，可重跑或手动补）')
+      note('注意：第 ' + fp.slice(0, 12).join('、') + (fp.length > 12 ? '…' : '') + ' 页识别失败已跳过（共 ' + fp.length + ' 页）—— 这一卷不完整，可重跑或手动补')
     }
 
     /* 【v1.7.5】缝合兜底：模型把大题小问拆成独立题（no 按页重启 1,2）时，
@@ -1112,7 +1117,7 @@
     aiQs = mergeSubQuestions(aiQs)
     if (aiQs.length < beforeMerge) {
       state.mergedFrags = beforeMerge - aiQs.length
-      log('缝合了 ' + (beforeMerge - aiQs.length) + ' 道被拆散的小问（同页题号回落 → 并回大题）')
+      note('缝合了 ' + (beforeMerge - aiQs.length) + ' 道被拆散的小问（同页题号回落 → 并回大题）')
     }
 
     if (!aiQs.length && !blocks.length) throw new Error('没有识别到任何题目')
@@ -2421,6 +2426,7 @@
         /* 提取完立刻释放 pdfjs 文档：整卷几页的高清 canvas 很占内存，
          * 不销毁在手机上连续提两卷就容易被系统回收标签页。失败也不影响结果。 */
         try { if (doc && typeof doc.destroy === 'function') await doc.destroy() } catch (e) { }
+        if (state.notes && state.notes.length) state.notes.forEach(function (n) { log(n) })
         exam.meta.elapsedSec = Math.round((Date.now() - t0) / 100) / 10
         state.result = exam
         let autoBank = $('[data-autobank]').value === '1'
@@ -2458,6 +2464,7 @@
         })
         finishNotify(ctx, exam, 'done')
       } catch (e) {
+        if (state.notes && state.notes.length) state.notes.forEach(function (n) { log(n) })
         let m = (e && e.message) || String(e)
         let canceled = !!state.cancelled
         log((canceled ? '已取消：' : '失败：') + m)

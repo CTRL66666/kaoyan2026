@@ -26,7 +26,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.7.1'
+  let VERSION = '1.7.2'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -1015,7 +1015,7 @@
     }
 
     function startPitch() {
-      if (!aiReady(ctx)) { ctx.Toast.show('请先在设置里配置 AI 接口', 'warn', 2600); return }
+      if (!aiReady(ctx)) { ctx.Toast.show('还没配置 AI 接口，正带你去设置页', 'warn', 2200); try { ctx.api.go('settings') } catch (e) { } return }
       pitch = { text: '', left: PITCH_SECS, tInt: null, report: null, at: Date.now() }
       paint()
       pitch.tInt = setInterval(function () {
@@ -1217,8 +1217,10 @@
     /* —— 事件 —— */
     let unbind = delegate(bodyEl, {
       /* v1.7.2：AI 未配置不再只说「先去设置」——直接把你送过去 */
-      if (!aiReady(ctx)) { ctx.Toast.show('还没配置 AI 接口，正带你去设置页', 'warn', 2200); try { ctx.api.go('settings') } catch (e) { try { ctx.api.goTool('settings') } catch (e2) { } } return }
-      start()
+      start: function () {
+        if (!aiReady(ctx)) { ctx.Toast.show('还没配置 AI 接口，正带你去设置页', 'warn', 2200); try { ctx.api.go('settings') } catch (e) { } return }
+        start()
+      },
       book: function (t) {
         /* 材料包选择：持久化 + 就地切换 .on（不依赖 bindCompose，回控制台后依然可用） */
         bookId = t.dataset.b || ''
