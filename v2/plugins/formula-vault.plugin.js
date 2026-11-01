@@ -98,6 +98,13 @@
   function katexTex(s, display) {
     let src = String(s == null ? '' : s).trim()
     if (!src) return ''
+    /* 【v1.3.3】纯中文口诀不是公式：种子/AI 常把「行内归一化」这类记忆短语包进 $…$，
+     * KaTeX 撞上全角引号直接罢工，texauto 兜底把 $「…」$ 原样晾在屏幕上（用户截图）。
+     * 判据：含全角标点/引号且没有任何数学信号（反斜杠/上下标/等号）→ 出纯文本。 */
+    let inner = /^\$([^$]*)\$$/.test(src) ? src.slice(1, -1) : src
+    if (!display && /[「」『』（）【】，。、；：]/.test(inner) && !/[\\^_=]/.test(inner)) {
+      return '<span class="fv-plain">' + esc(inner.trim()) + '</span>'
+    }
     if (src.indexOf('$') < 0) src = (display ? '$$' : '$') + src + (display ? '$$' : '$')
     else if (display && /^\$[^$\n]+\$$/.test(src)) src = '$$' + src.slice(1, -1) + '$$'
     return '<span class="fv-tex">' + esc(src) + '</span>'

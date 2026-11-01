@@ -53,7 +53,7 @@
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。
    * 走「主.次」而不是补丁位：市场条目只记两位（见 paper-extract-plugin-1-1.test.ts
    * 那条"市场版本必须等于源码 VERSION 的前两段"），补丁位留给不改变对外行为的修。 */
-  let VERSION = '1.7.3'
+  let VERSION = '1.7.4'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
@@ -499,7 +499,12 @@
       if (c >= 0xE000 && c <= 0xF8FF) pua++
     }
     boxy = (chars.match(/[\uFFFD\u25A1\u25A0\u25AF]/g) || []).length
-    let garbled = chars.length > 30 && (pua > 30 || boxy >= 6)
+    /* 【v1.7.4】数学字母数字符号区（U+1D400–U+1D7FF，UTF-16 代理对 \uD835\uDCxx）：
+     * 很多排版 PDF 的文字层把 r(t)、G(s) 全映射成同一枚 𝐀 —— 看着是字，读出来全是天书。
+     * 旧检测只认 PUA/□，这类页被当「文字层正常」喂给文本模型 → 满屏 $[乱码]$（用户截图）。
+     * 密度超一成就直接改走视觉通道：页面渲染图是完好的，让模型看图。 */
+    let mathUni = (chars.match(/[\uD835][\uDC00-\uDFFF]/g) || []).length
+    let garbled = chars.length > 30 && (pua > 30 || boxy >= 6 || (mathUni >= 12 && mathUni * 100 >= chars.length * 12))
     let kind = chars.length >= TEXT_MIN && lines.length >= 4 && !garbled ? 'text' : 'scan'
     return { page: page, no: no, W: W, H: H, lines: lines, chars: chars.length, garbled: garbled, kind: kind }
   }
@@ -610,14 +615,56 @@
     })
     return out
   }
+  /* 【v1.7.4】中文大题号 → 题号。考研卷常见「一、二、…」大题 + 每题内「1. 2.」小题：
+   * 旧版只认阿拉伯锚点，把「2.$R_1=100kΩ$」当成第 2 题 —— 与 AI 返回的大题号撞车，
+   * 块与题错位、裁图串题（用户截图里 crop 顶部混进上一题的尾巴）。
+   * 判据：全卷出现 ≥2 行「汉字序号、+ 真实题干文字」（排除「一、选择题」这类小节标题），
+   * 即认定汉字序号才是大题号，阿拉伯数字只是小题，不再当锚点。 */
+  function cn2num(s) {
+    let d = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 }
+    if (s.length === 1) return d[s] || null
+    if (s[0] === '十') { let t = d[s[1]]; return t ? 10 + t : null }
+    if (s[s.length - 1] === '十') { let t = d[s[0]]; return t ? t * 10 : null }
+    let m = /^([一二三四五六七八九])十([一二三四五六七八九])$/.exec(s)
+    return m ? d[m[1]] * 10 + d[m[2]] : null
+  }
+  function findChineseAnchors(lines, b, body) {
+    let out = []
+    let leftMax = b.x0 + Math.max(16, (b.x1 - b.x0) * 0.08)
+    lines.forEach(function (l) {
+      let t = String(l.text || '').trim()
+      let m = /^\s*([一二三四五六七八九十]{1,3})\s*[、.．]\s*(\S.*)$/.exec(t)
+      if (!m) return
+      let rest = String(m[2] || '').trim()
+      if (rest.length < 6) return                       // 「三、总结」这类短标题不当题
+      if (sectionType(rest)) return                     // 「一、选择题」是小节标题，不是题目
+      if (l.x0 > leftMax || l.size < body * 0.8) return
+      if (isNoise(t)) return
+      let no = cn2num(m[1])
+      if (!(no >= 1 && no <= 80)) return
+      out.push({ no: no, line: l, text: t, section: '' })
+    })
+    return out
+  }
   function buildTextBlocks(pinfos) {
+    let majorIsChinese = 0
+    pinfos.forEach(function (pi) {
+      if (pi.kind !== 'text' || !pi.lines.length) return
+      let b = contentBounds(pi.lines, pi.H)
+      majorIsChinese += findChineseAnchors(pi.lines, b, bodySize(pi.lines)).length
+    })
     let anchors = []
     pinfos.forEach(function (pi) {
       if (pi.kind !== 'text' || !pi.lines.length) return
       let b = contentBounds(pi.lines, pi.H)
       let body = bodySize(pi.lines)
-      let as = findAnchors(pi.lines, b, body, false)
-      if (as.length < 2) as = findAnchors(pi.lines, b, body, true)
+      let as
+      if (majorIsChinese >= 2) {
+        as = findChineseAnchors(pi.lines, b, body)   // 大题号=汉字序号：小题号不许参与
+      } else {
+        as = findAnchors(pi.lines, b, body, false)
+        if (as.length < 2) as = findAnchors(pi.lines, b, body, true)
+      }
       as.forEach(function (a) {
         a.pi = pi
         a.bounds = b
@@ -3053,6 +3100,9 @@
       contentBounds: contentBounds,
       bodySize: bodySize,
       findAnchors: findAnchors,
+      findChineseAnchors: findChineseAnchors,
+      cn2num: cn2num,
+      pageInfo: pageInfo,
       buildTextBlocks: buildTextBlocks,
       attachFigures: attachFigures,
       looksGarbled: looksGarbled,

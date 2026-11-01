@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.2'
+  let VERSION = '1.4.3'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -765,8 +765,8 @@
     '.du-pick:hover{border-color:var(--du-acc);transform:translateY(-1px)}',
     '.du-pick.on{border-color:var(--du-gold);box-shadow:0 0 0 2px color-mix(in oklab,var(--du-gold) 22%,transparent)}',
     /* 预览态（站内题库列表只看不选）：不给可点的错觉 */
-    '.du-pick.view{cursor:default}',
-    '.du-pick.view:hover{transform:none;border-color:var(--du-line)}'
+    '.du-pick-ro{cursor:default}',
+    '.du-pick-ro:hover{transform:none;border-color:var(--du-line)}'
   ].join('\n')
 
   /* 【2026-10-24 改走宿主托管】原先自己 createElement('style') 挂 head —— 宿主看不见，代价三条：
@@ -1035,7 +1035,7 @@
     let shown = pool.slice(0, 8)
     return '<div class="du-note" style="margin-top:10px">开战时从下面这 ' + pool.length + ' 道里随机抽（零 AI 调用，秒开）：</div>'
       + '<div class="du-picklist">' + shown.map(function (q, i) {
-        return '<div class="du-pick view" style="--i:' + i + '" title="' + esc(q.stem) + '">'
+        return '<div class="du-pick du-pick-ro" style="--i:' + i + '" title="' + esc(q.stem) + '">'
           + '<b>' + I('archive') + esc(trunc(q.stem, 26)) + '</b>'
           + '<span>' + esc(q.topic) + ' · ' + q.options.length + ' 个选项</span></div>'
       }).join('') + '</div>'
