@@ -300,6 +300,10 @@
   function sessionSave(ctx, sess) {
     let l = sessionsGet(ctx)
     l.unshift(sess)
+    /* v1.7.2：编年史到 30 场封顶时不再静默吞旧场次——当场说清（数据不可逆操作的知情线） */
+    if (l.length > SESSION_MAX) {
+      try { ctx.Toast.show('面试编年史满 ' + SESSION_MAX + ' 场：最早 ' + (l.length - SESSION_MAX) + ' 场已滚出（成绩单可先「导出」留存）', 'warn', 4200) } catch (e) { }
+    }
     ctx.data('sessions', l.slice(0, SESSION_MAX))
   }
 
@@ -1150,8 +1154,11 @@
       if (busy || !sess || sess.report) return
       let ta = bodyEl.querySelector('[data-f=answer]')
       if (!ta) return
-      let text = flat(ta.value).slice(0, ANSWER_MAX)
+      let raw = String(ta.value || '')
+      let text = flat(raw).slice(0, ANSWER_MAX)
       if (!text) { ctx.Toast.show('先写点回答再发送', 'info', 1400); return }
+      /* v1.7.2：超 2000 字截断不再无声——说一声再发（考官看的是截断后的文本） */
+      if (flat(raw).length > ANSWER_MAX) ctx.Toast.show('回答超 ' + ANSWER_MAX + ' 字，已按上限截断送入考官上下文', 'info', 3000)
       sess.transcript.push({ role: 'user', text: text })
       sess.exchanges++
       draft = ''   /* 已交的答案从输入框清掉，paint 回填才不会把它再贴回去 */
@@ -1209,7 +1216,9 @@
 
     /* —— 事件 —— */
     let unbind = delegate(bodyEl, {
-      start: function () { if (!aiReady(ctx)) { ctx.Toast.show('请先在设置里配置 AI 接口', 'warn', 2600); return } start() },
+      /* v1.7.2：AI 未配置不再只说「先去设置」——直接把你送过去 */
+      if (!aiReady(ctx)) { ctx.Toast.show('还没配置 AI 接口，正带你去设置页', 'warn', 2200); try { ctx.api.go('settings') } catch (e) { try { ctx.api.goTool('settings') } catch (e2) { } } return }
+      start()
       book: function (t) {
         /* 材料包选择：持久化 + 就地切换 .on（不依赖 bindCompose，回控制台后依然可用） */
         bookId = t.dataset.b || ''

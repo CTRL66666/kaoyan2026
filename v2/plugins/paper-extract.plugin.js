@@ -53,7 +53,7 @@
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。
    * 走「主.次」而不是补丁位：市场条目只记两位（见 paper-extract-plugin-1-1.test.ts
    * 那条"市场版本必须等于源码 VERSION 的前两段"），补丁位留给不改变对外行为的修。 */
-  let VERSION = '1.7.4'
+  let VERSION = '1.7.5'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
