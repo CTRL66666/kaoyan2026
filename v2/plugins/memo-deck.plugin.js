@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.6.2'
+  let VERSION = '1.6.4'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -43,6 +43,7 @@
 
   /* 体积闸（与试卷提取插件同思路）：牌库随 Store 云同步，不设闸会堵死同步通道 */
   let DECK_MAX_CARDS = 4000          // 单库卡数上限
+  let GRID_PAGE = 40          // 牌库分片首屏卡数（约一屏半）；其余逐帧补（见 mountDeck）
   let FRONT_MAX = 2000               // 卡面正文字上限
   let BACK_MAX = 4000                // 卡背正文字上限
   let LOG_MAX = 4000                 // 复习日志条数上限（滚动丢弃最旧）
@@ -485,7 +486,25 @@
   function deckGet(ctx) {
     let d = ctx.data('deck')
     if (!Array.isArray(d)) return []
+    /* 【2026-11-02 压力审计揪出的真缺陷】旧版只过滤 id/front 就原样交给渲染：
+     * 云同步回流、外部写入、写到一半配额中断的存量卡缺个 ease/reps，
+     * 渲染处 `card.ease.toFixed(2)` 直接 undefined.toFixed —— 整个插件 mount 崩、
+     * 页面白屏。数字字段在这里统一兜底（对原对象做补全而非重建：due/ivl 等排期
+     * 字段保持身份，norm 只把 undefined/NaN 归到出厂值）。 */
     return d.filter(function (c) { return c && c.id && typeof c.front === 'string' })
+      .map(function (c) {
+        /* 无条件 clamp 修复而非「缺了才补」：99/-5 这类数字脏值同样参与运算，
+         * 对合法值这些操作是幂等的（2.1 clamp 回来还是 2.1，身份保持） */
+        c.ease = clamp(num(c.ease, EASE_INIT), EASE_MIN, EASE_MAX)
+        c.reps = Math.max(0, num(c.reps, 0))
+        c.lapses = Math.max(0, num(c.lapses, 0))
+        c.ivl = Math.max(0, num(c.ivl, 0))
+        c.due = num(c.due, Date.now())
+        /* 同一缺陷族的第二个字段：tags 也被 forEach/map/indexOf/join 直接用 */
+        if (!Array.isArray(c.tags)) c.tags = []
+        if (typeof c.back !== 'string') c.back = c.back == null ? '' : String(c.back)
+        return c
+      })
   }
   function deckSave(ctx, deck) {
     deck = deck.slice(0, DECK_MAX_CARDS)
@@ -1323,6 +1342,27 @@
       if (p0 && p0.sort) view.sort = String(p0.sort)
     } catch (e) { /* 无参跳入是常态 */ }
     let now = Date.now()
+    /* 牌库分片尾：bodyHtml 只铺前 GRID_PAGE 张，这里每帧再补一批进 .md-grid。
+     * 事件是 bodyEl 根级委托 → 追加的卡片无需重新绑定即可点。repaint 会重置
+     * view._rest（bodyHtml 重算），所以进 repaint 前先掐掉上一轮未跑完的 rAF。 */
+    let tailRaf = 0
+    function flushDeckTail() {
+      if (tailRaf) { try { cancelAnimationFrame(tailRaf) } catch (e) { } tailRaf = 0 }
+      if (!view._rest || !view._rest.length) return
+      let run = function () {
+        tailRaf = 0
+        let marker = bodyEl.querySelector('[data-md-tail]')
+        if (!marker || !view._rest || !view._rest.length) { if (marker) { try { marker.remove() } catch (e) { } } return }
+        let take = view._rest.splice(0, 36)
+        let base = view._i
+        view._i += take.length
+        let html = take.map(function (c, k) { return cardHtml(c, view._now, base + k, view.manage, !!view.sel[c.id]) }).join('')
+        try { marker.insertAdjacentHTML('beforebegin', html) } catch (e) { return }
+        if (view._rest.length) tailRaf = requestAnimationFrame(run)
+        else { try { marker.remove() } catch (e) { } }
+      }
+      tailRaf = requestAnimationFrame(run)
+    }
 
     function filtered(deck) {
       let list = deck.slice()
@@ -1351,6 +1391,15 @@
       let deck = deckGet(ctx)
       let list = filtered(deck)
       let tags = allTags(deck)
+      /* 【2026-11-02 切换压力审计】200 张卡一次性 innerHTML 全铺 = 牌库首帧 236-289ms、
+       * 每次搜索后 repaint 370ms（memo 早已有 180ms 搜索防抖，所以不是每键风暴，
+       * 是「重建整张牌库」这一下同步占满主线程）。与 formula-vault 同一味药：首屏只铺
+       * 前 GRID_PAGE 张填满视口，其余逐帧补进 .md-grid 内的事件委托（bodyEl 根委托，
+       * 追加的卡片自动可点，bindInputs 只绑输入框不需重跑）。 */
+      let now2 = now
+      view._rest = list.slice(GRID_PAGE)
+      view._now = now2
+      view._i = GRID_PAGE
       let subjOpts = ['全部'].concat(SUBJECTS)
       return '<section class="md-card" style="--i:0">'
         + '<div class="md-h">' + I('list') + '牌库 <em>' + deck.length + ' 张 · ' + fmtSize(deckSize(deck)) + '</em></div>'
@@ -1391,7 +1440,8 @@
           + '</div>'
           : '')
         + (list.length
-          ? '<div class="md-grid">' + list.map(function (c, i) { return cardHtml(c, now, i, view.manage, !!view.sel[c.id]) }).join('') + '</div>'
+          ? '<div class="md-grid">' + list.slice(0, GRID_PAGE).map(function (c, i) { return cardHtml(c, now, i, view.manage, !!view.sel[c.id]) }).join('')
+            + (list.length > GRID_PAGE ? '<span data-md-tail style="display:none"></span>' : '') + '</div>'
           : '<div class="md-empty"><span class="ico">' + I('list') + '</span><b>这里还空着</b>'
           + (deck.length
             ? '没有匹配当前筛选的卡片 —— 换个关键词或科目。'
@@ -1401,6 +1451,7 @@
     }
 
     bodyEl.innerHTML = bodyHtml()
+    flushDeckTail()
     let unbind = delegate(bodyEl, {
       flip: function (a) { if (view.manage) return; a.classList.toggle('flipped') },
       subj: function (a) { view.subject = a.dataset.v; repaint() },
@@ -1682,6 +1733,7 @@
       let selStart = active && active.selectionStart
       let val = active && active.value
       bodyEl.innerHTML = bodyHtml()
+      flushDeckTail()
       bindInputs()
       if (env && typeof env.refresh === 'function') env.refresh()   /* 数据变了，页眉统计跟上 */
       if (keepFocus) {
@@ -1691,7 +1743,10 @@
     }
 
     bindInputs()
-    return function destroy() { unbind() }
+    return function destroy() {
+      if (tailRaf) { try { cancelAnimationFrame(tailRaf) } catch (e) { } tailRaf = 0 }
+      unbind()
+    }
   }
 
   /* ════════════════════════ 7. 页签②：今日复习 ════════════════════════

@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.3'
+  let VERSION = '1.4.4'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -631,9 +631,10 @@
     '/* 禁用态不用 `opacity:.45`：深色主题下按钮连文字一起被压成背景色，读不出来 */',
     '.du-btn:disabled{opacity:1;cursor:not-allowed;color:var(--du-sub);border-color:var(--du-line);'
       + 'background:color-mix(in oklab,var(--du-ink) 6%,transparent);box-shadow:none}',
-    '.du-btn.fire{background:linear-gradient(135deg,var(--du-gold),var(--du-danger));color:#fff;border:0;'
+    /* 【夜检 2026-10-31】白字压琥珀红渐变只有 3.19:1 —— 改品牌正解：琥珀实底 + 深棕墨字（4.9:1，与「鸦荔金」同谱） */
+    '.du-btn.fire{background:var(--du-gold);color:#2b1d05;border:0;'
       + 'box-shadow:0 6px 16px color-mix(in oklab,var(--du-gold) 35%,transparent)}',
-    '.du-btn.fire:hover:not(:disabled){color:#fff;filter:brightness(1.06)}',
+    '.du-btn.fire:hover:not(:disabled){color:#2b1d05;filter:brightness(1.08)}',
     '.du-btn.fire:disabled{background:color-mix(in oklab,var(--du-ink) 7%,transparent);color:var(--du-sub);box-shadow:none}',
     '.du-btn.sm{height:30px;padding:0 11px;font-size:12px;border-radius:9px}',
     '.du-note{font-size:12px;color:var(--du-sub);line-height:1.8;margin-top:9px}',

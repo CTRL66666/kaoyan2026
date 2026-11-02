@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4.3'
+  let VERSION = '1.4.5'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -2570,7 +2570,11 @@
     '.fx-followup b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:10px;letter-spacing:.14em;color:var(--fx-acc2);margin-bottom:4px}',
     '.fx-confetti{position:fixed;left:50%;top:46%;width:0;height:0;z-index:60;pointer-events:none}',
     '.fx-confetti i{position:absolute;width:6px;height:6px;border-radius:1px;background:var(--c);animation:fxConfetti 1.25s cubic-bezier(.2,.8,.3,1) var(--d) both}',
-    'html[data-theme="night"] .fx-dim-bar,html[data-theme="night"] .fx-subdist,html[data-theme="night"] .fx-thin-bar,html[data-theme="night"] .fx-recent-bar{background:rgba(255,255,255,.14)}'
+    'html[data-theme="night"] .fx-dim-bar,html[data-theme="night"] .fx-subdist,html[data-theme="night"] .fx-thin-bar,html[data-theme="night"] .fx-recent-bar{background:rgba(255,255,255,.14)}',
+    /* 【窄屏审计 2026-10-31】chips 22px/小按钮 24px 手机点不准；品牌撑破页眉 → 触控 30px + 省略号 */
+    '@media (max-width:760px){.fx-schip{height:30px;font-size:12.5px}.fx-btn.sm{height:30px}.fx-brandtx{min-width:0}.fx-brandtx b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}',
+    /* 【夜检 2026-10-31】学科色 chips 夜间提亮（与 formula-vault 同款） */
+    'html[data-theme="night"] .fx-schip.on{filter:brightness(1.8) saturate(.82)}',
   ].join('')
 
   /* ============================================================

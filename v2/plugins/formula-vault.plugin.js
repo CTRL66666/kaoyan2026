@@ -25,7 +25,7 @@
   'use strict'
 
   let TOOL_ID = 'formula-vault'
-  let VERSION = '1.3.3'
+  let VERSION = '1.3.6'
   /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
    * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
    * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
@@ -328,7 +328,7 @@
     let side = function (f) {
       return '<div class="fv-cside"><span class="fv-fsubj" style="--c:' + subjectColor(f.s) + '">' + esc((SUBJ[f.s] && SUBJ[f.s].short) || f.s) + '</span>'
         + '<b>' + esc(f.n) + '</b>'
-        + '<div class="fv-ft">' + katexTex(f.t, true) + '</div></div>'
+        + '<div class="fv-ft">' + lazyTex(f.t, true) + '</div></div>'
     }
     return '<div class="fv-crow"><span class="fv-vs" aria-hidden="true">VS</span>'
       + side(fa) + side(fb)
@@ -689,6 +689,10 @@
     '.fv-texhold.on{background:none;animation:none;min-width:0;min-height:0;display:inline;height:auto}',
     '.fv-ft .fv-texhold.on{display:block}',
     '.fv-plain{font-style:normal}',
+    /* 【夜检 2026-10-31】学科色 --c 是日间品牌色（#2f4bd8 压在夜卡上 1.97:1）——夜间提亮滤镜，一招覆盖所有 --c 着色元素 */
+    'html[data-theme="night"] .fv-fsubj,html[data-theme="night"] .fv-schip.on{filter:brightness(1.95) saturate(.82)}',
+    'html[data-theme="night"] .fv-fp i{color:#7d95f0}',
+    'html[data-theme="night"] .fv-fw i{color:#e0a33c}',
     '@keyframes fvskel{0%{background-position:60px 0}100%{background-position:-180px 0}}',
     '.fv-fcard:first-child{border-top:0}',
     '@keyframes fvFade{from{opacity:0}to{opacity:1}}',
@@ -783,6 +787,8 @@
 
   /* ---------- 页面专属层：挂载时注入 <style>、destroy 移除 ---------- */
   let CSS_EXTRA = [
+    /* 【窄屏审计 2026-10-31】手机真机测量：学科 chips 22px 高、小按钮 24px 高——手指点不准；品牌名 390px 下撑破页眉。触控目标一律抬到 30px，品牌省略号。 */
+    '@media (max-width:760px){.fv-schip{height:30px;font-size:12.5px}.fv-btn.sm{height:30px}.fv-brandtx{min-width:0}.fv-brandtx b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fv-createhint{display:none}}',
     '@media print{.fv-top,.fv-dock{display:none}.fv-stage{padding:0}}',
     '.fv-ft{padding:4px 0 6px;overflow-x:auto;font-size:14.5px;line-height:2}',
     '.fv-ft.big{font-size:18px;padding:8px 0;animation:fvReveal .5s cubic-bezier(.22,1,.36,1) both}',
@@ -977,28 +983,41 @@
     let groups = chaptersOf(filtered, S.subj)
     if (!groups.length) {
       out.push('<div class="fv-quiet">没有匹配的公式。换个词，或切回「全部」学科。</div>')
+      S._vGroups = []; S._vDone = 0
       return out.join('')
     }
-    for (let i = 0; i < groups.length; i++) {
-      let g = groups[i]
-      let open = S.openChap[g.chap] !== false && (!q || true)
-      let sec = S.openChap[g.chap] === false
-      out.push('<section class="fv-chap' + (sec ? '' : ' open') + '">')
-      out.push('<button class="fv-chap-h" data-act="chap" data-k="' + esc(g.chap) + '">'
-        + '<span class="fv-chap-arrow" aria-hidden="true"></span>'
-        + '<b>' + esc(g.chap) + '</b>'
-        + '<em>' + g.items.length + ' 条</em>'
-        + '</button>')
-      if (!sec) {
-        out.push('<div class="fv-fgrid">')
-        for (let j = 0; j < g.items.length; j++) out.push(formulaCard(ctx, S, g.items[j]))
-        out.push('</div>')
-      }
-      out.push('</section>')
-    }
+    /* v1.3.6 章节分片（真机归因探针定案）：首挂 mount 的同步段只有 ~55ms，
+     * 但 137 张卡/120KB DOM 的**样式+布局重算**是那条 ~520ms 长任务的主体
+     * （连零公式的自测视图挂上 vault 首屏再切走，533ms 照样存在；站点基线 S0 干净）。
+     * 首帧只铺前 2 个章节（视口里那点），剩下的逐帧补 —— 用户看到的最终画面
+     * 一字不差，只是「一次 500ms 大卡顿」换成「几帧轻补刀」。搜索态组数本来就少，
+     * ≤3 组直接全量（分片反而多几次调度）。 */
+    let lim = groups.length <= 3 ? groups.length : 2
+    for (let i = 0; i < lim; i++) out.push(chapBlock(ctx, S, groups[i]))
+    S._vGroups = groups
+    S._vDone = lim
+    if (lim < groups.length) out.push('<div data-fv="vrest"></div>')
     out.push('<div class="fv-more">共 ' + filtered.length + ' 条公式（含自建 ' + S.customCount + ' 条）。'
       + '<button class="fv-btn ghost sm" data-act="newf" style="margin-left:10px">+ 自建公式</button>'
       + '数据存在浏览器本地，可随时导出备份。</div>')
+    return out.join('')
+  }
+
+  /** 单个章节目录块（v1.3.6 从 viewVault 循环体拆出，供首帧与分片尾共用） */
+  function chapBlock(ctx, S, g) {
+    let sec = S.openChap[g.chap] === false
+    let out = ['<section class="fv-chap' + (sec ? '' : ' open') + '">']
+    out.push('<button class="fv-chap-h" data-act="chap" data-k="' + esc(g.chap) + '">'
+      + '<span class="fv-chap-arrow" aria-hidden="true"></span>'
+      + '<b>' + esc(g.chap) + '</b>'
+      + '<em>' + g.items.length + ' 条</em>'
+      + '</button>')
+    if (!sec) {
+      out.push('<div class="fv-fgrid">')
+      for (let j = 0; j < g.items.length; j++) out.push(formulaCard(ctx, S, g.items[j]))
+      out.push('</div>')
+    }
+    out.push('</section>')
     return out.join('')
   }
 
@@ -1723,20 +1742,72 @@
     /* ---- v1.3.2 懒渲染接线：公式只在滚到视口附近才落回 DOM 交给站点渲染 ---- */
     let texIO = null
     let texVisible = false
+    /* v1.3.6 分批排空：首屏 IntersectionObserver 一次回调会 reveal 几十个 hold，
+     * 每个 revealHold 都把 `$…$` 原文写回 DOM、触发站点 texauto 同步排版 ——
+     * 全挤在同一帧就是一条 350ms 长任务（真机审计：军火库首帧把第 2 帧顶到 745ms，
+     * 就是用户说的「切换加载好几秒」的卡顿源）。骨架（.fv-texhold shimmer）本就该
+     * 秒出，公式随帧渐进落地才是对的顺序。
+     * 【为什么按「条数」不按「毫秒」预算】revealHold 自身只是写字符串（µs 级），
+     * 真成本在它下游的 texauto —— 那是微任务里对本帧全部新公式的一次性排版，
+     * 时间预算量不到它（首版 8ms 预算实测毫无改善，327ms 长任务原样躺着）。
+     * 限条数才限得住：每帧最多 6 条落 DOM，texauto 每帧只排 6 条。 */
+    let revealQ = []
+    let revealRaf = 0
+    function drainReveals() {
+      revealRaf = 0
+      let n = 0
+      while (revealQ.length && n < 6) {
+        let el = revealQ.shift()
+        /* paint 重建 stage 后旧 hold 已脱离文档，别再对它做无用的排版（isConnected 兜底） */
+        if (el && el.isConnected) { revealHold(el); n++ }
+      }
+      if (revealQ.length) revealRaf = requestAnimationFrame(drainReveals)
+    }
+    function queueReveal(el) {
+      revealQ.push(el)
+      if (!revealRaf) revealRaf = requestAnimationFrame(drainReveals)
+    }
+    function resetReveal() {
+      revealQ = []
+      if (revealRaf) { try { cancelAnimationFrame(revealRaf) } catch (e) { } revealRaf = 0 }
+    }
     function bindLazyTex() {
       if (texIO) { try { texIO.disconnect() } catch (e) { } texIO = null }
+      resetReveal()   /* 上一视图遗留的队列/帧作废，防止 reveal 到已重建的旧节点 */
       if (S.view !== 'vault') return
       let holds = stage.querySelectorAll('.fv-texhold:not(.on)')
       if (!holds.length) return
-      if (!('IntersectionObserver' in window)) { revealAllHolds(stage); return }
+      if (!('IntersectionObserver' in window)) { for (let i = 0; i < holds.length; i++) queueReveal(holds[i]); return }
       texIO = new IntersectionObserver(function (entries) {
         for (let i = 0; i < entries.length; i++) {
           if (!entries[i].isIntersecting) continue
-          revealHold(entries[i].target)
+          queueReveal(entries[i].target)
           try { texIO.unobserve(entries[i].target) } catch (e) { }
         }
-      }, { rootMargin: '360px 0px 360px 0px' })
+      }, { rootMargin: '160px 0px 160px 0px' })
       for (let i = 0; i < holds.length; i++) texIO.observe(holds[i])
+    }
+    /* v1.3.6 章节分片尾：viewVault 首帧只铺前 2 章，这里每帧补一章。
+     * 全程只用 insertAdjacentHTML 追加，不重建已有 DOM（reveal 过的公式不返工）；
+     * 每次补完重挂 bindLazyTex（幂等：已 reveal 的 :not(.on) 过滤掉，只 observe 新增）。
+     * 搜索/切学科会走整屏 paint 重建 —— 占位与 S._vDone 同步重置，无竞态。 */
+    let tailRaf = 0
+    function vaultTail() {
+      tailRaf = 0
+      if (S.view !== 'vault' || !S._vGroups || !S._vGroups.length) return
+      let anchor = stage.querySelector('[data-fv="vrest"]')
+      if (!anchor) return
+      if (S._vDone >= S._vGroups.length) { try { anchor.remove() } catch (e) { } return }
+      try { anchor.insertAdjacentHTML('beforebegin', chapBlock(ctx, S, S._vGroups[S._vDone])) }
+      catch (e) { return }
+      S._vDone++
+      bindLazyTex()
+      if (S._vDone >= S._vGroups.length) { try { anchor.remove() } catch (e) { } return }
+      tailRaf = requestAnimationFrame(vaultTail)
+    }
+    function scheduleVaultTail() {
+      if (tailRaf) { try { cancelAnimationFrame(tailRaf) } catch (e) { } tailRaf = 0 }
+      if (S.view === 'vault' && S._vGroups && S._vDone < S._vGroups.length) tailRaf = requestAnimationFrame(vaultTail)
     }
 
     /* ---- 主渲染 ---- */
@@ -1757,6 +1828,7 @@
       paintKpis()
       bindSearch()
       bindLazyTex()
+      scheduleVaultTail()
     }
     function onVis() {
       /* 切回前台补一次：后台被推迟的重绘在这里还上（懒渲染只补视口附近的） */
@@ -2448,6 +2520,8 @@
       stopTick()
       if (enterT) clearTimeout(enterT)
       if (texIO) { try { texIO.disconnect() } catch (e) { } texIO = null }
+      resetReveal()
+      if (tailRaf) { try { cancelAnimationFrame(tailRaf) } catch (e) { } tailRaf = 0 }
       document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', moveInd)

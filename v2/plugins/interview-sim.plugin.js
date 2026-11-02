@@ -26,7 +26,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.7.2'
+  let VERSION = '1.7.3'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -543,6 +543,8 @@
     '.ivs-modal-box{width:min(680px,94vw);max-height:86vh;overflow:auto;background:var(--iv-bg);border:1px solid var(--iv-line);'
       + 'border-radius:18px;padding:20px;box-shadow:0 30px 70px rgba(10,20,45,.35);animation:ivs-pop .28s var(--iv-ease) both}',
     '@keyframes ivs-fade{from{opacity:0}to{opacity:1}}',
+    '.ivs-spin{display:inline-block;width:12px;height:12px;border:2px solid var(--iv-line);border-top-color:var(--iv-acc);border-radius:50%;animation:ivs-rot .8s linear infinite}',
+    '@keyframes ivs-rot{to{transform:rotate(360deg)}}',
     '@keyframes ivs-pop{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}',
     '.ivs-x{margin-left:auto}',
     '.ivs-empty{border:1.6px dashed var(--iv-line);border-radius:16px;padding:30px 18px;text-align:center;color:var(--iv-sub);font-size:13px}',
@@ -654,7 +656,8 @@
     HOST_CTX = ctx
     injectStyles()
     let sess = null   /* 当前面试：{subject,pressure,mode,rounds,transcript[],exchanges,startAt} */
-    let busy = false  /* AI 正在生成时锁输入 */
+    let busy = false   /* AI 正在生成时锁输入 */
+    let grading = false   /* 【v1.7.3】交卷后「教练批改中」阶段旗 */
     let timer = null  /* 面试计时器 */
     let elapsed = 0
     let pitch = null  /* 自我介绍专项：{left,tInt,text,report} */
@@ -855,7 +858,11 @@
         + '<textarea class="ivs-ta" data-f="answer" placeholder="口述你的回答…（Enter 发送，Shift+Enter 换行）"'
         + (busy ? ' disabled' : '') + '></textarea>'
         + '<button class="ivs-btn primary" data-act="send"' + (busy ? ' disabled' : '') + ' style="height:46px">发送</button>'
-        + '</div></section>'
+        + '</div>'
+        /* 【v1.7.3】交卷批改阶段指示：finish() 的评分请求在后台跑，旧版界面毫无动静，
+         * 用户以为卡死 → 反复点交卷/关页面。 */
+        + (grading && !sess.report ? '<div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px;color:var(--iv-sub)"><i class="ivs-spin"></i>教练正在逐轮批改这份对话（四维评分 + 证据），通常十几秒，请稍候…</div>' : '')
+        + '</section>'
     }
 
     function msgHtml(t, i) {
@@ -1000,9 +1007,11 @@
         + '<div class="ivs-h">' + I('fileText') + '自介点评 <em>' + fmtTime(pitch.at) + '</em></div>'
         + '<div class="ivs-scorebig"><b data-count="' + r.total + '">0</b><span>/ 100 · 自我介绍专项</span></div>'
         + PITCH_DIMS.map(function (d, i) {
-          let v = clamp(num(r.scores && r.scores[d.key], 0), 0, 100)
-          return '<div class="ivs-dim" style="--i:' + i + '"><div class="ivs-dim-h"><b>' + d.label + '</b><span>' + d.desc + ' · ' + v + ' 分</span></div>'
-            + '<div class="ivs-track"><div class="ivs-fill" data-w="' + v + '"></div></div></div>'
+          /* 【v1.7.3】缺维如实「未评」，不画 0 分条（与面试报告同一诚实口径） */
+          let raw = r.scores && r.scores[d.key]
+          let v = raw == null || raw === '' || !isFinite(Number(raw)) ? null : clamp(Number(raw), 0, 100)
+          return '<div class="ivs-dim" style="--i:' + i + '"><div class="ivs-dim-h"><b>' + d.label + '</b><span>' + d.desc + ' · ' + (v == null ? '未评' : v + ' 分') + '</span></div>'
+            + '<div class="ivs-track"><div class="ivs-fill"' + (v == null ? ' style="opacity:.25"' : ' data-w="' + v + '"') + '></div></div></div>'
         }).join('')
         + (r.comments && r.comments.length
           ? '<div style="margin-top:10px">' + r.comments.map(function (c) { return '<div class="ivs-cmt">' + esc(c) + '</div>' }).join('') + '</div>'
@@ -1045,10 +1054,23 @@
         + '只输出 JSON：{"scores":{"structure":数,"content":数,"language":数},"comments":["≤60字",...],"rewrite":"改进稿"}'
       aiJSON(ctx, sys, text, { timeout: 120000, maxTokens: 2000 })
         .then(function (r) {
-          let scores = (r && r.scores) || {}
-          let total = 0, cnt = 0
-          PITCH_DIMS.forEach(function (d) { let v = clamp(num(scores[d.key], 0), 0, 100); scores[d.key] = v; total += v; cnt++ })
-          total = cnt ? Math.round(total / cnt) : 0
+          /* 【v1.7.3】保守解析（与面试评分第 26 轮同一口径）：模型漏给的维度是 null
+           * 不是 0 —— 旧版 clamp(num(undefined,0)) 把「没评」折进总分，凭空拉低。 */
+          let src = (r && r.scores) || {}
+          let scores = {}, total = 0, cnt = 0
+          PITCH_DIMS.forEach(function (d) {
+            let raw = src[d.key]
+            let v = raw == null || raw === '' || !isFinite(Number(raw)) ? null : clamp(Number(raw), 0, 100)
+            scores[d.key] = v
+            if (v != null) { total += v; cnt++ }
+          })
+          if (!cnt) {
+            busy = false
+            ctx.Toast.show('AI 没给出任何维度分（返回不可解析）—— 这次点评未记录，可重试', 'warn', 3400)
+            paint()
+            return
+          }
+          total = Math.round(total / cnt)
           pitch.report = {
             total: total, scores: scores,
             comments: (Array.isArray(r && r.comments) ? r.comments : []).map(function (c) { return flat(c).slice(0, 120) }).slice(0, 3),
@@ -1175,6 +1197,7 @@
     function finish() {
       if (!sess || sess.report || busy) { if (busy) { ctx.Toast.show('等考官说完这句…', 'info', 1400); return } return }
       busy = true
+      grading = true   /* 【v1.7.3】评分请求在后台跑：界面挂「批改中」，不再像卡死 */
       paint()
       let sys = scoreSystemPrompt()
       let text = transcriptText(sess.transcript)
@@ -1195,6 +1218,8 @@
           sess.prev = prevSess && prevSess.report && prevSess.report.scores
             ? { total: prevSess.total != null ? num(prevSess.total, null) : num(prevSess.report.total, null), scores: prevSess.report.scores }
             : null
+          /* 【v1.7.3】评分请求真正返回了：摘掉「批改中」横幅 */
+          grading = false
           sess.report = rep
           sess.total = rep.total /* 顶层冗余一份：编年史/统计/走势线直接可读 */
           sess.at = Date.now()
@@ -1209,6 +1234,7 @@
         })
         .catch(function (e) {
           busy = false
+          grading = false
           ctx.Toast.show('评分失败：' + trunc(e && e.message || e, 50) + ' —— 可重试交卷', 'warn', 3200)
           paint()
         })

@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.5.2'
+  let VERSION = '1.5.3'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -2210,6 +2210,8 @@
 
   /* ---------- 页面专属层：挂载时注入 <style>、destroy 移除 ---------- */
   let CSS_EXTRA = [
+    /* 【窄屏审计 2026-10-31】小按钮 24px 点不准；品牌 182px 撑破 358px 槽 → 触控 30px + 省略号 */
+    '@media (max-width:760px){.sf-btn.sm{height:30px}.sf-brand{min-width:0}.sf-brandtx{min-width:0}.sf-brandtx b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}',
     '.sf-ptlist{display:flex;flex-direction:column;border-top:1px solid var(--sf-line)}',
     '.sf-prow{display:flex;align-items:center;gap:12px;padding:11px 2px;border-bottom:1px solid var(--sf-line);transition:background .18s}',
     '.sf-prow.is-hit{background:linear-gradient(90deg,rgba(15,118,110,.07),transparent 60%)}',

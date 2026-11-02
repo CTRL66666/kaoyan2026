@@ -71,7 +71,7 @@
    * （缺答案/答案非A-D/选项重复/题干过短或不自足/换皮）标记疑点；疑点题须走结构化复核清单
    * （题干自足/答案复算/干扰项成立三项勾选）才能成卷；档案加复核台账。
    * 版本必须涨：已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4.0'
+  let VERSION = '1.4.1'
   let TOOL_ID = 'variant-forge'
   let AI_CTX_GEN = 'plugin.variant-forge.gen'
   let AI_CTX_AUDIT = 'plugin.variant-forge.audit'
@@ -2999,7 +2999,9 @@
     '.vf-empty .vf-btn{margin-top:6px}',
     /* ---- 窄屏 / 动效降级 ---- */
     '@media (max-width:780px){.vf-kpis{display:none}.vf-kgrid{grid-template-columns:repeat(2,1fr)}.vf-atlaswrap{flex-direction:column}.vf-alist{width:100%;flex:0 0 auto;max-height:150px}.vf-copts{grid-template-columns:1fr}.vf-dock-item{min-width:60px;padding:8px 8px}.vf-num{width:52px}}',
-    '@media (prefers-reduced-motion:reduce){.vf-root *,.vf-root *::before,.vf-root *::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}'
+    '@media (prefers-reduced-motion:reduce){.vf-root *,.vf-root *::before,.vf-root *::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}',
+    /* 【窄屏审计 2026-10-31】引导「知道了」24px 点不准；品牌省略号 */
+    '@media (max-width:760px){.vf-btn.sm{height:30px}.vf-brandtx{min-width:0}.vf-brandtx b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}',
   ].join('')
 
 /* c10: 增值能力层（常驻面板 / 教练技能 / 插件间服务） */
