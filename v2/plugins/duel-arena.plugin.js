@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.4'
+  let VERSION = '1.4.6'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -109,6 +109,32 @@
     })
   }
   function flat(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim() }
+  /* 【2026-11-03 用户截图】站内题库的题干有两种换行：pdf.js 文本层对数学字体
+   * **逐字形硬换行**（"设/𝑓/(/𝑥/)"一字一行，垃圾）vs 视觉路径「小问按卷面换行并入
+   * stem」（真多问，合法，战斗页 pre-wrap 逐行显示）。判据：≥4 行且过半行 ≤3 字
+   * = 逐字垃圾 → 并回一行；否则保留换行。顺带清 \r/NEL/U+2028 这些 /\s+/ 漏网或
+   * CSS 强制换行的控制符。 */
+  function smartFlat(s) {
+    let t = String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[\u0085\u2028\u2029]/g, '\n')
+    if (t.indexOf('\n') < 0) return t.replace(/[ \t]+/g, ' ').trim()
+    let lines = t.split('\n').map(function (x) { return x.trim() }).filter(Boolean)
+    if (!lines.length) return ''
+    let short = lines.filter(function (x) { return x.length <= 3 }).length
+    return (lines.length >= 4 && short * 2 >= lines.length) ? lines.join(' ') : lines.join('\n')
+  }
+  /* pdf.js 的数学斜体 Unicode（𝑓 𝑋 ₁）→ ASCII：单行纯文本预览（选题卡）不经过
+   * 站点 texauto，转成 ASCII 才像人话。只映射**无例外的区段**：粗体/斜体拉丁
+   * （1D400–1D49B 连续）、数学数字（1D7CE–1D7FF）、下标数字；希腊数学字母
+   * （𝛼 等）不强转——映射有歧义,宁可留原字符也不出错字。战斗页保留原文交渲染管线。 */
+  function uniAscii(s) {
+    return String(s == null ? '' : s).replace(/[\u{1D400}-\u{1D49B}\u{1D7CE}-\u{1D7FF}]|[\u2080-\u2089]/gu, function (ch) {
+      let cp = ch.codePointAt(0)
+      if (cp >= 0x2080 && cp <= 0x2089) return String(cp - 0x2080)
+      if (cp >= 0x1D7CE) return String((cp - 0x1D7CE) % 10)
+      let off = (cp - 0x1D400) % 52
+      return off < 26 ? String.fromCharCode(65 + off) : String.fromCharCode(97 + off - 26)
+    })
+  }
   /* 【2026-10-23 第 26 轮】截断时别把公式切一半：`$…$` 成对出现，切点落在一对里面时收尾的 `$` 被切掉
    * → 站点渲染器认不出完整公式，整段按原文显示（用户截图里那条 `$\lim\limits_{x\to…`）。
    * 判据：切点前 `$` 个数为奇数 = 正切在公式里 → 退到那个 `$` 之前。尾部残留反斜杠同样退一格。
@@ -301,7 +327,7 @@
   /* 站内题目记录（题库/卷内题同 shape 超集）→ 决斗题；只收 2-4 选项的选择题 */
   function adaptChoice(rec, fallbackTopic) {
     if (!rec || typeof rec !== 'object') return null
-    let stem = flat(rec.stem)
+    let stem = smartFlat(rec.stem)
     if (!stem || stem.length < 4) return null
     if (rec.type && String(rec.type) !== 'choice') return null
     let raw = Array.isArray(rec.options) ? rec.options : []
@@ -1034,10 +1060,13 @@
         + '去「题库」模块收藏带 A/B/C/D 选项的题，或切回 AI 智能</div>'
     }
     let shown = pool.slice(0, 8)
+    /* 预览是单行纯文本（不走站点 texauto）：压平换行 + 数学斜体转 ASCII + 去掉 $ 记号，
+     * 保证「一眼像人话」；点开开战后战斗页仍用原文交给渲染管线（与采分点熔炉同框架）。 */
+    let preview = function (q) { return uniAscii(flat(q.stem).replace(/\$\$?/g, '')) }
     return '<div class="du-note" style="margin-top:10px">开战时从下面这 ' + pool.length + ' 道里随机抽（零 AI 调用，秒开）：</div>'
       + '<div class="du-picklist">' + shown.map(function (q, i) {
-        return '<div class="du-pick du-pick-ro" style="--i:' + i + '" title="' + esc(q.stem) + '">'
-          + '<b>' + I('archive') + esc(trunc(q.stem, 26)) + '</b>'
+        return '<div class="du-pick du-pick-ro" style="--i:' + i + '" title="' + esc(flat(q.stem)) + '">'
+          + '<b>' + I('archive') + esc(trunc(preview(q), 26)) + '</b>'
           + '<span>' + esc(q.topic) + ' · ' + q.options.length + ' 个选项</span></div>'
       }).join('') + '</div>'
       + (pool.length > shown.length ? '<div class="du-note">还有 ' + (pool.length - shown.length) + ' 道未列出，抽题时同样在池子里。</div>' : '')
@@ -1874,6 +1903,9 @@
       let bt = state.bt
       if (state.view !== 'battle' || !bt) return
       if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return
+      /* 键盘审查 2026-11-03：确认框（api.confirm → #modal-overlay）开着时让位，
+       * 否则「退出本场」弹窗挂着的瞬间按 1~4 会穿透选中背后的答案。 */
+      if (document.querySelector('#modal-overlay')) return
       if (bt.phase === 'fight' && !bt.locked) {
         if (Object.prototype.hasOwnProperty.call(KEYMAP, ev.key)) {
           ev.preventDefault()
@@ -2025,6 +2057,8 @@
       normalizeQs: normalizeQs, ladderState: ladderState, profileGet: profileGet,
       titleOf: titleOf, dailyOpp: dailyOpp, checkBadges: checkBadges,
       bookUpsert: bookUpsert, bookRemove: bookRemove, mountMain: mountMain,
+      /* 脏题干归一（v1.4.6，供测试直验） */
+      smartFlat: smartFlat, uniAscii: uniAscii,
       /* 站内数据桥（v1.2） */
       nativeBank: nativeBank, nativeExams: nativeExams, nativeMistakes: nativeMistakes, nativeBooks: nativeBooks,
       adaptChoice: adaptChoice, bankPool: bankPool, examChoiceQs: examChoiceQs, bookExcerpt: bookExcerpt,

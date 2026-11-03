@@ -25,7 +25,7 @@
   'use strict'
 
   let TOOL_ID = 'formula-vault'
-  let VERSION = '1.3.6'
+  let VERSION = '1.3.7'
   /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
    * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
    * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
@@ -2480,6 +2480,10 @@
     function onKey(e) {
       let tag = (e.target && e.target.tagName) || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      /* 【键盘审查 2026-11-03】宿主弹窗（新建/AI 制卡走 ctx.Modal、确认走 api.confirm，
+       * 都渲染 #modal-overlay）开着时快捷键全部让位，否则 1~5 会在弹窗背后切视图、
+       * D 会偷偷开练（与 variant-forge/feynman/scoring-forge 同一条纪律）。 */
+      if (document.querySelector('#modal-overlay')) return
       if (e.key === 'Escape') {
         if (S.run) { S.run = null; stopTick(); paint() }
         return

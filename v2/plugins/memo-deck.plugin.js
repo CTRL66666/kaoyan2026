@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.6.4'
+  let VERSION = '1.6.7'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.memo` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.memo-deck.cards'
@@ -1087,7 +1087,9 @@
     wrap.className = 'md-modal'
     wrap.innerHTML = '<div class="md-modal-box">' + html + '</div>'
     document.body.appendChild(wrap)
-    function onKey(ev) { if (ev.key === 'Escape') close() }
+    /* Esc 关自家弹窗；宿主确认框（#modal-overlay）叠在上面时让位——那一下该关确认框。
+     * （2026-11-03 键盘审查同款修正,与复试舱一致） */
+    function onKey(ev) { if (ev.key === 'Escape' && !document.querySelector('#modal-overlay')) close() }
     function close() {
       window.removeEventListener('keydown', onKey)
       wrap.remove()
@@ -1254,6 +1256,9 @@
     }
     ;(initial || []).forEach(add)
     function onKey(ev) {
+      /* 输入法候选词的 Enter 是「选字」不是「成 chip」（与快速建卡/复试舱同款守卫）；
+       * 否则打中文标签回车确认候选 → 把半截拼音 add 成垃圾 chip。 */
+      if (ev.isComposing || ev.keyCode === 229) return
       if (ev.key === 'Enter' || ev.key === ',') {
         ev.preventDefault()
         add(input.value); input.value = ''
@@ -2066,8 +2071,10 @@
       if (!S) return
       let tag = (ev.target && ev.target.tagName) || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      /* 【P2 修】全文/复核弹窗开着时快捷键全部让路：旧版按 1 会在弹窗背后给卡评分 */
-      if (document.querySelector('.md-modal')) return
+      /* 【P2 修】全文/复核弹窗开着时快捷键全部让路：旧版按 1 会在弹窗背后给卡评分。
+       * 【2026-11-03 键盘审查补】「结束本场/删除」是宿主 ctx.api.confirm（#modal-overlay），
+       * 旧版只挡自家 .md-modal → 确认框开着时空格/数字仍穿透给背后卡片评分。两类都挡。 */
+      if (document.querySelector('.md-modal, #modal-overlay')) return
       if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && (ev.key === 'z' || ev.key === 'Z')) {
         if (undoGrade()) ev.preventDefault()
         return
@@ -2578,6 +2585,7 @@
   if (window.__MEMO_DEBUG__) {
     window.__memoInternals = {
       newCard: newCard,
+      wireTagChips: wireTagChips,
       withOptions: withOptions,
       cardFromMistake: cardFromMistake,
       optsMissing: optsMissing,

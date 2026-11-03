@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.5.3'
+  let VERSION = '1.5.4'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -340,6 +340,8 @@
    * ============================================================ */
   let MAX_Q = 300
   let MAX_A = 600
+  let LIB_PAGE = 60          // 题库首屏行数，其余逐帧补（见 bindLibrary 分片尾）
+  let sfLibRaf = 0
 
   function normPoint(raw) {
     if (!raw || typeof raw !== 'object') return null
@@ -1257,6 +1259,7 @@
       window.removeEventListener('resize', moveInd)
       stopTick()
       if (enterT) clearTimeout(enterT)
+      if (sfLibRaf) { try { cancelAnimationFrame(sfLibRaf) } catch (e) { } sfLibRaf = 0 }
       if (raf) { cancelAnimationFrame(raf); raf = 0 }
       try {
         let st = document.getElementById('sf-extra-style')
@@ -1607,6 +1610,24 @@
   /* ============================================================
    * 7. 视图二：题库
    * ============================================================ */
+
+  /** 题库单行（v1.5.4 从 viewLibrary 循环体拆出，供首屏与分片尾共用） */
+  function sfProw(ctx, x) {
+    let od = diffDays(x.due || todayKey(), todayKey())
+    let dueTxt = !x.due ? '未排期' : (od > 0 ? '逾期 ' + od + ' 天' : (od === 0 ? '今天到期' : fmtDate(x.due) + ' 复练'))
+    return '<div class="sf-prow">'
+      + '<span class="sf-qdot" style="background:' + subjectColor(x.subject) + '"></span>'
+      + '<button class="sf-pmainbtn" data-act="pick" data-id="' + esc(x.id) + '">'
+      + '<b>' + esc(shortTitle(x.stem, 34)) + '</b>'
+      + '<span>' + esc(subjectLabel(x.subject)) + (x.topic ? ' · ' + esc(x.topic) : '')
+      + ' · ' + x.points.length + ' 个点 · ' + dueTxt + ' · 第 ' + (x.box || 1) + ' 盒</span>'
+      + '</button>'
+      + '<button class="sf-btn sm" data-act="start" data-id="' + esc(x.id) + '">练</button>'
+      + '<button class="sf-icobtn sm" data-act="editq" data-id="' + esc(x.id) + '" title="编辑">' + icon(ctx, 'cpPencil') + '</button>'
+      + '<button class="sf-icobtn sm danger" data-act="delq" data-id="' + esc(x.id) + '" title="删除">' + icon(ctx, 'cpTrash') + '</button>'
+      + '</div>'
+  }
+
   function viewLibrary(ctx, S) {
     let q = String(S.libQ || '').trim().toLowerCase()
     let list = S.qs.slice().sort(function (a, b) {
@@ -1638,41 +1659,56 @@
         ? '<div class="sf-quiet">没有匹配的题。换个词，或切回「全部」。</div>'
         : emptyCard(icon(ctx, 'books'), '题库是空的', '从错题本导入最快；也可以手动新建一道。', '从错题本导入', 'import-mistakes'))
     } else {
+      /* v1.5.4 分片（与 memo-deck/formula-vault 同款）：首屏 LIB_PAGE 行填满视口，
+       * 其余每帧一批补进 .sf-plist（事件是 stage 根级委托，追加行自动可点）。
+       * ≤LIB_PAGE 条的小题库完全不分片，行为与旧版逐字一致。 */
       out.push('<div class="sf-plist">')
-      for (let i = 0; i < list.length; i++) {
-        let x = list[i]
-        let od = diffDays(x.due || todayKey(), todayKey())
-        let dueTxt = !x.due ? '未排期' : (od > 0 ? '逾期 ' + od + ' 天' : (od === 0 ? '今天到期' : fmtDate(x.due) + ' 复练'))
-        out.push('<div class="sf-prow">'
-          + '<span class="sf-qdot" style="background:' + subjectColor(x.subject) + '"></span>'
-          + '<button class="sf-pmainbtn" data-act="pick" data-id="' + esc(x.id) + '">'
-          + '<b>' + esc(shortTitle(x.stem, 34)) + '</b>'
-          + '<span>' + esc(subjectLabel(x.subject)) + (x.topic ? ' · ' + esc(x.topic) : '')
-          + ' · ' + x.points.length + ' 个点 · ' + dueTxt + ' · 第 ' + (x.box || 1) + ' 盒</span>'
-          + '</button>'
-          + '<button class="sf-btn sm" data-act="start" data-id="' + esc(x.id) + '">练</button>'
-          + '<button class="sf-icobtn sm" data-act="editq" data-id="' + esc(x.id) + '" title="编辑">' + icon(ctx, 'cpPencil') + '</button>'
-          + '<button class="sf-icobtn sm danger" data-act="delq" data-id="' + esc(x.id) + '" title="删除">' + icon(ctx, 'cpTrash') + '</button>'
-          + '</div>')
-      }
+      for (let i = 0; i < Math.min(list.length, LIB_PAGE); i++) out.push(sfProw(ctx, list[i]))
+      if (list.length > LIB_PAGE) {
+        out.push('<span data-sf-tail style="display:none"></span>')
+        S._ltail = list.slice(LIB_PAGE)
+      } else S._ltail = null
       out.push('</div>')
     }
     out.push('</section>')
     return out.join('')
   }
   function bindLibrary(ctx, S, stage, paint, startRun) {
+    /* v1.5.4 题库分片尾：首屏只铺 LIB_PAGE 行，其余逐帧补（大剂量审计坐实
+     * 400 条时切题库 first=150/long=116ms 的正是整表 innerHTML 那一下） */
+    if (sfLibRaf) { try { cancelAnimationFrame(sfLibRaf) } catch (e) { } sfLibRaf = 0 }
+    if (S._ltail && S._ltail.length) {
+      let run = function () {
+        sfLibRaf = 0
+        let marker = stage.querySelector('[data-sf-tail]')
+        if (!marker || !S._ltail || !S._ltail.length) { if (marker) { try { marker.remove() } catch (e) { } } return }
+        let take = S._ltail.splice(0, 48)
+        try { marker.insertAdjacentHTML('beforebegin', take.map(function (x) { return sfProw(ctx, x) }).join('')) } catch (e) { return }
+        if (S._ltail.length) sfLibRaf = requestAnimationFrame(run)
+        else { try { marker.remove() } catch (e) { } }
+      }
+      sfLibRaf = requestAnimationFrame(run)
+    }
     let inp = stage.querySelector('[data-sf="libq"]')
     if (!inp) return
+    /* 【2026-11-02 大剂量压力审计】旧版每次按键都同步 paint() 重建整张题库
+     * （formula-vault 的老病灶原样复发）：几百条时中文输入法连续拼音能把主线程打满。
+     * 防抖 240ms —— 输入框保持受控值，重绘只在停手后做一次；焦点/光标还原走老路。 */
+    let _qT = 0
     inp.addEventListener('input', function () {
       let v = inp.value
       let pos = inp.selectionStart
       S.libQ = v
-      paint()
-      let again = stage.querySelector('[data-sf="libq"]')
-      if (again) {
-        again.focus()
-        try { again.setSelectionRange(pos, pos) } catch (e) { /* 忽略 */ }
-      }
+      if (_qT) clearTimeout(_qT)
+      _qT = setTimeout(function () {
+        _qT = 0
+        paint()
+        let again = stage.querySelector('[data-sf="libq"]')
+        if (again) {
+          again.focus()
+          try { again.setSelectionRange(pos, pos) } catch (e) { /* 忽略 */ }
+        }
+      }, 240)
     })
   }
 

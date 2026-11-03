@@ -53,7 +53,7 @@
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。
    * 走「主.次」而不是补丁位：市场条目只记两位（见 paper-extract-plugin-1-1.test.ts
    * 那条"市场版本必须等于源码 VERSION 的前两段"），补丁位留给不改变对外行为的修。 */
-  let VERSION = '1.7.7'
+  let VERSION = '1.7.9'
   /* 【2026-10-22 站内适配 · 补注册环节】原来是 `plugin.paper` —— **只有两段**，
    * `registerAiCtx` 的格式闸直接拒（要求 `plugin.<pid>.<场景>`），于是这个插件
    * 一直是「没注册」状态：参数中心里看不到它、思考档/温度/maxTokens 的逐场景配置对它无效、
@@ -402,12 +402,25 @@
     let o = (q && q.options) || []
     return Array.isArray(o) && o.length >= 2 ? (o.length === 4 ? 'choice' : 'solve') : 'solve'
   }
+  /* 【2026-11-03 用户截图】pdf.js 文本层/AI 有时把数学公式逐字形吐成一行一字
+   * （设\n𝑓\n(\n𝑥\n)），stripNoise 只并 2+ 空白、单条 \n 漏网 → 站内题库/采分点熔炉/
+   * 博弈刷题场都拿到竖排脏题干。这里在**唯一 stem 入口**做保守归一：≥4 行且过半行
+   * ≤3 字 = 逐字垃圾 → 并成一行；行长正常的多行 stem（提示词要求 AI「小问按卷面换行
+   * 并入」的真结构）原样保留。mergeSubQuestions 的换行拼接发生在本函数之后,不受影响。 */
+  function collapseGlyphWrap(s) {
+    let t = String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[\u0085\u2028\u2029]/g, '\n')
+    if (t.indexOf('\n') < 0) return t
+    let lines = t.split('\n').map(function (x) { return x.trim() }).filter(Boolean)
+    if (lines.length < 4) return lines.join('\n')
+    let short = lines.filter(function (x) { return x.length <= 3 }).length
+    return short * 2 >= lines.length ? lines.join(' ') : lines.join('\n')
+  }
   function normQuestion(q, g) {
     q = q || {}
     let no = q.no
     if (no != null && no !== '') { let n = parseInt(String(no).replace(/[^\d]/g, ''), 10); no = isFinite(n) ? n : null } else no = null
     let opts = Array.isArray(q.options) ? q.options.filter(function (x) { return String(x || '').trim() }) .map(String) : []
-    let stem = stripNoise(q.stem || '').trim()
+    let stem = collapseGlyphWrap(stripNoise(q.stem || '')).trim()
     let conf = q.confidence == null ? null : num(q.confidence, null)
     return {
       no: no, stem: stem, type: inferType(q), options: opts,
@@ -2642,6 +2655,10 @@
      *   · 一律"代点按钮"而不是直接调内部函数 —— 按钮的 disabled 状态就是"现在能不能做"的
      *     唯一事实源，快捷键绕过去就会出现"运行中又按了一次开始"。 */
     function onKey(ev) {
+      /* 键盘审查 2026-11-03：宿主弹窗（api.confirm → #modal-overlay）开着时全让位，
+       * 否则 Ctrl+Enter 会隔着「开始提取」确认框再触发一次。px 自家灯箱是
+       * [data-lb-root] 不是 #modal-overlay，其 Esc 关灯箱逻辑不受影响。 */
+      if (document.querySelector('#modal-overlay')) return
       let tag = (ev.target && ev.target.tagName) || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
         if (ev.key !== 'Escape') return
@@ -3218,6 +3235,7 @@
       looksGarbled: looksGarbled,
       isNoise: isNoise,
       stripNoise: stripNoise,
+      collapseGlyphWrap: collapseGlyphWrap,
       looksLikeHeaderText: looksLikeHeaderText,
       blankBlockIsHeader: blankBlockIsHeader,
       dropNonQuestions: dropNonQuestions,

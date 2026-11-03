@@ -26,7 +26,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.7.3'
+  let VERSION = '1.7.4'
   /* 【站内适配 2026-10-22】AI ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.ivs` 只有两段，registerAiCtx 会拒）。分开两条是刻意的：
    *   对话要「逐字出、不等思考」→ noThink；评分要「严谨、可复核」→ think。
@@ -636,7 +636,9 @@
     wrap.className = 'ivs-modal'
     wrap.innerHTML = '<div class="ivs-modal-box">' + html + '</div>'
     document.body.appendChild(wrap)
-    function onKey(ev) { if (ev.key === 'Escape') close() }
+    /* Esc 关自家浮层；但宿主 api.confirm（#modal-overlay）叠在上面时让位——
+     * 那一下 Esc 应属于关掉确认框，不该顺手把底下的「本场对话」也撤了（键盘审查 2026-11-03）。 */
+    function onKey(ev) { if (ev.key === 'Escape' && !document.querySelector('#modal-overlay')) close() }
     function close() {
       window.removeEventListener('keydown', onKey)
       wrap.remove()

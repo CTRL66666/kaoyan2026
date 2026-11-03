@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4.5'
+  let VERSION = '1.4.6'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -222,6 +222,8 @@
    * 想改一个字段也必须读全量 → 改 → 写回，别指望局部更新。
    * ============================================================ */
   let MAX_POINTS = 600          // 知识点上限（超过按"最久没碰"淘汰）
+  let QUEUE_PAGE = 40           // 复习队列首屏行数，其余逐帧补（bindReview 的分片尾）
+  let fxQraf = 0
   let MAX_SESSIONS = 400        // 会话上限（只留最近 400 次，统计够用）
 
   function normPoint(raw) {
@@ -1156,6 +1158,7 @@
       window.removeEventListener('resize', moveInd)
       stopTick()
       if (enterT) clearTimeout(enterT)
+      if (fxQraf) { try { cancelAnimationFrame(fxQraf) } catch (e) { } fxQraf = 0 }
       if (raf) { cancelAnimationFrame(raf); raf = 0 }
       /* 页面专属样式随页面走：不清掉的话，切到别的模块还留着一张 fx-extra-style 死样式 */
       try {
@@ -1857,6 +1860,21 @@
    * 逾期天数必须显眼 —— 逾期越久，遗忘越接近"从没学过"，
    * 用户需要看到代价，而不是一条温和的提醒。
    * ============================================================ */
+  /** 复习队列单行（v1.4.6 从 viewReview 循环体拆出，供首屏与分片尾共用） */
+  function qrow(p, today) {
+    let od = overdueDays(p, today)
+    let col = masteryColor(p.mastery)
+    return '<div class="fx-qrow' + (od >= 3 ? ' hot' : '') + '">'
+      + '<span class="fx-qdot" style="background:' + col.c + '"></span>'
+      + '<div class="fx-qmain"><b>' + esc(shortTitle(p.title, 24)) + '</b>'
+      + '<span>' + esc(subjectLabel(p.subject)) + (p.topic ? ' · ' + esc(p.topic) : '')
+      + ' · ' + (p.mastery ? masteryLabel(p.mastery) + ' ' + p.mastery : '还没复述过')
+      + (p.reps ? ' · 复述 ' + p.reps + ' 次' : '') + '</span></div>'
+      + (od ? '<span class="fx-od' + (od >= 3 ? ' hot' : '') + '">逾期 ' + od + ' 天</span>' : '<span class="fx-od ok">今天</span>')
+      + '<button class="fx-btn primary sm" data-act="start" data-id="' + esc(p.id) + '">复述</button>'
+      + '</div>'
+  }
+
   function viewReview(ctx, S) {
     let today = todayKey()
     let due = dueList(S.points, today)
@@ -1870,22 +1888,15 @@
       out.push(emptyCard(icon({ U: window.U }, 'cpCheck'), '今天没有到期的',
         S.points.length ? '新知识点会在掌握度低时更早回到队列；去晶体图挑一个加练也行' : '还没有知识点',
         S.points.length ? '去晶体图' : '新建知识点', S.points.length ? 'goto-crystal' : 'newpoint'))
+      S._qt = null
     } else {
+      /* v1.4.6 分片（与 fv/memo/sf 同款）：复习队列是无界 for（due.length 行），
+       * 500 条全到期时铺 500 行 → 真机测到复习页签 first=130/long=88ms。首屏
+       * QUEUE_PAGE 行 + 逐帧补尾，行数多也不卡；≤一页完全不分片。 */
       out.push('<div class="fx-qlist">')
-      for (let i = 0; i < due.length; i++) {
-        let p = due[i]
-        let od = overdueDays(p, today)
-        let col = masteryColor(p.mastery)
-        out.push('<div class="fx-qrow' + (od >= 3 ? ' hot' : '') + '">'
-          + '<span class="fx-qdot" style="background:' + col.c + '"></span>'
-          + '<div class="fx-qmain"><b>' + esc(shortTitle(p.title, 24)) + '</b>'
-          + '<span>' + esc(subjectLabel(p.subject)) + (p.topic ? ' · ' + esc(p.topic) : '')
-          + ' · ' + (p.mastery ? masteryLabel(p.mastery) + ' ' + p.mastery : '还没复述过')
-          + (p.reps ? ' · 复述 ' + p.reps + ' 次' : '') + '</span></div>'
-          + (od ? '<span class="fx-od' + (od >= 3 ? ' hot' : '') + '">逾期 ' + od + ' 天</span>' : '<span class="fx-od ok">今天</span>')
-          + '<button class="fx-btn primary sm" data-act="start" data-id="' + esc(p.id) + '">复述</button>'
-          + '</div>')
-      }
+      for (let i = 0; i < Math.min(due.length, QUEUE_PAGE); i++) out.push(qrow(due[i], today))
+      if (due.length > QUEUE_PAGE) { out.push('<span data-fx-qtail style="display:none"></span>'); S._qt = due.slice(QUEUE_PAGE) }
+      else S._qt = null
       out.push('</div>')
     }
     out.push('</section>')
@@ -1912,7 +1923,22 @@
 
   function bindReview(ctx, S, stage, paint, startRun) {
     /* 队列按钮走委托（data-act="start"），这里不需要额外绑定；
-     * 保留函数是为了与其它视图同构（将来加拖拽排序时只改这里）。 */
+     * v1.4.6：复习队列分片尾——首屏 QUEUE_PAGE 行，其余每帧 48 行补进 .fx-qlist。
+     * stage 是 fx-body（paint 每次重建它），所以 paint 后重新进来会先掐旧帧再挂新尾。 */
+    if (fxQraf) { try { cancelAnimationFrame(fxQraf) } catch (e) { } fxQraf = 0 }
+    if (S._qt && S._qt.length) {
+      let today = todayKey()
+      let run = function () {
+        fxQraf = 0
+        let marker = stage.querySelector('[data-fx-qtail]')
+        if (!marker || !S._qt || !S._qt.length) { if (marker) { try { marker.remove() } catch (e) { } } return }
+        let take = S._qt.splice(0, 48)
+        try { marker.insertAdjacentHTML('beforebegin', take.map(function (p) { return qrow(p, today) }).join('')) } catch (e) { return }
+        if (S._qt.length) fxQraf = requestAnimationFrame(run)
+        else { try { marker.remove() } catch (e) { } }
+      }
+      fxQraf = requestAnimationFrame(run)
+    }
   }
 
   /* ============================================================
