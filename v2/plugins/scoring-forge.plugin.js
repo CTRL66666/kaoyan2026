@@ -38,7 +38,7 @@
   /* 【2026-10-23】1.2：空库点「开始练」给提示（原先是静默退回）、判定按钮字符 → 线性图标、
    * 小按钮命中区外扩。版本必须往上涨：已安装副本是整份源码存在 localStorage 里的，
    * 不涨版本市场不会提示更新，修了也发不出去。 */
-  let VERSION = '1.5.4'
+  let VERSION = '1.5.5'
   let TOOL_ID = 'scoring-forge'
 
   /* 【2026-10-22 站内适配 · 补注册环节】原先两处业务调用都写死 `ctx: 'plugin.ai'` ——
@@ -2431,7 +2431,7 @@
         }
       },
       {
-        key: 'due', label: '待复练的主观题',
+        key: 'sf-due', label: '待复练的主观题',
         run: function (ctx) {
           let due = dueList(loadQs(ctx), todayKey())
           if (!due.length) return '今天没有到期的主观题复练。'

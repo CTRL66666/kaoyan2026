@@ -34,7 +34,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.4.6'
+  let VERSION = '1.4.7'
   /* 【站内适配 2026-10-22】ctx 必须落在 `plugin.<完整 pid>.<场景>` 才能进站内 AI 注册表
    * （`plugin.duel` 只有两段，registerAiCtx 会拒）。注册后吃得到站内思考档位、公式契约与用量分桶。 */
   let AI_CTX = 'plugin.duel-arena.gen'
@@ -398,18 +398,34 @@
           for (let i = 0; i < st.mistakes.length; i++) {
             if (st.mistakes[i] && st.mistakes[i].dedupKey === key) { dup = true; break }
           }
-          if (dup) return
           /* 【站内适配 2026-10-22】原来只写题干不写答案 —— 用户去站内错题本复习时
            * 只看到一道不会做的题、看不到正确选项与解析，等于"记了个寂寞"。
-           * r.answer 是 adaptChoice 归一后的**选项下标**（0-3），这里翻回 'A. 选项原文'。 */
+           * r.answer 是 adaptChoice 归一后的**选项下标**（0-3），这里翻回 'A. 选项原文'。
+           * dup 不再直接 return —— 下面命中旧记录时先回填缺失的 options 再走。 */
           let ai = (typeof r.answer === 'number' && r.answer >= 0) ? r.answer : -1
           let ansText = (ai >= 0 && Array.isArray(r.options) && r.options[ai])
             ? ('ABCD'[ai] + '. ' + r.options[ai])
             : ''
+          /* 【2026-11-06 用户报障「闪卡选项未入库」】旧版这里漏写 options 数组:
+           * 决斗错题进错题本后,记忆宫殿「错题制卡」拿不到选项 → 卡片亮
+           * 「选项未入库」徽标。① 新错题带上 options;② 同题再战命中旧记录时
+           * 顺手回填(只填空、不覆盖、排期字段一律不动),老数据自愈。 */
+          let optsArr = (Array.isArray(r.options) && r.options.length) ? r.options.slice(0, 8) : undefined
+          if (dup) {
+            for (let i = 0; i < st.mistakes.length; i++) {
+              let x = st.mistakes[i]
+              if (x && x.dedupKey === key) {
+                if (!Array.isArray(x.options) && optsArr) x.options = optsArr
+                break
+              }
+            }
+            return
+          }
           st.mistakes.unshift({
             id: 'duel-mk-' + hashStr(r.stem).toString(36),
             subject: subjNativeKey(bt.subj), type: 'concept',
             desc: '【决斗场】' + trunc(r.stem, 40), stem: r.stem,
+            options: optsArr,
             answer: ansText || undefined,
             solution: flat(r.explain) || undefined,
             note: r.topic ? ('考点：' + flat(r.topic)) : undefined,

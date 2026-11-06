@@ -25,7 +25,7 @@
   'use strict'
 
   let TOOL_ID = 'formula-vault'
-  let VERSION = '1.3.7'
+  let VERSION = '1.3.9'
   /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
    * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
    * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
@@ -1072,23 +1072,34 @@
   function viewDrill(ctx, S) {
     let out = []
     if (S.run) return drillRunning(ctx, S)
-    /* 未开始：说明今日任务 + 入口 */
-    let due = dueList(S.recs, S.today)
-    let untested = untestedList(S.recs, S.all)
+    /* 未开始：说明今日任务 + 入口。【2026-11-06】数字与按钮都随学科筛选收口——
+     * 计数不跟着范围走的话,「复练到期的 20 条」点下去只抽 5 条就是骗人。 */
+    let scope = S.subj && S.subj !== 'all' ? S.subj : ''
+    let suffix = scope ? '（' + subjectLabel(scope) + '）' : ''
+    let all = scope ? S.all.filter(function (f) { return f.s === scope }) : S.all
+    let due = dueList(S.recs, S.today).filter(function (x) {
+      if (!scope) return true
+      let f = findF(S.all, x.id)
+      return f && f.s === scope
+    })
+    let untested = untestedList(S.recs, all)
     out.push('<section class="fv-card">'
-      + '<div class="fv-card-h"><b>开始一轮自测</b><em>先回忆 · 后揭示 · 三档自评</em></div>')
+      + '<div class="fv-card-h"><b>开始一轮自测</b><em>先回忆 · 后揭示 · 三档自评</em>'
+      + (scope ? '<button class="fv-btn ghost sm" data-act="subj" data-k="all" style="margin-left:auto">范围：' + esc(subjectLabel(scope)) + ' ✕</button>' : '')
+      + '</div>')
     out.push('<div class="fv-drill-intro">'
       + '<div class="fv-dcell"><b>' + due.length + '</b><span>到期复测</span></div>'
       + '<div class="fv-dcell"><b>' + untested.length + '</b><span>从未测过</span></div>'
       + '<div class="fv-dcell"><b>' + Math.min(untested.length + due.length, 10) + '</b><span>本轮上限</span></div>'
       + '</div>')
     out.push('<div class="fv-acts">'
-      + (due.length ? '<button class="fv-btn primary" data-act="drill-start" data-mode="due">复练到期的 ' + due.length + ' 条</button>' : '')
-      + '<button class="fv-btn' + (due.length ? '' : ' primary') + '" data-act="drill-start" data-mode="mixed">混合抽练（到期优先 + 未测）</button>'
-      + '<button class="fv-btn ghost" data-act="drill-start" data-mode="weak">只练弹药箱</button>'
+      + (due.length ? '<button class="fv-btn primary" data-act="drill-start" data-mode="due">复练到期的 ' + due.length + ' 条' + suffix + '</button>' : '')
+      + '<button class="fv-btn' + (due.length ? '' : ' primary') + '" data-act="drill-start" data-mode="mixed">混合抽练' + suffix + '（到期优先 + 未测）</button>'
+      + '<button class="fv-btn ghost" data-act="drill-start" data-mode="weak">只练弹药箱' + suffix + '</button>'
       + '</div>')
     out.push('<div class="fv-quiet">规则：每题先看公式名与使用场景，在脑子里（或草稿上）复现公式，再揭示对照。'
-      + '自评三档会决定下次出现的时机——「秒想」最长间隔，「没想起」最短。</div>')
+      + '自评三档会决定下次出现的时机——「秒想」最长间隔，「没想起」最短。'
+      + (scope ? '当前范围跟随军火库的学科筛选，点上方「✕」恢复全库。' : '') + '</div>')
     out.push('</section>')
     return out.join('')
   }
@@ -1912,6 +1923,10 @@
         let other = rest.filter(function (f) { return !S.recs[f.id] && weak.indexOf(f) < 0 })
         pool = due.concat(untested).concat(weak).concat(shuffle(other))
       }
+      /* 【2026-11-06 功能增强】自测范围自动跟随军火库顶部的学科筛选：
+       * 正在看「线代」就只抽线代——所见即所练,不新增按钮、不搞隐藏开关。
+       * 范围在按钮文案上明说（viewDrill 的 scope 后缀）,空池提示也点出筛选。 */
+      if (S.subj && S.subj !== 'all') pool = pool.filter(function (f) { return f.s === S.subj })
       pool = pool.filter(Boolean).slice(0, size)
       /* 洗一下（due 模式保留紧急度排序） */
       if (mode !== 'due' && mode !== 'weak') pool = shuffle(pool)
@@ -1929,7 +1944,7 @@
     function startDrill(mode, onlyId) {
       let queue = onlyId ? [findF(S.all, onlyId)] : buildQueue(mode)
       queue = queue.filter(Boolean)
-      if (!queue.length) { toast(mode === 'weak' ? '弹药箱是空的' : '没有可练的公式', 'info'); return }
+      if (!queue.length) { toast(mode === 'weak' ? '弹药箱是空的' : (S.subj !== 'all' ? '「' + subjectLabel(S.subj) + '」下没有可练的公式 —— 切回「全部」试试' : '没有可练的公式'), 'info'); return }
       S.run = { queue: queue, idx: 0, t0: Date.now(), ms: 0, revealed: false, draft: '', draftOpen: false, mode: onlyId ? 'one' : mode }
       S.view = 'drill'
       syncDock()
@@ -2586,7 +2601,7 @@
     ],
     queries: [
       {
-        key: 'weak', label: '总想不起来的公式',
+        key: 'fv-weak', label: '总想不起来的公式',
         run: function (ctx) {
           let recs = loadRecs(ctx)
           let all = SEED_CALC.concat(SEED_LINALG).concat(SEED_PROB).concat(loadCustom(ctx))
@@ -2596,7 +2611,7 @@
         }
       },
       {
-        key: 'due', label: '今天该复测哪些公式',
+        key: 'fv-due', label: '今天该复测哪些公式',
         run: function (ctx) {
           let due = dueList(loadRecs(ctx), todayKey())
           if (!due.length) return '今天没有到期的公式复测。'
@@ -2625,7 +2640,7 @@
      * 键名 weak / due 与 tests/ui/formula-vault-plugin.test.ts 的契约一致（那里钉着顺序与文案）。 */
     queries: [
       {
-        key: 'weak', label: '公式军火库最想不起来的公式',
+        key: 'fv-weak', label: '公式军火库最想不起来的公式',
         run: function (ctx) {
           let recs = loadRecs(ctx)
           let all = allFormulas(ctx)
@@ -2644,7 +2659,7 @@
         }
       },
       {
-        key: 'due', label: '公式军火库今天该复测什么',
+        key: 'fv-due', label: '公式军火库今天该复测什么',
         run: function (ctx) {
           let recs = loadRecs(ctx)
           let all = allFormulas(ctx)

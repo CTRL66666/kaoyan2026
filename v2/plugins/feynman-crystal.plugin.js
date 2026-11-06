@@ -46,7 +46,7 @@
 
   /* 【2026-10-23】1.2：空库点「开始复述」给提示（原先是静默退回）、小按钮命中区外扩。
    * 版本必须涨 —— 已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4.6'
+  let VERSION = '1.4.7'
   let TOOL_ID = 'feynman-crystal'
   /* 【2026-10-22 站内适配 · 补注册环节】原先三处 AI 调用全写死 `ctx: 'plugin.ai'` ——
    * 那是站内给「没自带场景的插件」留的通用兜底条目：它只有一条「默认不思考」，
@@ -2692,7 +2692,7 @@
         }
       },
       {
-        key: 'weak', label: '复述最吃力的知识点',
+        key: 'fx-weak', label: '复述最吃力的知识点',
         run: function (ctx) {
           let pts = loadPoints(ctx)
           let tested = pts.filter(function (p) { return (p.reps || 0) > 0 })
