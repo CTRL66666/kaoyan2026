@@ -1,1 +1,0 @@
-import{r as s}from"./chatFloat-D8_pP4WE.js";import{n as r,t as o,k as t,A as a}from"./vendor-D0Nwz3sC.js";import{_ as e}from"./index-ByCib35X.js";const n=["innerHTML"],c=e(r({__name:"MdText",props:{source:{}},setup(r){const e=r,c=t(()=>s(e.source||""));return(s,r)=>(a(),o("div",{class:"md-text",innerHTML:c.value},null,8,n))}}),[["__scopeId","data-v-3cf22d79"]]);export{c as M};
