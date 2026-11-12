@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.0.0'
+  let VERSION = '1.1.1'
   let T_MAIN = 'pacing-dojo'
   let STYLE_ID = 'pd-skin-style'
   let AI_CTX_REVIEW = 'plugin.pacing-dojo.review'
@@ -113,10 +113,14 @@
     }
     return a
   }
+  /* 【2026-11-06 解剖截图揪出的第二坑】不能用 ′ ″（U+2032/2033 prime）：
+   * 站点 texauto 把它们当数学定界符——"用时 0″ / 预算 1′50″" 两个 prime 成对，
+   * 中间文字被渲染成乱码 KaTeX（解剖探针实测）。时间一律写「秒/分」汉字。 */
   function fmtSec(s) {
     s = Math.max(0, Math.round(num(s, 0)))
-    if (s < 60) return s + '″'
-    return Math.floor(s / 60) + '′' + String(s % 60).padStart(2, '0') + '″'
+    if (s < 60) return s + ' 秒'
+    let m = Math.floor(s / 60), r = s % 60
+    return r ? m + ' 分 ' + r + ' 秒' : m + ' 分'
   }
 
   /* ════════════════════════ 2. 数据层（ctx.data + 归一） ════════════════════════ */
@@ -173,13 +177,23 @@
     let totalSec = clamp(num(tpl.mins, 180), 30, 300) * 60
     let total = clamp(num(tpl.total, 100), 10, 500)
     let goal = clamp(num(goalScore, Math.round(total * 0.6)), 0, total)
+    let avail = totalSec * 0.92   /* 8% 涂卡、翻卷、发呆的「人性税」 */
+    /* 【2026-11-12 巡检修核心 bug】旧版预算纯按「分值占比」分时间，把模板里每题声明的
+     * sec（选择 120s / 填空 90s…）整个忽略——结果同分值的题型预算一模一样，
+     * 「分/百秒」全相等，effOrder 沦为空排序，「先做便宜的题」这套策略名存实亡。
+     * 正确口径：预算 = 每题预估耗时，再整体缩放到 92% 可用时间内。这样 分值/耗时
+     * 效率才有差异，贪心矩阵才会优先锁定「单位时间最便宜」的题型。 */
     let sumV = 0
-    tpl.qs.forEach(function (q) { sumV += q.n * q.v })
+    let rawSum = 0
+    tpl.qs.forEach(function (q) {
+      sumV += q.n * q.v
+      rawSum += q.n * clamp(num(q.sec, 60), 15, 3600)
+    })
+    let scale = rawSum > 0 ? avail / rawSum : 1
     let rows = tpl.qs.map(function (q) {
-      let share = sumV ? (q.n * q.v) / sumV : 1 / tpl.qs.length
-      /* 预算给到 92%：留 8% 给涂卡、发呆、翻卷的「人性税」 */
-      let budget = Math.round(totalSec * share * 0.92 / q.n)
-      return { kind: q.kind, n: q.n, v: q.v, sec: clamp(num(q.sec, budget), 15, 3600), budget: budget, perValue: q.v ? budget / q.v : budget }
+      let est = clamp(num(q.sec, 60), 15, 3600)
+      let budget = Math.max(15, Math.round(est * scale))
+      return { kind: q.kind, n: q.n, v: q.v, sec: est, budget: budget, perValue: q.v ? budget / q.v : budget }
     })
     /* 最少做对矩阵：按「每秒分值」贪心 */
     let byEff = rows.slice().sort(function (a, b) { return (b.v / b.budget) - (a.v / a.budget) })
@@ -296,15 +310,16 @@
   /* ════════════════════════ 4. 样式（ctx.css.add 单例注入） ════════════════════════ */
 
   let CSS = [
-    /* 令牌：root + 模态层双声明（弹窗挂 body，只写 root 会悬空） */
-    '.pd-root,.pd-modal{--pd-acc:#1f7a5c;--pd-acc2:#2fa57f;--pd-gold:#c9932c;--pd-ink:var(--text-primary,#1e2a4a);'
+    /* 令牌：root + 模态层 + 面板三声明（弹窗挂 body、面板挂 .plg-panel-b，
+     * 少了谁谁的 var(--pd-*) 就悬空——2026-11-12 巡检面板截图发灰就是只写了 root/modal） */
+    '.pd-root,.pd-modal,.pd-panel{--pd-acc:#1f7a5c;--pd-acc2:#2fa57f;--pd-gold:#c9932c;--pd-ink:var(--text-primary,#1e2a4a);'
       + '--pd-sub:var(--text-muted,#7c8aa8);--pd-ink2:var(--text-secondary,#4a5670);--pd-line:var(--line,#d8dde8);'
       + '--pd-bg:var(--surface,#fff);--pd-soft:var(--surface-muted,#f6f8fc);--pd-ok:var(--ok,#0f7c4a);'
       + '--pd-warn:var(--warn,#c47615);--pd-danger:var(--danger,#d83b3b);--pd-on-acc:#fff;--pd-acc-text:var(--pd-acc);--pd-ink-gold:#2b1d05;'
       + '--pd-ease:cubic-bezier(.22,.8,.26,1)}',
-    'html[data-theme="night"] .pd-root,html[data-theme="night"] .pd-modal{'
+    'html[data-theme="night"] .pd-root,html[data-theme="night"] .pd-modal,html[data-theme="night"] .pd-panel{'
       + '--pd-acc:var(--nk-acc,#f0b95a);--pd-acc2:#e2a43f;--pd-gold:#f0b95a;--pd-on-acc:var(--nk-acc-ink,#2a1c04);--pd-acc-text:var(--nk-acc,#f0b95a)}',
-    'html[data-theme="gold"] .pd-root,html[data-theme="gold"] .pd-modal{'
+    'html[data-theme="gold"] .pd-root,html[data-theme="gold"] .pd-modal,html[data-theme="gold"] .pd-panel{'
       + '--pd-acc:#b45309;--pd-acc2:#d9820a;--pd-on-acc:#fff;--pd-acc-text:#9a5407}',
     /* 品牌砖：墨绿表盘 + 金指针（夜间令牌自动跟随） */
     '.pd-mark{width:42px;height:42px;border-radius:12px;flex:0 0 auto;display:grid;place-items:center;'
@@ -358,9 +373,14 @@
     '.pd-dock-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:76px;'
       + 'padding:8px 14px;border:0;border-radius:13px;background:none;color:var(--pd-sub);font-size:11.5px;'
       + 'font-weight:600;cursor:pointer;transition:color .18s}',
+    /* 全局图标纪律（fv 同款教训）：内联 SVG 没有尺寸约束时按 viewBox 默认铺开 ——
+     * 实测 verdict 里的 × 图标撑到 912px 把卡片拉成 984px 高。所有出图标的容器钉死尺寸。 */
+    '.pd-btn svg,.pd-verdict svg,.pd-empty .ico svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;flex:0 0 auto}',
     '.pd-dock-item svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7}',
     '.pd-dock-item.on{color:var(--pd-acc-text)}',
-    '.pd-dock-item em{font-style:normal}',
+    /* nowrap 必须打在基线规则上：dock 宽度由内容定，CJK 串的 min-content 是 1 个字——
+     * 不给 nowrap，flex 压缩时「实验室」会竖排（2026-11-12 巡检同款病，pw 实拍）。 */
+    '.pd-dock-item em{font-style:normal;white-space:nowrap}',
     '.pd-stage{width:100%;max-width:var(--pd-w,1120px);margin:0 auto;padding:6px var(--vp-x,16px) 152px;flex:1}',
     /* 卡片与进场 */
     '.pd-card{background:var(--pd-bg);border:1px solid var(--pd-line);border-radius:16px;padding:18px 20px;'
@@ -440,8 +460,10 @@
     '.pd-stat{border:1px solid var(--pd-line);border-radius:13px;padding:12px 14px;background:var(--pd-bg)}',
     '.pd-stat b{display:block;font:800 22px/1.15 ui-monospace,Consolas,monospace}',
     '.pd-stat span{font-size:11.5px;color:var(--pd-sub)}',
+    /* 柱宽封顶（2026-11-12 巡检目检：只有 3 场时 flex:1 把柱子拉成 370px 宽的色块，
+     * 像坏了的进度条；封顶 56px 并左对齐，场次多时仍自适应变细） */
     '.pd-bars{display:flex;align-items:flex-end;gap:5px;height:96px;margin-top:8px}',
-    '.pd-bar{flex:1;min-width:8px;border-radius:5px 5px 2px 2px;background:linear-gradient(180deg,var(--pd-acc),var(--pd-acc2));position:relative}',
+    '.pd-bar{flex:1 1 0;max-width:56px;min-width:8px;border-radius:5px 5px 2px 2px;background:linear-gradient(180deg,var(--pd-acc),var(--pd-acc2));position:relative}',
     '.pd-bar.low{background:linear-gradient(180deg,var(--pd-warn),var(--pd-gold))}',
     '.pd-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:34px 12px;color:var(--pd-sub);text-align:center}',
     '.pd-empty .ico{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;'
@@ -457,11 +479,32 @@
     '.pd-modal.on{display:grid}',
     '.pd-modal-box{width:min(560px,94vw);max-height:88vh;overflow:auto;background:var(--pd-bg);'
       + 'border:1px solid var(--pd-line);border-radius:17px;padding:20px 22px;box-shadow:0 30px 80px -30px rgba(10,20,40,.5)}',
+    /* 常驻面板(插件中心/侧栏渲染,在 root 之外——令牌要自己带) */
+    '.pd-panel{font:13px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--text-primary,#1b2430);padding:2px}',
+    '.pd-panel-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}',
+    '.pd-panel-kpis div{border-bottom:1px solid var(--line,#e5e7eb);padding:2px 0 6px}',
+    '.pd-panel-kpis b{display:block;font-family:Georgia,serif;font-size:20px;line-height:1.2}',
+    '.pd-panel-kpis span{font-size:9.5px;letter-spacing:.1em;color:var(--text-muted,#6b7788)}',
+    '.pd-panel-list{display:flex;flex-direction:column}',
+    '.pd-panel-row{display:flex;align-items:center;gap:8px;font-size:12px;padding:7px 0;border-bottom:1px solid var(--line,#e5e7eb)}',
+    '.pd-panel-row b{font-family:Georgia,serif}',
+    '.pd-panel-row i{font-style:normal;margin-left:auto;font-size:10.5px}',
+    /* 警告字色：站点 --warn 是填充色（#d48806 当文字在白卡只有 2.87:1）——
+     * 日间深琥珀 #b45309（5.0:1），夜间才接 --warn（night-skin 纪律） */
+    '.pd-panel-row i.warn{color:#b45309}.pd-panel-row i.ok{color:var(--ok,#0f7c4a)}',
+    'html[data-theme="night"] .pd-panel-row i.warn{color:var(--warn,#e8ae3f)}',
+    '.pd-panel-empty{font-size:12px;color:var(--text-muted,#6b7788);padding:10px 0}',
     /* —— 覆盖层放最后（同特异性后写者胜） —— */
     '@media (max-width:760px){.pd-btn.sm{height:30px}.pd-brandtx b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
       + '.pd-dock-item{min-width:0;flex:1;padding:7px 2px}'
       + '.pd-dock-item em{font-size:9.5px}.pd-brandtx b{font-size:17px}.pd-kicker{display:none}'
-      + '.pd-opts{grid-template-columns:1fr}.pd-bignum{font-size:32px}.pd-clock{width:118px;height:118px}}',
+      + '.pd-opts{grid-template-columns:1fr}.pd-bignum{font-size:32px}.pd-clock{width:118px;height:118px}'
+      /* 390px 巡检（2026-11-12，duel 一字一行同款病）：预算表 6 列挤成竖排单字——
+       * 砍掉「每秒分值」列（与节奏条信息重复）、预算列不许折行、节奏条收窄 */
+      + '.pd-plan{font-size:11.5px}.pd-plan th,.pd-plan td{padding:6px 4px}'
+      + '.pd-plan th:nth-child(5),.pd-plan td:nth-child(5){display:none}'
+      + '.pd-plan td:nth-child(4){white-space:nowrap}'
+      + '.pd-plan .pd-gauge{width:56px !important}}',
     'html[data-theme="night"] .pd-seg button.on{background:color-mix(in srgb,var(--pd-bg) 70%,transparent)}',
     'html[data-theme="night"] .pd-dock-item.on{filter:brightness(1.8) saturate(.82)}',
   ].join('\n')
@@ -499,6 +542,11 @@
     return '<svg viewBox="0 0 24 24" aria-hidden="true">' + p + '</svg>'
   }
   let MARK_TILE = '<span class="pd-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.4V12l3.1 1.9"/><path d="M12 3.4v1.2M20.6 12h-1.2M12 20.6v-1.2M3.4 12h1.2"/></svg></span>'
+  /* 【2026-11-12 用户报修：导航图标全空】manifest 的 icon 走 U.rawIcon——白名单只认 SVG 标签，
+   * `<span class="pd-mark">` 整棵子树（连里面的 svg）会被消毒器摘光。
+   * 页面头图继续用 MARK_TILE（渐变砖靠皮肤），manifest（tools/panels）必须吃**自包含 SVG**
+   * （sf/er 同款口径：viewBox+width+height+currentColor，不依赖任何外部 CSS）。 */
+  let MARK_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><path d="M12 7.4V12l3.1 1.9"/><path d="M12 3.4v1.2M20.6 12h-1.2M12 20.6v-1.2M3.4 12h1.2"/></svg>'
 
   /* ════════════════════════ 6. 视图（模块级，(ctx,S) 入参） ════════════════════════ */
 
@@ -782,15 +830,40 @@
     { k: 'setup', t: '设置', ic: 'gear', n: '设置与数据' },
   ]
 
+  /* 能力面在载入时就要落地（init 与 mount 共用，全部幂等）：
+   * 浮窗面板不等工具页被打开——只在 mount 注皮肤的话，面板首开就是裸文字
+   * （2026-11-12 巡检抓到；fv/sf/vf/fx/er 五插件把 CSS 放 manifest.css 正是为此）。 */
+  function bootSurfaces(ctx) {
+    try { window.__PD_HOST_CTX = ctx; injectStyles() } catch (e) { }
+    try {
+      if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {
+        ctx.ai.registerCtx({
+          ctx: AI_CTX_REVIEW, name: '时钟道场 · 策略点评',
+          desc: '基于逐题用时/预算/决策数据，给 3-5 条考场时间策略判词（只评时间决策不评知识）',
+          def: 'fast', latexNeed: false, tools: 'none', recall: false,
+        })
+      }
+    } catch (e) { }
+  }
+
   function mountShell(el, ctx) {
-    window.__PD_HOST_CTX = ctx
-    injectStyles()
+    bootSurfaces(ctx)
     let S = {
       view: 'lab',
       sessions: [],
       bank: [],
-      labTpl: 'math-choice',
-      labGoal: 90,
+      /* 【2026-11-12 协议合规】config 声明了就必须消费:labTpl/labGoal 旧版是写死的默认,
+       * 用户在插件中心改「默认目标分/默认题型模板」永远无效。现从 config 初始化,
+       * 会话内改动仍即时生效(下次进插件回到配置值)。 */
+      labTpl: (function () {
+        /* 配置存的是显示名(下拉友好),这里解析回 key;存了 key 也兼容 */
+        try {
+          let t = String(ctx.config('tpl') || '数学单选')
+          for (let i = 0; i < PLAN_TEMPLATES.length; i++) if (PLAN_TEMPLATES[i].name === t || PLAN_TEMPLATES[i].k === t) return PLAN_TEMPLATES[i].k
+        } catch (e) { }
+        return 'math-choice'
+      })(),
+      labGoal: (function () { try { return clamp(num(ctx.config('defaultGoal'), 90), 10, 300) } catch (e) { return 90 } })(),
       src: 'bank',
       replayId: '',
       run: null,
@@ -822,6 +895,7 @@
     let stageEl = null
     let heroEl = null
     let dockEl = null
+    let lastView = ''
     let dockInd = null
     let tick = null           /* 训练计时器（局部更新，不整屏重绘） */
     let rafClock = 0
@@ -843,7 +917,10 @@
       dockEl = root.querySelector('.pd-dock')
       dockInd = root.querySelector('.pd-dock-ind')
       syncDock()
-      markEnter()
+      /* 【2026-11-12 用户报修：点一个按钮整页重建一次】进场动画原来每次 paint 都重放——
+       * 选选项/下一题这些同视图内的动作也在闪整页。duel 同款门控：只在视图真正切换
+       * （含首挂）时打进场标记，同视图内 paint 不动结构动画。 */
+      if (S.view !== lastView) { lastView = S.view; markEnter() }
       if (S.run && S.view === 'dojo') startClock()
     }
     function markEnter() {
@@ -1031,8 +1108,8 @@
       }
       if (act === 'next') { nextQ(); return }
       if (act === 'abort') {
-        ctx.api.confirm('结束本场？', '已作答的题会正常计入策略分与回放；没答完的题不算。', function (ok) {
-          if (ok) finishRun()
+        ctx.api.confirm('结束本场？', '已作答的题会正常计入策略分与回放；没答完的题不算。', function () {
+          finishRun()
         }, false)
         return
       }
@@ -1043,8 +1120,7 @@
         return
       }
       if (act === 'wipe') {
-        ctx.api.confirm('清空训练记录？', '将删除全部 ' + S.sessions.length + ' 场训练会话，<b>不可恢复</b>（建议先导出）。站内题库与错题本不受影响。', function (ok) {
-          if (!ok) return
+        ctx.api.confirm('清空训练记录？', '将删除全部 ' + S.sessions.length + ' 场训练会话，<b>不可恢复</b>（建议先导出）。站内题库与错题本不受影响。', function () {
           S.sessions = sessionsSave(ctx, [])
           S.replayId = ''
           toast('已清空', 'success')
@@ -1112,17 +1188,7 @@
     window.addEventListener('scroll', onScroll, { passive: true })
     window.addEventListener('resize', onResize)
     paint()
-
-    /* AI 场景登记（进站内 AI 参数中心，吃思考档/用量分桶） */
-    try {
-      if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {
-        ctx.ai.registerCtx({
-          ctx: AI_CTX_REVIEW, name: '时钟道场 · 策略点评',
-          desc: '基于逐题用时/预算/决策数据，给 3-5 条考场时间策略判词（只评时间决策不评知识）',
-          def: 'fast', latexNeed: false, tools: 'none', recall: false,
-        })
-      }
-    } catch (e) { }
+    /* AI 场景登记已挪进 bootSurfaces（init/mount 共用，见 §4 皮肤注入旁） */
 
     return function destroy() {
       stopClock()
@@ -1149,11 +1215,56 @@
     desc: '考场时间策略训练：目标分→每题时间预算与最少做对矩阵；限时赛里「作答/蒙/跳」三键决策逐题计时；'
       + '策略分只认时间纪律不认运气，回放指出最亏的一道题；跨场账本看恋战率/蒙中率/跳后悔率。'
       + '纯确定性内核零 AI 可跑，AI 点评可选增强。',
-    tools: [{ id: T_MAIN, title: '时钟道场', icon: MARK_TILE, mount: mountShell }],
+    tools: [{ id: T_MAIN, title: '时钟道场', icon: MARK_ICON, mount: mountShell }],
+    init: function (ctx) { bootSurfaces(ctx) },
+    /* 【2026-11-12 协议合规】补齐能力面:shortcuts(全局直达) + panels(常驻面板),
+     * 与站内六大插件同构——插件中心自动渲染,教练/侧栏都能看见插件的今日态。 */
+    shortcuts: [
+      {
+        key: 'alt+p', label: '直达时钟道场',
+        run: function (ctx) {
+          try {
+            if (ctx && ctx.api && ctx.api.goTool) ctx.api.goTool(T_MAIN)
+            else if (window.App) window.App.go(T_MAIN)
+          } catch (e) { }
+        },
+      },
+    ],
+    panels: [
+      {
+        id: 'pd-today', title: '时钟道场 · 今日', icon: MARK_ICON, width: 300, height: 240,
+        render: function (ctx) {
+          let list = sessionsGet(ctx)
+          let h = habitsOf(list)
+          let today = dkey()
+          let todayN = 0
+          list.forEach(function (s) { if (dkey(s.at) === today) todayN++ })
+          let out = ['<div class="pd-panel">']
+          out.push('<div class="pd-panel-kpis">'
+            + '<div><b>' + todayN + '</b><span>今日练场</span></div>'
+            + '<div><b>' + (h ? h.avgScore : '—') + '</b><span>策略均分</span></div>'
+            + '<div><b>' + (h ? h.overRate + '%' : '—') + '</b><span>恋战率</span></div></div>')
+          if (!list.length) out.push('<div class="pd-panel-empty">还没打过限时赛。打开道场，按预算练一场。</div>')
+          else {
+            out.push('<div class="pd-panel-list">')
+            for (let i = 0; i < Math.min(4, list.length); i++) {
+              let s = list[i]
+              let bad = s.qs.filter(function (q) { return q.budget > 0 && q.sec > q.budget * 1.4 }).length
+              out.push('<div class="pd-panel-row"><span>' + dkey(s.at) + '</span>'
+                + '<b>' + s.score + ' 分</b>'
+                + '<i class="' + (bad ? 'warn' : 'ok') + '">' + (bad ? '恋战 ' + bad + ' 题' : '节奏干净') + '</i></div>')
+            }
+            out.push('</div>')
+          }
+          out.push('</div>')
+          return out.join('')
+        },
+      },
+    ],
     config: [
       { key: 'perRun', label: '每场题量（5-15）', type: 'number', default: Q_PER_RUN },
       { key: 'defaultGoal', label: '默认目标分', type: 'number', default: 90 },
-      { key: 'tpl', label: '默认题型模板', type: 'select', default: 'math-choice', options: PLAN_TEMPLATES.map(function (t) { return t.name }) },
+      { key: 'tpl', label: '默认题型模板', type: 'select', default: '数学单选', options: PLAN_TEMPLATES.map(function (t) { return t.name }) },
     ],
     hooks: {
       quizDone: function (ctx) {

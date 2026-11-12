@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.0.0'
+  let VERSION = '1.1.1'
   let T_MAIN = 'prof-workshop'
   let STYLE_ID = 'pw-skin-style'
   let AI_CTX_TRIAL = 'plugin.prof-workshop.trial'
@@ -91,8 +91,9 @@
     let opts = Array.isArray(q.options) ? q.options.map(flat) : []
     if (opts.length < 2 || opts.length > 4) hard.push('选项必须 2-4 个（站内题库契约）')
     if (opts.some(function (o) { return !o })) hard.push('存在空选项')
+    /* 重复判定只看非空选项——否则空表单会刷出一屏「选项重复：「」」的假硬伤 */
     let seen = {}
-    opts.forEach(function (o) { if (seen[o]) hard.push('选项重复：「' + trunc(o, 12) + '」'); seen[o] = 1 })
+    opts.forEach(function (o) { if (!o) return; if (seen[o]) hard.push('选项重复：「' + trunc(o, 12) + '」'); seen[o] = 1 })
     let a = clamp(num(q.answer, -1), -1, 9)
     if (a < 0 || a >= opts.length) hard.push('答案下标越界')
     /* 解析兼容两种形状：站内单数 solution 字符串 / 出题家逐项 solutions 数组
@@ -278,9 +279,13 @@
     '.pw-dock-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:76px;'
       + 'padding:8px 14px;border:0;border-radius:13px;background:none;color:var(--pw-sub);font-size:11.5px;'
       + 'font-weight:600;cursor:pointer;transition:color .18s}',
+    /* 全局图标纪律（fv 同款教训）：内联 SVG 没有尺寸约束时按 viewBox 默认铺开撑爆容器。 */
+    '.pw-btn svg,.pw-verdict svg,.pw-empty .ico svg,.pw-fld svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;flex:0 0 auto}',
     '.pw-dock-item svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7}',
     '.pw-dock-item.on{color:var(--pw-acc-text)}',
-    '.pw-dock-item em{font-style:normal}',
+    /* nowrap 必须打在基线规则上：dock 宽度由内容定，CJK 串的 min-content 是 1 个字——
+     * 不给 nowrap，flex 压缩时「出题台」会竖排成「出题/台」（2026-11-12 390px 巡检实拍）。 */
+    '.pw-dock-item em{font-style:normal;white-space:nowrap}',
     '.pw-stage{width:100%;max-width:var(--pw-w,1120px);margin:0 auto;padding:6px var(--vp-x,16px) 152px;flex:1}',
     '.pw-card{background:var(--pw-bg);border:1px solid var(--pw-line);border-radius:16px;padding:18px 20px;'
       + 'margin-bottom:14px;box-shadow:0 1px 2px rgba(16,30,60,.04)}',
@@ -351,6 +356,21 @@
       + 'background:linear-gradient(90deg,var(--pw-line) 25%,color-mix(in srgb,var(--pw-line) 45%,transparent) 50%,var(--pw-line) 75%);'
       + 'background-size:240px 100%;animation:pwskel 1.1s linear infinite}',
     '@keyframes pwskel{0%{background-position:60px 0}100%{background-position:-180px 0}}',
+    /* 常驻面板(插件中心/侧栏渲染,在 root 之外——令牌要自己带) */
+    '.pw-panel{font:13px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--text-primary,#1b2430);padding:2px}',
+    '.pw-panel-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}',
+    '.pw-panel-kpis div{border-bottom:1px solid var(--line,#e5e7eb);padding:2px 0 6px}',
+    '.pw-panel-kpis b{display:block;font-family:Georgia,serif;font-size:20px;line-height:1.2}',
+    '.pw-panel-kpis span{font-size:9.5px;letter-spacing:.1em;color:var(--text-muted,#6b7788)}',
+    '.pw-panel-list{display:flex;flex-direction:column}',
+    '.pw-panel-row{display:flex;align-items:center;gap:8px;font-size:12px;padding:7px 0;border-bottom:1px solid var(--line,#e5e7eb)}',
+    '.pw-panel-row span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.pw-panel-row i{font-style:normal;flex:0 0 auto;font-size:10.5px}',
+    /* 警告字色：站点 --warn 是填充色（#d48806 当文字在白卡只有 2.87:1）——
+     * 日间深琥珀 #b45309（5.0:1），夜间才接 --warn（night-skin 纪律） */
+    '.pw-panel-row i.warn{color:#b45309}.pw-panel-row i.ok{color:var(--ok,#0f7c4a)}',
+    'html[data-theme="night"] .pw-panel-row i.warn{color:var(--warn,#e8ae3f)}',
+    '.pw-panel-empty{font-size:12px;color:var(--text-muted,#6b7788);padding:10px 0}',
     /* —— 覆盖层放最后 —— */
     '@media (max-width:760px){.pw-btn.sm{height:30px}.pw-brandtx b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
       + '.pw-dock-item{min-width:0;flex:1;padding:7px 2px}'
@@ -393,6 +413,11 @@
     return '<svg viewBox="0 0 24 24" aria-hidden="true">' + p + '</svg>'
   }
   let MARK_TILE = '<span class="pw-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 19l1-3.5L16.5 5a2 2 0 0 1 2.8 2.8L8.8 18.2 5 19z"/><path d="M4 4l2.5 2.5"/><path d="M12 20h8"/></svg></span>'
+  /* 【2026-11-12 用户报修：导航图标全空】manifest 的 icon 走 U.rawIcon——白名单只认 SVG 标签，
+   * `<span class="pw-mark">` 整棵子树（连里面的 svg）会被消毒器摘光。
+   * 页面头图继续用 MARK_TILE（渐变砖靠皮肤），manifest（tools/panels）必须吃**自包含 SVG**
+   * （sf/er 同款口径：viewBox+width+height+currentColor，不依赖任何外部 CSS）。 */
+  let MARK_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19l1-3.5L16.5 5a2 2 0 0 1 2.8 2.8L8.8 18.2 5 19z"/><path d="M4 4l2.5 2.5"/><path d="M12 20h8"/></svg>'
 
   /* ════════════════════════ 6. 视图（模块级，(ctx,S) 入参） ════════════════════════ */
 
@@ -643,17 +668,33 @@
     { k: 'setup', t: '设置', ic: 'gear', n: '设置与数据' },
   ]
 
-  function blankDraft() {
-    return { id: '', stem: '', options: [{ id: 'o0', text: '' }, { id: 'o1', text: '' }, { id: 'o2', text: '' }, { id: 'o3', text: '' }], answer: 0, solutions: [{ id: 's0', text: '' }, { id: 's1', text: '' }, { id: 's2', text: '' }, { id: 's3', text: '' }], trap: '', subject: '', diff: 2 }
+  /* 【2026-11-12 协议合规】config 声明了就必须消费:defaultSubject 旧版从未读取,
+   * 用户在插件中心填了「默认为新题填的学科」永远无效。blankDraft 现在吃 ctx。 */
+  function blankDraft(ctx) {
+    let subj = ''
+    try { subj = String(ctx && ctx.config ? ctx.config('defaultSubject') || '' : '').slice(0, 20) } catch (e) { }
+    return { id: '', stem: '', options: [{ id: 'o0', text: '' }, { id: 'o1', text: '' }, { id: 'o2', text: '' }, { id: 'o3', text: '' }], answer: 0, solutions: [{ id: 's0', text: '' }, { id: 's1', text: '' }, { id: 's2', text: '' }, { id: 's3', text: '' }], trap: '', subject: subj, diff: 2 }
+  }
+
+  /* 能力面在载入时就要落地（init 与 mount 共用，全部幂等）：
+   * 浮窗面板不等工具页被打开——只在 mount 注皮肤的话，面板首开就是裸文字
+   * （2026-11-12 巡检抓到；fv/sf/vf/fx/er 五插件把 CSS 放 manifest.css 正是为此）。 */
+  function bootSurfaces(ctx) {
+    try { window.__PW_HOST_CTX = ctx; injectStyles() } catch (e) { }
+    try {
+      if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {
+        ctx.ai.registerCtx({ ctx: AI_CTX_TRIAL, name: '出题家 · AI 试做', desc: '盲做用户出的单选题并报告歧义/多解/条件不足（只看题面，保守诚实）', def: 'think', latexNeed: true, tools: 'none', recall: false })
+        ctx.ai.registerCtx({ ctx: AI_CTX_JUDGE, name: '出题家 · 判分', desc: '把学员答案对到采分点上判命中/半对/漏（读不懂就写无法判断，不许抬分）', def: 'think', latexNeed: true, tools: 'none', recall: false })
+      }
+    } catch (e) { }
   }
 
   function mountShell(el, ctx) {
-    window.__PW_HOST_CTX = ctx
-    injectStyles()
+    bootSurfaces(ctx)
     let S = {
       view: 'bench',
       list: [],
-      draft: blankDraft(),
+      draft: blankDraft(ctx),
       mistakes: [],
       trialId: '',
       trialBusy: false,
@@ -683,6 +724,7 @@
     root.className = 'pw-root'
     el.appendChild(root)
     let stageEl = null, dockEl = null, dockInd = null, heroEl = null
+    let lastView = ''
 
     function paint() {
       let html = ''
@@ -701,7 +743,9 @@
       dockEl = root.querySelector('.pw-dock')
       dockInd = root.querySelector('.pw-dock-ind')
       syncDock()
-      markEnter()
+      /* 【2026-11-12 用户报修：点一个按钮整页重建一次】进场动画原来每次 paint 都重放。
+       * duel 同款门控：只在视图真正切换（含首挂）时打进场标记。 */
+      if (S.view !== lastView) { lastView = S.view; markEnter() }
       scheduleVaultTail()
     }
     function markEnter() {
@@ -766,7 +810,9 @@
       if (!f) return
       if (f === 'stem') { S.draft.stem = t.value.slice(0, STEM_MAX); persistDraft(); softLintRefresh() }
       else if (f === 'opt') { let i = num(t.getAttribute('data-i'), -1); if (S.draft.options[i]) { S.draft.options[i].text = t.value.slice(0, OPT_MAX); persistDraft(); softLintRefresh() } }
-      else if (f === 'sol') { let i = num(t.getAttribute('data-i'), -1); if (S.draft.solutions[i]) { S.draft.solutions[i].text = t.value.slice(0, OPT_MAX); persistDraft() } }
+      /* 解析也影响硬伤（「正确项没有解析」）——不刷新的话，用户最后填解析时
+       * lint 面板与保存/试做按钮的禁用态全停在旧值，明明填好了还点不动（真机截图抓到） */
+      else if (f === 'sol') { let i = num(t.getAttribute('data-i'), -1); if (S.draft.solutions[i]) { S.draft.solutions[i].text = t.value.slice(0, OPT_MAX); persistDraft(); softLintRefresh() } }
       else if (f === 'trap') { S.draft.trap = t.value.slice(0, 200); persistDraft() }
       else if (f === 'subject') { S.draft.subject = t.value.slice(0, 20); persistDraft() }
       else if (f === 'diff') { S.draft.diff = clamp(num(t.value, 2), 1, 3); persistDraft() }
@@ -818,7 +864,7 @@
       else S.list = [q].concat(S.list)
       listSave(ctx, S.list)
       clearDraftKeep()
-      S.draft = blankDraft()
+      S.draft = blankDraft(ctx)
       S.trialId = q.id
       toast('已保存：' + trunc(q.stem, 24), 'success')
       paint()
@@ -864,13 +910,17 @@
       if (!q0) return
       if (q0.status === 'banked') { toast('这道题已经在公共题库里了', 'info'); return }
       let clean = q0.trial && q0.trial.verdict === '干净'
+      /* 【2026-11-12 协议合规】config trialStrict 声明了就必须生效:
+       * 开启后未通过 AI 试做的题直接拦下入库(公共池质量闸)。 */
+      let strict = false
+      try { strict = ctx.config('trialStrict') === true } catch (e) { }
+      if (strict && !clean) { toast('已开启「入库前必须通过 AI 试做」——先试做再入库', 'warn'); return }
       ctx.api.confirm(
         '把这道题放进站内公共题库？',
         '<div class="pw-quiet">放进去之后，<b>决斗场、组卷、变式工厂</b>都可能抽到这道题（它成为全站资产，不再只属于你）。'
         + (clean ? 'AI 试做判定：干净，可以放。<br>' : '注意：这道题还没通过 AI 试做，等于没编译就发布——建议先试做。<br>')
         + '随时可在「我的题」撤回（撤回只影响后续抽题，已被做对的题成为历史数据保留）。</div>',
-        function (ok) {
-          if (!ok) return
+        function () {
           let letter = 'ABCDEFGH'[q0.answer]
           let sol = q0.solutions.filter(function (s) { return s.text })
           let rec = {
@@ -905,8 +955,7 @@
     }
     function revokeQ(q0) {
       if (!q0 || !q0.bankRef) return
-      ctx.api.confirm('从公共题库撤回这道题？', '<div class="pw-quiet">撤回后新的抽题不会再遇到它；已被别人/你做对的记录作为历史保留，不伪造删除。你本地的这道题会回到「试做通过」状态，可再次入库。</div>', function (ok) {
-        if (!ok) return
+      ctx.api.confirm('从公共题库撤回这道题？', '<div class="pw-quiet">撤回后新的抽题不会再遇到它；已被别人/你做对的记录作为历史保留，不伪造删除。你本地的这道题会回到「试做通过」状态，可再次入库。</div>', function () {
         try {
           ctx.Store.update(function (st) {
             if (Array.isArray(st.quizBank)) st.quizBank = st.quizBank.filter(function (x) { return !x || x.id !== q0.bankRef })
@@ -927,7 +976,7 @@
       let a = t.closest ? t.closest('[data-act]') : null
       if (!a) return
       let act = a.getAttribute('data-act')
-      if (act === 'newq') { S.draft = blankDraft(); S.view = 'bench'; paint(); return }
+      if (act === 'newq') { S.draft = blankDraft(ctx); S.view = 'bench'; paint(); return }
       if (act === 'add-opt') {
         if (S.draft.options.length < 4) {
           S.draft.options.push({ id: 'o' + S.draft.options.length, text: '' })
@@ -953,7 +1002,7 @@
       if (act === 'inspire') {
         let m = S.mistakes[num(a.getAttribute('data-i'), 0)]
         if (m) {
-          S.draft = blankDraft()
+          S.draft = blankDraft(ctx)
           S.draft.stem = flat(m.stem || m.desc)
           S.draft.subject = flat(m.subject || '')
           toast('已借入题干——把答案改成你的新问法，重设干扰项', 'info')
@@ -975,7 +1024,7 @@
         paint()
         return
       }
-      if (act === 'edit-cancel') { S.draft = blankDraft(); clearDraftKeep(); paint(); return }
+      if (act === 'edit-cancel') { S.draft = blankDraft(ctx); clearDraftKeep(); paint(); return }
       if (act === 'trial-q') { S.trialId = a.getAttribute('data-id'); S.trialResult = null; go('trial'); return }
       if (act === 'bank-q') { bankQ(S.list.filter(function (x) { return x.id === S.trialId })[0]); return }
       if (act === 'bank-q2') { bankQ(S.list.filter(function (x) { return x.id === a.getAttribute('data-id') })[0]); return }
@@ -984,8 +1033,7 @@
         let id = a.getAttribute('data-id')
         let x = S.list.filter(function (y) { return y.id === id })[0]
         if (!x) return
-        ctx.api.confirm('删除这道题？', '<div class="pw-quiet">本地档案删除这道题' + (x.status === 'banked' ? '；<b>已入公共题库的副本不随之删除</b>（公共资产请走撤回）' : '') + '。不可恢复，可先导出备份。</div>', function (ok) {
-          if (!ok) return
+        ctx.api.confirm('删除这道题？', '<div class="pw-quiet">本地档案删除这道题' + (x.status === 'banked' ? '；<b>已入公共题库的副本不随之删除</b>（公共资产请走撤回）' : '') + '。不可恢复，可先导出备份。</div>', function () {
           S.list = listSave(ctx, S.list.filter(function (y) { return y.id !== id }))
           toast('已删除', 'success')
           paint()
@@ -1014,8 +1062,7 @@
         return
       }
       if (act === 'wipe') {
-        ctx.api.confirm('清空我的题目？', '<div class="pw-quiet">将删除本地档案里全部 <b>' + S.list.length + '</b> 道题，<b>不可恢复</b>（建议先导出）。已入公共题库的副本不受影响。</div>', function (ok) {
-          if (!ok) return
+        ctx.api.confirm('清空我的题目？', '<div class="pw-quiet">将删除本地档案里全部 <b>' + S.list.length + '</b> 道题，<b>不可恢复</b>（建议先导出）。已入公共题库的副本不受影响。</div>', function () {
           S.list = listSave(ctx, [])
           S.trialId = ''
           S.trialResult = null
@@ -1032,7 +1079,7 @@
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { if (S.view === 'bench') { e.preventDefault(); saveDraft() } return }
       if (typing) return
       if (e.key >= '1' && e.key <= '5') { let v = VIEWS[num(e.key, 1) - 1]; if (v) { e.preventDefault(); go(v.k) } return }
-      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); S.draft = blankDraft(); S.view = 'bench'; paint() }
+      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); S.draft = blankDraft(ctx); S.view = 'bench'; paint() }
     }
     function onScroll() { if (heroEl) heroEl.classList.toggle('stuck', window.scrollY > 6) }
     function onResize() { syncDock() }
@@ -1044,14 +1091,7 @@
     window.addEventListener('scroll', onScroll, { passive: true })
     window.addEventListener('resize', onResize)
     paint()
-
-    /* AI 场景登记 */
-    try {
-      if (ctx.ai && typeof ctx.ai.registerCtx === 'function') {
-        ctx.ai.registerCtx({ ctx: AI_CTX_TRIAL, name: '出题家 · AI 试做', desc: '盲做用户出的单选题并报告歧义/多解/条件不足（只看题面，保守诚实）', def: 'think', latexNeed: true, tools: 'none', recall: false })
-        ctx.ai.registerCtx({ ctx: AI_CTX_JUDGE, name: '出题家 · 判分', desc: '把学员答案对到采分点上判命中/半对/漏（读不懂就写无法判断，不许抬分）', def: 'think', latexNeed: true, tools: 'none', recall: false })
-      }
-    } catch (e) { }
+    /* AI 场景登记已挪进 bootSurfaces（init/mount 共用，见 §皮肤注入旁） */
 
     return function destroy() {
       if (S.enterT) clearTimeout(S.enterT)
@@ -1079,7 +1119,46 @@
     author: 'kaoyan-v2',
     desc: '学生变出题人：写题（选项/逐项解析/陷阱设计）→ 确定性 lint 实时把关 → AI 盲做试做（严谨/完备/区分三维判分，歧义当场报）'
       + '→ 合格的题一键入站内公共题库，被决斗场/组卷抽走，甚至回流成你的错题——出题是 Bloom 塔尖的复习。未配置 AI 走自检清单，功能不残缺。',
-    tools: [{ id: T_MAIN, title: '出题家', icon: MARK_TILE, mount: mountShell }],
+    tools: [{ id: T_MAIN, title: '出题家', icon: MARK_ICON, mount: mountShell }],
+    init: function (ctx) { bootSurfaces(ctx) },
+    /* 【2026-11-12 协议合规】补齐能力面:shortcuts + panels,与站内六大插件同构。 */
+    shortcuts: [
+      {
+        key: 'alt+c', label: '直达出题家',
+        run: function (ctx) {
+          try {
+            if (ctx && ctx.api && ctx.api.goTool) ctx.api.goTool(T_MAIN)
+            else if (window.App) window.App.go(T_MAIN)
+          } catch (e) { }
+        },
+      },
+    ],
+    panels: [
+      {
+        id: 'pw-stock', title: '出题家 · 库存', icon: MARK_ICON, width: 300, height: 240,
+        render: function (ctx) {
+          let list = listGet(ctx)
+          let st = statsOf(list)
+          let out = ['<div class="pw-panel">']
+          out.push('<div class="pw-panel-kpis">'
+            + '<div><b>' + (st ? st.n : 0) + '</b><span>我的题</span></div>'
+            + '<div><b>' + (st ? st.banked : 0) + '</b><span>已入库</span></div>'
+            + '<div><b>' + (st && st.aiWrongRate != null ? st.aiWrongRate + '%' : '—') + '</b><span>AI 做错率</span></div></div>')
+          if (!list.length) out.push('<div class="pw-panel-empty">还没有出自己的题。第一道哪怕送分题，走完「试做→入库」就懂出题人的思维。</div>')
+          else {
+            out.push('<div class="pw-panel-list">')
+            for (let i = 0; i < Math.min(4, list.length); i++) {
+              let x = list[i]
+              let tag = x.status === 'banked' ? '<i class="ok">已入库</i>' : (x.status === 'ok' ? '<i class="ok">试做通过</i>' : '<i class="warn">草稿</i>')
+              out.push('<div class="pw-panel-row"><span>' + esc(trunc(x.stem, 20)) + '</span>' + tag + '</div>')
+            }
+            out.push('</div>')
+          }
+          out.push('</div>')
+          return out.join('')
+        },
+      },
+    ],
     config: [
       { key: 'defaultSubject', label: '默认为新题填的学科', type: 'text', default: '' },
       { key: 'trialStrict', label: '入库前必须通过 AI 试做', type: 'bool', default: false },

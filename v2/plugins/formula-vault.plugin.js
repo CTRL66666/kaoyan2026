@@ -25,7 +25,7 @@
   'use strict'
 
   let TOOL_ID = 'formula-vault'
-  let VERSION = '1.3.9'
+  let VERSION = '1.3.10'
   /* AI 场景 ctx：命名空间必须是 `plugin.<本插件 id>.<场景>`。
    * 【2026-10-24 订正】原值是 `plugin.vault.mnemonic` —— 少了 `formula-` 前缀，后果是**静默**的：
    * 停用插件时宿主按 pid 前缀摘场景摘不到它，参数中心里就留一条永远调不到的场景。 */
@@ -2472,8 +2472,10 @@
     function doReset(ctx) {
       try {
         if (ctx.api && typeof ctx.api.confirm === 'function') {
-          ctx.api.confirm('清空自测记录？', '公式库不受影响；自测历史、掌握度、弹药箱收藏都会清掉，且不可恢复。', function (ok) {
-            if (!ok) return
+          ctx.api.confirm('清空自测记录？', '公式库不受影响；自测历史、掌握度、弹药箱收藏都会清掉，且不可恢复。', function () {
+            /* 【2026-11-06 修】宿主 api.confirm 的回调只在用户点确定时调用且**无参数**
+             * （components.ts Modal.confirm: onOk()）——旧版写 function (ok) { if (!ok) return }
+             * 等于永远提前 return，「清空自测记录」从来没生效过。 */
             S.recs = saveRecs(ctx, {})
             S.logs = saveLogs(ctx, [])
             S.undo = null
