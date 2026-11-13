@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.1.2'
+  let VERSION = '1.2.0'
   let T_MAIN = 'pacing-dojo'
   let STYLE_ID = 'pd-skin-style'
   let AI_CTX_REVIEW = 'plugin.pacing-dojo.review'
@@ -801,8 +801,9 @@
     out.push('<section class="pd-card"><div class="pd-card-h"><b>数据</b><em>训练记录都在浏览器本地，云同步走站内通道</em></div>')
     out.push('<div class="pd-acts">'
       + '<button class="pd-btn" data-act="export">' + I('down') + '导出 JSON</button>'
+      + '<button class="pd-btn" data-act="import">' + I('up') + '导入</button>'
       + '<button class="pd-btn ghost" data-act="wipe">' + I('cross') + '清空训练记录</button></div>')
-    out.push('<div class="pd-quiet" style="margin-top:10px">清空只删本插件的会话记录（' + S.sessions.length + ' 场），不动站内题库与错题本。</div>')
+    out.push('<div class="pd-quiet" style="margin-top:10px">清空只删本插件的会话记录（' + S.sessions.length + ' 场），不动站内题库与错题本。导出后可用「导入」恢复。</div>')
     out.push('</section>')
     out.push('<section class="pd-card"><div class="pd-card-h"><b>快捷键</b><em>键盘党</em></div><div class="pd-keys">'
       + '<div class="pd-keyrow"><span class="pd-keycap">D</span>直接开一场</div>'
@@ -1124,8 +1125,30 @@
         try { ctx.api.download('时钟道场-训练记录.json', JSON.stringify({ v: 1, sessions: S.sessions }, null, 2), 'application/json') } catch (e) { toast('导出失败', 'danger') }
         return
       }
+      if (act === 'import') {
+        /* 【2026-11-13 闭环补全】导出↔导入对称：旧版只有导出，wipe 确认里「建议先导出」
+         * 其实是死承诺——导出的文件没有任何入口能导回来。导入走 normSession 白名单
+         * （脏会话直接拒），按 id 去重（旧档优先），溢出 SESSION_MAX 的如实丢弃并说明。 */
+        try {
+          ctx.api.readFile('application/json').then(function (txt) {
+            let arr = []
+            try { let o = JSON.parse(txt); arr = Array.isArray(o) ? o : (o && Array.isArray(o.sessions) ? o.sessions : []) } catch (e2) { }
+            let add = arr.map(normSession).filter(Boolean)
+            if (!add.length) { toast('文件里没有可识别的训练记录', 'warn'); return }
+            let have = {}
+            S.sessions.forEach(function (x) { have[x.id] = 1 })
+            let fresh = add.filter(function (x) { return !have[x.id] })
+            let merged = S.sessions.concat(fresh).sort(function (a, b) { return (b.at || 0) - (a.at || 0) })
+            let kept = Math.min(merged.length, SESSION_MAX)
+            S.sessions = sessionsSave(ctx, merged)
+            toast('导入 ' + fresh.length + ' 场（跳过重复 ' + (add.length - fresh.length) + (merged.length > SESSION_MAX ? '，超出上限丢弃 ' + (merged.length - kept) : '') + '）', 'success')
+            paint()
+          }).catch(function () { })
+        } catch (e) { toast('导入不可用', 'danger') }
+        return
+      }
       if (act === 'wipe') {
-        ctx.api.confirm('清空训练记录？', '将删除全部 ' + S.sessions.length + ' 场训练会话，<b>不可恢复</b>（建议先导出）。站内题库与错题本不受影响。', function () {
+        ctx.api.confirm('清空训练记录？', '将删除全部 ' + S.sessions.length + ' 场训练会话，<b>不可恢复</b>——如需保留请先「导出」，之后可在本页「导入」找回。站内题库与错题本不受影响。', function () {
           S.sessions = sessionsSave(ctx, [])
           S.replayId = ''
           toast('已清空', 'success')
