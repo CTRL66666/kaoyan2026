@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.1.1'
+  let VERSION = '1.1.2'
   let T_MAIN = 'pacing-dojo'
   let STYLE_ID = 'pd-skin-style'
   let AI_CTX_REVIEW = 'plugin.pacing-dojo.review'
@@ -806,10 +806,10 @@
     out.push('</section>')
     out.push('<section class="pd-card"><div class="pd-card-h"><b>快捷键</b><em>键盘党</em></div><div class="pd-keys">'
       + '<div class="pd-keyrow"><span class="pd-keycap">D</span>直接开一场</div>'
-      + '<div class="pd-keyrow"><span class="pd-keycap">A/D/W</span>作答时选 A/D 项之外——用数字 1-4 选选项</div>'
+      + '<div class="pd-keyrow"><span class="pd-keycap">1-8</span>作答时选对应选项</div>'
       + '<div class="pd-keyrow"><span class="pd-keycap">G</span>蒙一个</div>'
       + '<div class="pd-keyrow"><span class="pd-keycap">S</span>跳过</div>'
-      + '<div class="pd-keyrow"><span class="pd-keycap">Enter</span>下一题</div>'
+      + '<div class="pd-keyrow"><span class="pd-keycap">Enter/Space</span>判定后下一题</div>'
       + '<div class="pd-keyrow"><span class="pd-keycap">Esc</span>结束本场</div>'
       + '<div class="pd-keyrow"><span class="pd-keycap">1-5</span>切换视图</div>'
       + '</div></section>')
@@ -935,7 +935,12 @@
         let on = items[i].getAttribute('data-view') === S.view
         items[i].classList.toggle('on', on)
         if (on && dockInd) {
-          dockInd.style.transform = 'translateX(' + items[i].offsetLeft + 'px)'
+          /* 【2026-11-12 巡检实测：指示器恒偏左 6px】offsetLeft 从 dock 的 padding 边起算，
+           * 而指示器 CSS 基位 left:6px 也在 padding 盒里——再 translateX(offsetLeft) 等于
+           * 把基位算了两遍。正确位移 = offsetLeft - 指示器自身 left 基位（从 computed style
+           * 读，不写死 6，也不回读 rect——指示器带 transition，动画中 rect 是插值位置不可信）。 */
+          let baseLeft = parseFloat(getComputedStyle(dockInd).left) || 0
+          dockInd.style.transform = 'translateX(' + (items[i].offsetLeft - baseLeft) + 'px)'
           dockInd.style.width = items[i].offsetWidth + 'px'
         }
       }

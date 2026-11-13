@@ -101,7 +101,7 @@ function icon(ctx, k) {
 }
 
 /* ---- 1. 领域常量 ---- */
-let VERSION = '1.1.3'
+let VERSION = '1.1.4'
   /* 【2026-10-28】1.1：只播到期、方向键免手操作、音色预设；修复提问/留白相位「跳过此题」无效与旧语音回调串题(代际守卫)。 */
 let TOOL_ID = 'ear-radio'
 let AI_CTX_SCRIPT = 'plugin.ear-radio.script'
@@ -1093,7 +1093,9 @@ function mountShell(el, ctx) {
     for (let i = 0; i < VIEWS.length; i++) if (VIEWS[i].k === S.view) {
       let btn = dockEl.children[1 + i]
       if (btn) {
-        indEl.style.transform = 'translateX(' + btn.offsetLeft + 'px)'
+        /* 【2026-11-12 巡检修】同 vf：位移 = offsetLeft - 指示器 left 基位（computed style 读）。 */
+        let baseLeft = parseFloat(getComputedStyle(indEl).left) || 0
+        indEl.style.transform = 'translateX(' + (btn.offsetLeft - baseLeft) + 'px)'
         indEl.style.width = btn.offsetWidth + 'px'
       }
       break

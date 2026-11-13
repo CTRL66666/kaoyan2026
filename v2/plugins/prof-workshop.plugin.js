@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.1.1'
+  let VERSION = '1.1.2'
   let T_MAIN = 'prof-workshop'
   let STYLE_ID = 'pw-skin-style'
   let AI_CTX_TRIAL = 'plugin.prof-workshop.trial'
@@ -759,7 +759,12 @@
       for (let i = 0; i < items.length; i++) {
         let on = items[i].getAttribute('data-view') === S.view
         items[i].classList.toggle('on', on)
-        if (on && dockInd) { dockInd.style.transform = 'translateX(' + items[i].offsetLeft + 'px)'; dockInd.style.width = items[i].offsetWidth + 'px' }
+        /* 【2026-11-12 巡检实测：指示器恒偏左 6px】同 pd：位移 = offsetLeft - 指示器 left 基位。 */
+        if (on && dockInd) {
+          let baseLeft = parseFloat(getComputedStyle(dockInd).left) || 0
+          dockInd.style.transform = 'translateX(' + (items[i].offsetLeft - baseLeft) + 'px)'
+          dockInd.style.width = items[i].offsetWidth + 'px'
+        }
       }
     }
     function go(k) {

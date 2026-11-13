@@ -71,7 +71,7 @@
    * （缺答案/答案非A-D/选项重复/题干过短或不自足/换皮）标记疑点；疑点题须走结构化复核清单
    * （题干自足/答案复算/干扰项成立三项勾选）才能成卷；档案加复核台账。
    * 版本必须涨：已安装副本是整份源码存在 localStorage 里的。 */
-  let VERSION = '1.4.1'
+  let VERSION = '1.4.2'
   let TOOL_ID = 'variant-forge'
   let AI_CTX_GEN = 'plugin.variant-forge.gen'
   let AI_CTX_AUDIT = 'plugin.variant-forge.audit'
@@ -1890,7 +1890,11 @@
       for (let i = 0; i < VIEWS.length; i++) if (VIEWS[i].k === S.view) {
         let btn = dockEl.children[1 + i]
         if (btn) {
-          indEl.style.transform = 'translateX(' + btn.offsetLeft + 'px)'
+          /* 【2026-11-12 巡检修】指示器 CSS 基位 left:6px，再 translateX(offsetLeft)
+           * 等于把基位算了两遍——指示器恒偏左 6px（pd/pw 抄了这个公式被用户截图点名）。
+           * 位移 = offsetLeft - 指示器自身 left 基位；基位从 computed style 读不写死。 */
+          let baseLeft = parseFloat(getComputedStyle(indEl).left) || 0
+          indEl.style.transform = 'translateX(' + (btn.offsetLeft - baseLeft) + 'px)'
           indEl.style.width = btn.offsetWidth + 'px'
         }
         break
