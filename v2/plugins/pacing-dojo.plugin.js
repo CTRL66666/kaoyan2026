@@ -982,7 +982,7 @@
       let n = clamp((function () { try { return num(ctx.config('perRun'), Q_PER_RUN) } catch (e) { return Q_PER_RUN } })(), 5, 15)
       let srcPool = S.src === 'demo' || (S.src === 'bank' && !S.bank.length) || (S.src === 'quiz' && !S.quiz.length)
         ? DEMO_BANK.map(function (d) { return { id: d.id, s: d.s, o: d.o, a: d.a, d: d.d, why: d.why, kind: '示范' } })
-        : (S.src === 'quiz' ? S.quiz : S.bank).slice()
+        : (S.src === 'quiz' ? S.quiz : S.bank).map(function (q) { return Object.assign({}, q, { kind: S.src === 'quiz' ? '站内题库' : '错题本' }) })
       let pool = shuffle(srcPool).slice(0, n)
       if (!pool.length) return []
       /* 预算：实验室算过就按每题预算，否则按难度默认 */
