@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.1.2'
+  let VERSION = '1.2.0'
   let T_MAIN = 'prof-workshop'
   let STYLE_ID = 'pw-skin-style'
   let AI_CTX_TRIAL = 'plugin.prof-workshop.trial'
@@ -300,6 +300,20 @@
       + 'color:var(--pw-ink);outline:none;font:inherit;font-size:13.5px;width:100%}',
     '.pw-input:focus{border-color:var(--pw-acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--pw-acc) 16%,transparent)}',
     'textarea.pw-input{height:auto;min-height:74px;padding:9px 11px;resize:vertical;line-height:1.6}',
+    /* 2026-11-13 功能升级：符号栏 / 题干预览 / 我的题筛选条 */
+    '.pw-seg{display:inline-flex;max-width:100%;overflow-x:auto;scrollbar-width:none;background:var(--pw-soft);border:1px solid var(--pw-line);border-radius:11px;padding:3px;gap:2px}',
+    '.pw-seg button{border:0;background:none;font:600 12px/1 inherit;padding:7px 12px;border-radius:8px;cursor:pointer;color:var(--pw-ink2);white-space:nowrap}',
+    '.pw-seg button.on{background:var(--pw-bg);color:var(--pw-ink);box-shadow:0 1px 4px rgba(16,30,60,.12)}',
+    '.pw-symbar{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin:2px 0 10px}',
+    '.pw-sym{min-width:32px;height:30px;padding:0 8px;border:1px solid var(--pw-line);border-radius:8px;background:var(--pw-bg);'
+      + 'color:var(--pw-ink2);font:600 13px/1 ui-monospace,Consolas,monospace;cursor:pointer;transition:all .16s}',
+    '.pw-sym:hover{border-color:var(--pw-acc);color:var(--pw-acc-text);background:color-mix(in srgb,var(--pw-acc) 7%,var(--pw-bg))}',
+    '.pw-symtip{font-size:10.5px;color:var(--pw-sub);margin-left:4px}',
+    '.pw-previewbox{border:1px dashed var(--pw-line);border-radius:12px;padding:10px 14px;margin-bottom:14px;background:var(--pw-soft)}',
+    '.pw-prevlabel{display:block;font-size:10px;letter-spacing:.14em;color:var(--pw-sub);margin-bottom:4px}',
+    '.pw-preview{font-size:14px;line-height:1.7;color:var(--pw-ink);word-break:break-word}',
+    '.pw-vfilter{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}',
+    '.pw-vq{max-width:260px;flex:1 1 160px}',
     '.pw-fld{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}',
     '.pw-fld>span{font-size:11.5px;font-weight:800;color:var(--pw-ink2);letter-spacing:.04em}',
     '.pw-fld .hint{font-size:10.5px;color:var(--pw-sub);font-weight:400}',
@@ -442,6 +456,19 @@
       + '</header>'
   }
 
+  /* 常用 LaTeX 符号（2026-11-13 功能升级）：显示字形 → 插入源码片段。
+   * 注意不含 ′″——prime 是 texauto 的数学定界符，进题干会把前后文当公式吃掉（WORKLOG 教训）。 */
+  let SYMBOLS = [
+    ['∫', '\\int_{ }^{ }'], ['∑', '\\sum_{ }^{ }'], ['√', '\\sqrt{}'], ['π', '\\pi'],
+    ['∞', '\\infty'], ['≤', '\\leq'], ['≥', '\\geq'], ['≠', '\\neq'],
+    ['∈', '\\in'], ['→', '\\to'], ['lim', '\\lim_{x \\to }'], ['ab', '\\dfrac{a}{b}'],
+    ['x²', 'x^{2}'], ['xⁿ', 'x^{n}'], ['∮', '\\oint'], ['Δ', '\\Delta'],
+  ]
+  function symBarHTML() {
+    return '<div class="pw-symbar">' + SYMBOLS.map(function (s) {
+      return '<button class="pw-sym" data-act="sym" data-t="' + esc(s[1]) + '" title="插入 ' + esc(s[1]) + '">' + esc(s[0]) + '</button>'
+    }).join('') + '<span class="pw-symtip">点一下插到光标处</span></div>'
+  }
   function qEditorHTML(S) {
     let d = S.draft
     let letters = 'ABCDEFGH'
@@ -453,6 +480,11 @@
       + '</div>')
     out.push('<div class="pw-fld"><span>题干（$…$ 写 LaTeX，站内统一渲染）</span>'
       + '<textarea class="pw-input" data-pw="stem" placeholder="例：设 $f(x)=x^2-2x$，则 $f(1)$ 的值为（　）">' + esc(d.stem) + '</textarea></div>')
+    /* 符号快捷栏 + 实时预览（2026-11-13 功能升级）：预览节点只吃 textContent，
+     * texauto 全局 observer 负责把 $…$ 排成公式——插件不碰渲染器,零接线零注入面 */
+    out.push(symBarHTML())
+    out.push('<div class="pw-previewbox"><span class="pw-prevlabel">题干预览</span>'
+      + '<div class="pw-preview" data-pw-preview>' + (d.stem ? esc(d.stem) : '（写题干的地方——$…$ 包住的公式会在这里活过来）') + '</div></div>')
     out.push('<div class="pw-fld"><span>选项<span class="hint"> 2-4 个；点左侧圆圈设正确答案</span></span>')
     d.options.forEach(function (o, i) {
       out.push('<div class="pw-optrow">'
@@ -573,12 +605,31 @@
     return out.join('')
   }
 
+  /* 我的题显示列表：状态筛选 + 关键词（题干/学科），2026-11-13 功能升级 */
+  function vlist(S) {
+    let a = S.list
+    if (S.vst && S.vst !== 'all') a = a.filter(function (x) { return x.status === S.vst })
+    let q = String(S.vq || '').trim().toLowerCase()
+    if (q) a = a.filter(function (x) { return ((x.stem || '') + ' ' + (x.subject || '')).toLowerCase().indexOf(q) >= 0 })
+    return a
+  }
   function viewVault(ctx, S) {
-    let list = S.list
+    let list = vlist(S)
     let out = []
-    out.push('<section class="pw-card"><div class="pw-card-h"><b>我的题</b><em>' + list.length + ' 道 · 上限 ' + Q_MAX + '</em></div>')
-    if (!list.length) {
+    out.push('<section class="pw-card"><div class="pw-card-h"><b>我的题</b><em>' + list.length + ' 道' + (list.length !== S.list.length ? '（筛自 ' + S.list.length + '）' : '') + ' · 上限 ' + Q_MAX + '</em></div>')
+    if (!S.list.length) {
       out.push('<div class="pw-empty"><span class="ico">' + I('archive') + '</span><b>还没有自己的题</b>去出题台写第一道——哪怕是一道 30 秒的送分题，走完「试做→入库」全流程，你就懂了出题人的思维。</div></section>')
+      return out.join('')
+    }
+    /* 搜索 + 状态筛选条（2026-11-13）：打字走定向列表刷新,搜索框节点不被重绘,焦点不丢 */
+    let chips = [['all', '全部'], ['draft', '草稿'], ['ok', '试做通过'], ['banked', '已入库']]
+    out.push('<div class="pw-vfilter"><input class="pw-input pw-vq" data-pw="vq" placeholder="搜题干 / 学科…" value="' + esc(S.vq) + '">'
+      + '<div class="pw-seg">' + chips.map(function (c) {
+        return '<button data-act="vst" data-k="' + c[0] + '" class="' + (S.vst === c[0] ? 'on' : '') + '">' + c[1] + '</button>'
+      }).join('') + '</div></div>')
+    if (!list.length) {
+      out.push('<div data-pw="qlist"><div class="pw-quiet" style="padding:14px 4px">没有匹配的题目——换个关键词或点「全部」。</div></div>')
+      out.push('</section>')
       return out.join('')
     }
     /* 分片：首屏 BANK_PAGE 行 + 逐帧补尾（大档案不卡；≤一页时零分片，行为与旧版一致） */
@@ -701,6 +752,10 @@
       trialResult: null,
       enterT: 0,
       tailRaf: 0,
+      /* 2026-11-13 功能升级：符号栏插入目标 + 我的题搜索/筛选 */
+      symField: null,
+      vq: '',
+      vst: 'all',
     }
     S.list = listGet(ctx)
     try {
@@ -783,7 +838,7 @@
       if (S.view !== 'vault') return
       let marker = stageEl && stageEl.querySelector('[data-pw-vtail]')
       if (!marker) return
-      let rest = S.list.slice(BANK_PAGE)
+      let rest = vlist(S).slice(BANK_PAGE)
       let idx = 0
       let run = function () {
         S.tailRaf = 0
@@ -813,7 +868,7 @@
       if (!t || !t.getAttribute) return
       let f = t.getAttribute('data-pw')
       if (!f) return
-      if (f === 'stem') { S.draft.stem = t.value.slice(0, STEM_MAX); persistDraft(); softLintRefresh() }
+      if (f === 'stem') { S.draft.stem = t.value.slice(0, STEM_MAX); persistDraft(); softLintRefresh(); syncPreview() }
       else if (f === 'opt') { let i = num(t.getAttribute('data-i'), -1); if (S.draft.options[i]) { S.draft.options[i].text = t.value.slice(0, OPT_MAX); persistDraft(); softLintRefresh() } }
       /* 解析也影响硬伤（「正确项没有解析」）——不刷新的话，用户最后填解析时
        * lint 面板与保存/试做按钮的禁用态全停在旧值，明明填好了还点不动（真机截图抓到） */
@@ -1031,6 +1086,22 @@
       }
       if (act === 'edit-cancel') { S.draft = blankDraft(ctx); clearDraftKeep(); paint(); return }
       if (act === 'trial-q') { S.trialId = a.getAttribute('data-id'); S.trialResult = null; go('trial'); return }
+      if (act === 'vst') { S.vst = a.getAttribute('data-k') || 'all'; paint(); return }
+      if (act === 'sym') {
+        /* 符号插入：目标=最近聚焦的文本域（focusin 记的活节点）,退化到题干。
+         * setRangeText 在光标处替换选区,再派发 input 走既有管道（persistDraft/lint/预览）。 */
+        let snip = a.getAttribute('data-t') || ''
+        let f = (S.symField && S.symField.isConnected) ? S.symField : root.querySelector('[data-pw="stem"]')
+        if (!f) return
+        try {
+          f.focus()
+          let s0 = f.selectionStart == null ? f.value.length : f.selectionStart
+          let s1 = f.selectionEnd == null ? f.value.length : f.selectionEnd
+          f.setRangeText(snip, s0, s1, 'end')
+          f.dispatchEvent(new Event('input', { bubbles: true }))
+        } catch (e) { }
+        return
+      }
       if (act === 'bank-q') { bankQ(S.list.filter(function (x) { return x.id === S.trialId })[0]); return }
       if (act === 'bank-q2') { bankQ(S.list.filter(function (x) { return x.id === a.getAttribute('data-id') })[0]); return }
       if (act === 'revoke-q') { revokeQ(S.list.filter(function (x) { return x.id === a.getAttribute('data-id') })[0]); return }
@@ -1089,8 +1160,38 @@
     function onScroll() { if (heroEl) heroEl.classList.toggle('stuck', window.scrollY > 6) }
     function onResize() { syncDock() }
 
+    /* 符号栏插入目标 = 最近聚焦的 pw 文本域；预览同步；vault 搜索防抖 */
+    function onFocusIn(e) {
+      let t = e.target
+      if (t && t.getAttribute && /^(stem|opt|sol|trap)$/.test(String(t.getAttribute('data-pw') || ''))) S.symField = t
+    }
+    function syncPreview() {
+      let pv = root.querySelector('[data-pw-preview]')
+      if (pv) pv.textContent = S.draft.stem || '（写题干的地方——$…$ 包住的公式会在这里活过来）'
+    }
+    let vqT = 0
+    function vaultRefreshList() {
+      let box = root.querySelector('[data-pw="qlist"]')
+      if (!box) return
+      let v = vlist(S)
+      box.innerHTML = v.slice(0, BANK_PAGE).map(rowHTML).join('')
+        + (v.length > BANK_PAGE ? '<span data-pw-vtail style="display:none"></span>' : '')
+        + (!v.length ? '<div class="pw-quiet" style="padding:14px 4px">没有匹配的题目——换个关键词或点「全部」。</div>' : '')
+      scheduleVaultTail()
+    }
+    function onInput2(e) {
+      let t = e.target
+      if (!t || !t.getAttribute) return
+      if (t.getAttribute('data-pw') === 'vq') {
+        S.vq = String(t.value || '').slice(0, 40)
+        if (vqT) clearTimeout(vqT)
+        vqT = setTimeout(vaultRefreshList, 200)   /* 防抖：打字途中不整列表重建（sf 同款纪律） */
+      }
+    }
     root.addEventListener('click', onClick)
     root.addEventListener('input', onInput)
+    root.addEventListener('focusin', onFocusIn)
+    root.addEventListener('input', onInput2)
     root.addEventListener('change', onChange)
     window.addEventListener('keydown', onKey)
     window.addEventListener('scroll', onScroll, { passive: true })
@@ -1105,6 +1206,10 @@
       persistDraft()
       root.removeEventListener('click', onClick)
       root.removeEventListener('input', onInput)
+      root.removeEventListener('focusin', onFocusIn)
+      root.removeEventListener('input', onInput2)
+      if (vqT) { clearTimeout(vqT); vqT = 0 }
+      S.symField = null
       root.removeEventListener('change', onChange)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('scroll', onScroll)

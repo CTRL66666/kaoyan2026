@@ -30,7 +30,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.2.0'
+  let VERSION = '1.3.0'
   let T_MAIN = 'pacing-dojo'
   let STYLE_ID = 'pd-skin-style'
   let AI_CTX_REVIEW = 'plugin.pacing-dojo.review'
@@ -137,6 +137,10 @@
         act: act,
         ok: !!q.ok,
         d: clamp(num(q.d, 2), 1, 3),
+        /* 回放要能回看「这题到底问了什么」——题干/解析随会话存档
+         * （2026-11-13 功能升级；旧会话没有这两个字段，回放自动降级为只有决策） */
+        st: String(q.st || '').slice(0, 140),
+        why: String(q.why || '').slice(0, 160),
       }
     }).filter(Boolean)
     if (!qs.length) return null
@@ -303,7 +307,7 @@
       if (/^[A-H]/.test(t)) { let idx = 'ABCDEFGH'.indexOf(t[0]); if (idx >= 0 && idx < o.length) a = idx }
     }
     if (a < 0) return null
-    let d = m.difficulty === 'easy' ? 1 : (m.difficulty === 'hard' ? 3 : 2)
+    let d = (m.difficulty || m.diff) === 'easy' ? 1 : ((m.difficulty || m.diff) === 'hard' ? 3 : 2)
     return { id: 'mk' + hashStr(String(m.dedupKey || m.id || stem.slice(0, 30))).toString(36).slice(0, 8), s: o.length ? stem : '', o: o, a: a, d: d, why: flat(m.solution || m.explain || '') }
   }
 
@@ -447,6 +451,9 @@
     '.pd-tl{margin:8px 0 12px}',
     '.pd-tlseg{cursor:default}',
     '.pd-decision-row{display:flex;gap:10px;align-items:flex-start;padding:9px 4px;border-bottom:1px dashed color-mix(in srgb,var(--pd-line) 60%,transparent);font-size:12.5px}',
+    /* 回放题干/解析行（2026-11-13 功能升级）：决策数据上方看得见题目本身 */
+    '.pd-dstem{font-size:13px;font-weight:600;color:var(--pd-ink);padding:10px 4px 2px;line-height:1.5}',
+    '.pd-dwhy{font-size:11.5px;color:var(--pd-sub);padding:2px 4px 6px;line-height:1.5;border-bottom:1px dashed color-mix(in srgb,var(--pd-line) 60%,transparent)}',
     '.pd-decision-row:last-child{border-bottom:0}',
     '.pd-dsec{font:700 12px/1 ui-monospace,Consolas,monospace;min-width:44px;color:var(--pd-ink2)}',
     '.pd-dtag{border-radius:7px;padding:2px 8px;font-size:10.5px;font-weight:800;flex:0 0 auto}',
@@ -622,11 +629,15 @@
     if (S.run) return dojoRunningHTML(ctx, S)
     let src = S.src || 'bank'
     let bankN = S.bank.length
+    let quizN = S.quiz.length
     let out = []
     out.push('<section class="pd-card"><div class="pd-card-h"><b>训练场</b><em>每题一个预算红线，到线必须做决策</em></div>')
     out.push('<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px">'
       + '<div class="pd-seg">'
-      + '<button data-act="dojo-src" data-k="bank" class="' + (src === 'bank' ? 'on' : '') + '">站内题库（' + bankN + ' 题可用）</button>'
+      /* 题源三选（2026-11-13 功能升级）：错题本 / 站内公共题库（出题家产出的题在这里可练,
+       * 闭环补全）/ 内置示范。旧版把错题本叫「站内题库」是误导口径,一并纠正。 */
+      + '<button data-act="dojo-src" data-k="bank" class="' + (src === 'bank' ? 'on' : '') + '">错题本（' + bankN + ' 题可用）</button>'
+      + '<button data-act="dojo-src" data-k="quiz" class="' + (src === 'quiz' ? 'on' : '') + '">站内题库（' + quizN + ' 题）</button>'
       + '<button data-act="dojo-src" data-k="demo" class="' + (src === 'demo' ? 'on' : '') + '">内置示范题（12 题）</button>'
       + '</div></div>')
     out.push('<div class="pd-quiet">规则：每题限时 = 策略实验室的预算（没算过就按默认）。三种收场——'
@@ -748,11 +759,13 @@
     cur.qs.forEach(function (q, i) {
       let dev = q.budget ? Math.round((q.sec - q.budget) / Math.max(1, q.budget) * 100) : 0
       if (dev > 40 && (!worst || dev > worst.dev)) worst = { i: i, dev: dev }
-      out.push('<div class="pd-decision-row"><span class="pd-dsec">' + fmtSec(q.sec) + '</span>'
+      out.push((q.st ? '<div class="pd-dstem">' + esc(trunc(q.st, 64)) + '</div>' : '')
+        + '<div class="pd-decision-row"><span class="pd-dsec">' + fmtSec(q.sec) + '</span>'
         + '<span class="pd-dtag ' + q.act + '">' + (q.act === 'ans' ? '作答' : q.act === 'guess' ? '蒙' : '跳') + '</span>'
         + '<span class="pd-dtag ' + (q.ok ? 'ok' : 'bad') + '">' + (q.ok ? '对' : '错') + '</span>'
         + '<span style="color:var(--pd-sub)">预算 ' + fmtSec(q.budget) + ' · ' + (dev >= 0 ? '+' : '') + dev + '%</span>'
-        + '<span style="margin-left:auto;color:var(--pd-ink2)">难度 ' + (q.d === 1 ? '易' : q.d === 3 ? '难' : '中') + '</span></div>')
+        + '<span style="margin-left:auto;color:var(--pd-ink2)">难度 ' + (q.d === 1 ? '易' : q.d === 3 ? '难' : '中') + '</span></div>'
+        + (q.why ? '<div class="pd-dwhy">' + esc(trunc(q.why, 90)) + '</div>' : ''))
     })
     out.push('</div>')
     let adv = adviceFor(cur.qs, null)
@@ -866,6 +879,7 @@
       })(),
       labGoal: (function () { try { return clamp(num(ctx.config('defaultGoal'), 90), 10, 300) } catch (e) { return 90 } })(),
       src: 'bank',
+      quiz: [],
       replayId: '',
       run: null,
       resume: null,
@@ -873,12 +887,15 @@
     }
     try { let v = ctx.data('pdView'); for (let i = 0; i < VIEWS.length; i++) if (VIEWS[i].k === v) S.view = v } catch (e) { }
     S.sessions = sessionsGet(ctx)
-    /* 题源：站内错题里可用的选择题（≥2 选项 + 可解析答案） */
+    /* 题源：错题本 + 站内公共题库（quizBank,出题家入库的题在这里能练——闭环）里可用的选择题 */
     try {
       let st = ctx.Store && ctx.Store.get ? ctx.Store.get() : null
       let mks = (st && Array.isArray(st.mistakes)) ? st.mistakes : []
       S.bank = mks.map(adaptMistake).filter(Boolean)
-    } catch (e) { S.bank = [] }
+      let qb = (st && Array.isArray(st.quizBank)) ? st.quizBank : []
+      S.quiz = qb.map(adaptMistake).filter(Boolean)
+    } catch (e) { S.bank = []; S.quiz = [] }
+    try { let sv = ctx.data('pdSrc'); if (['bank', 'quiz', 'demo'].indexOf(sv) >= 0) S.src = sv } catch (e) { }
 
     /* 在场恢复：ctx.keep 里的未完场 */
     try {
@@ -963,7 +980,9 @@
     }
     function pickQueue() {
       let n = clamp((function () { try { return num(ctx.config('perRun'), Q_PER_RUN) } catch (e) { return Q_PER_RUN } })(), 5, 15)
-      let srcPool = S.src === 'demo' || !S.bank.length ? DEMO_BANK.map(function (d) { return { id: d.id, s: d.s, o: d.o, a: d.a, d: d.d, why: d.why, kind: '示范' } }) : S.bank.slice()
+      let srcPool = S.src === 'demo' || (S.src === 'bank' && !S.bank.length) || (S.src === 'quiz' && !S.quiz.length)
+        ? DEMO_BANK.map(function (d) { return { id: d.id, s: d.s, o: d.o, a: d.a, d: d.d, why: d.why, kind: '示范' } })
+        : (S.src === 'quiz' ? S.quiz : S.bank).slice()
       let pool = shuffle(srcPool).slice(0, n)
       if (!pool.length) return []
       /* 预算：实验室算过就按每题预算，否则按难度默认 */
@@ -976,7 +995,7 @@
     }
     function startRun(resumeData) {
       let queue = resumeData ? resumeData.queue : pickQueue()
-      if (!queue.length) { toast(S.src === 'bank' ? '站内题库没有可用的选择题——先切「内置示范题」' : '题池是空的', 'warn'); return }
+      if (!queue.length) { toast(S.src === 'bank' ? '错题本里没有可用的选择题——切「站内题库」或「内置示范题」' : (S.src === 'quiz' ? '站内公共题库还没有可练的题（出题家入库后就有）——先用示范题' : '题池是空的'), 'warn'); return }
       S.run = {
         id: 'pd-' + Date.now().toString(36),
         at: Date.now(),
@@ -1037,7 +1056,7 @@
       stopClock()
       let sec = r.qSec
       let ok = pickIdx != null && pickIdx === q.a
-      r.qs.push({ id: q.id, sec: sec, budget: num(q.budget, 110), act: act, ok: ok, d: num(q.d, 2) })
+      r.qs.push({ id: q.id, sec: sec, budget: num(q.budget, 110), act: act, ok: ok, d: num(q.d, 2), st: String(q.s || '').slice(0, 140), why: String(q.why || '').slice(0, 160) })
       r.verdict = { pick: pickIdx, ok: ok, sec: sec, budget: num(q.budget, 110), act: act }
       r.phase = 'verdict'
       persistRun()
@@ -1086,7 +1105,7 @@
       if (act === 'goto-lab') { go('lab'); return }
       if (act === 'lab-tpl') { S.labTpl = a.getAttribute('data-k'); paint(); return }
       if (act === 'lab-start') { S.view = 'dojo'; startRun(); return }
-      if (act === 'dojo-src') { S.src = a.getAttribute('data-k'); paint(); return }
+      if (act === 'dojo-src') { S.src = a.getAttribute('data-k'); try { ctx.data('pdSrc', S.src) } catch (e) { } paint(); return }
       if (act === 'dojo-start') { startRun(); return }
       if (act === 'resume-yes') { startRun(S.resume); return }
       if (act === 'resume-no') { S.resume = null; clearRunKeep(); paint(); return }
