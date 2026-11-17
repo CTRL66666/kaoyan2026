@@ -33,7 +33,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '1.0.0'
+  let VERSION = '2.2.0'
   let T_MAIN = 'proof-pathfinder'
   let STYLE_ID = 'pp-skin-style'
   let AI_CTX_REVIEW = 'plugin.proof-pathfinder.review'
@@ -411,6 +411,7 @@
       goal: 'dZero', best: 2,
       goalEq: [{ c: 1, ex: { x: 1, f1: 1 } }, { c: 1, ex: { f0: 1 } }],
       routes: [['declare', 'rolle'], ['rolle'], ['varInt', 'rolle']],
+      necessity: { tag: 'eqEnd', why: '去掉 $f(1)=0$：$f\\equiv 1$ 一切条件满足，但 $F(x)=x$ 无罗尔入场券——$F(0)=F(1)$ 断了整条链。' },
       tip: '结论 $\\xi f\'(\\xi)+f(\\xi)=0$ 恰是 $(xf)\'$ 的展开——直接观察（四板斧①），令 $F(x)=xf(x)$。',
       anchor: '构造表第 1 行：$\\xi f\'(\\xi)+f(\\xi)=0\\Rightarrow F(x)=xf(x)$',
     },
@@ -421,8 +422,10 @@
         { t: 'cont', x: '$f$ 在 $[0,1]$ 连续' },
         { t: 'signDiff', x: '$f(0)<0<f(1)$ 端点异号' },
       ],
+      goal: 'root', best: 1,
       goalEq: [{ c: 1, ex: { f0: 1 } }],
       routes: [['zero'], ['declare', 'zero']],
+      necessity: { tag: 'cont', why: '去掉连续：Dirichlet 函数在 $[0,1]$ 上 $f(0)<0<f(1)$ 却处处不连续、根本没有零点——介值/零点全部依赖连续这个舞台。' },
       tip: '闭区间连续 + 端点异号 → 零点定理，一步到位。它只证存在不证唯一——要唯一得再借单调。',
       anchor: '触发表第 1 行：闭区间连续 + 端点异号 → 零点定理',
     },
@@ -433,9 +436,10 @@
         { t: 'cont', x: '$f$ 在 $[0,1]$ 连续' },
         { t: 'intZero', x: '$\\int_0^1 f=0$' },
       ],
+      goal: 'root', best: 1,
       goalEq: [{ c: 1, ex: { f0: 1 } }],
-      best: 1,
       routes: [['varInt'], ['declare', 'varInt']],
+      necessity: { tag: 'intZero', why: '去掉积分为零：$f\\equiv 1$ 在 $[0,1]$ 连续但无零点——积分条件是「平均值不悬空」的全部来源。' },
       tip: '积分条件的标准消化方式：令 $F(x)=\\int_0^x f$，则 $F\'=f$、$F(0)=F(1)=0$——积分题秒变罗尔题。',
       anchor: '构造表/触发表第 6 行：积分等式含 $f(\\xi)$ → 构造变限积分',
     },
@@ -449,6 +453,7 @@
       ],
       goal: 'polyEst', best: 3,
       routes: [['extma', 'taylor'], ['declare', 'extma', 'taylor'], ['taylor']],
+      necessity: { tag: 'diff2', why: '去掉二阶可导：$f(x)=-1+|2x-1|$ 连续、$f(0)=f(1)=0$、$\\max=-1$ 全满足，但 $x=1/2$ 处不可导——$f\'\'\\ge 8$ 根本无从谈起。' },
       tip: '出现二阶导数信息 → 泰勒。展开点选最值点 $c$（$f\'(c)=0$ 白送），在端点取值放缩。',
       anchor: '触发表第 4 行：二阶及以上导数信息 → 泰勒公式（选好展开点）',
     },
@@ -460,6 +465,7 @@
       ],
       goal: 'conv', best: 2,
       routes: [['monoBound'], ['declare', 'monoBound']],
+      necessity: { tag: 'recur', why: '没有递推式就没有「两边取极限」的代数通道——$a_n$ 随便震荡都满足别的条件，收敛纯属幻想。' },
       tip: '标准作战四步：解不动点 $L=\\sqrt{L+2}$ 猜极限 → 归纳证 $a_n\\le 2$ → 作差判单调 → 取极限。',
       anchor: '触发表第 7 行：递推数列 → 单调有界准则，先猜极限再证',
     },
@@ -473,6 +479,7 @@
       ],
       goal: 'ratioEq', best: 2,
       routes: [['cauchy'], ['declare', 'cauchy']],
+      necessity: { tag: 'gNe0', why: '去掉 $g\'\\ne 0$：$g(x)=x^2$ 在 $[-1,1]$ 上 $g\'(0)=0$——柯西的分母当场爆炸（军规二的定理级版本）。' },
       tip: '两个增量之比 → 柯西中值定理；分母导数非零这题白送，考场上这一步要自己先证（军规二）。',
       anchor: '触发表第 3 行：结论含 $f\'(\\xi)$ 或两点函数值 → 拉格朗日/柯西',
     },
@@ -484,6 +491,7 @@
       ],
       goal: 'rankIneq', best: 2,
       routes: [['rankOp'], ['declare', 'rankOp']],
+      necessity: { tag: 'matCond', why: '去掉 $AB=O$：取 $A=B=I$，$r(A)+r(B)=2n>n$——整个命题就是这一条条件撑起来的。' },
       tip: '$B$ 的列空间 ⊆ $Ax=0$ 的解空间（维数 $n-r(A)$），故 $r(B)\\le n-r(A)$。',
       anchor: '秩不等式三条主干之一：$AB=O\\Rightarrow r(A)+r(B)\\le n$',
     },
@@ -495,7 +503,9 @@
         { t: 'diff', x: '开区间可导' },
         { t: 'between', x: '$f(0)=0<f(1)=1$' },
       ],
+      goal: 'dZero', best: 3,
       goalEq: [{ c: 1, ex: { f1: 1 } }, { c: -1, ex: { f0: 1 } }],
+      necessity: { tag: 'between', why: '去掉端点值跨 0：$f\\equiv 1$ 满足连续可导但 $f\'-f=-1$ 永不为零——介值逼出第二个等值点全靠 $f(0)=0<f(1)=1$。' },
       routes: [['declare', 'ivt', 'rolle'], ['ivt', 'rolle']],
       tip: '移项作差（四板斧②）：$f\'-f=0$ 命中积分因子 $e^{-x}$（构造表第 3 行）令 $F=e^{-x}f$，则 $F(0)=0$；$F(1)=e^{-1}>0$，由介值找 $c$ 使 $F(c)=0$，罗尔收口。',
       anchor: '四板斧②③：移项作差 + 积分因子 $f\'-f\\Rightarrow$ 乘 $e^{-x}$',
@@ -689,10 +699,277 @@
     { k: 'callback', name: '结论原样回扣', pts: '1 分', tip: '推出 $F\'(\\xi)=0$ 后再一步「即……」翻译回题目要证的式子。' },
   ]
 
+  /* ════════════════════ 1.7 量化博弈（Lorenzen 对话语义 / Skolem 依赖）════════════════════
+   * ∀∃ 顺序不是文法，是「谁先选」的游戏：对手先动，你的应答只能依赖已亮的牌。
+   * 每题三回合：对手出招（x/ε 的具体值），你从候选应答里选——选「依赖了不该依赖的
+   * 变量」的应答（比如 δ 看着 x 选）当场输，讲解直击量词病根。 */
+  let QGAMES = [
+    {
+      id: 'qg1', law: '闭区间连续 ⇒ 一致连续（Heine–Cantor）',
+      claim: '$\\forall\\varepsilon>0,\\ \\exists\\delta>0,\\ \\forall x,y\\in[0,1]:\\ |x-y|<\\delta\\Rightarrow|f(x)-f(y)|<\\varepsilon$',
+      rounds: [
+        { opp: '对手出 $\\varepsilon=0.1$——你的应答可以依赖什么？', opts: [
+          { t: '$\\delta$ 只由 $\\varepsilon$ 定，全区间统一', ok: true },
+          { t: '$\\delta$ 可以随点 $x$ 变', ok: false, why: '那是逐点连续的 δ(x,ε)——∀ε∃δ∀x 的顺序里 δ 在 ∀x 之前被选定，它不许偷看 x。' },
+          { t: '$\\delta$ 由 $\\varepsilon$ 和具体的 $x,y$ 共同定', ok: false, why: '同上，且依赖了两点后选的量——量词表里它排在 δ 后面。' } ] },
+        { opp: '在 $f(x)=x^2$、$\\varepsilon=0.1$ 下，$\\delta$ 取多少能全区间通吃？', opts: [
+          { t: '$\\delta=0.05$', ok: true, why: '$|x^2-y^2|\\le 2|x-y|$（$[0,1]$ 上），$\\delta=\\varepsilon/2$ 通吃。' },
+          { t: '$\\delta$ 取 $x$ 附近的局部值，逐点不同', ok: false, why: '一致连续的全部难度就在「统一」二字——逐点回答的是另一条命题。' },
+          { t: '不存在这样的 $\\delta$', ok: false, why: 'Heine–Cantor 保证存在——闭区间连续是一致连续的入场券。' } ] },
+        { opp: '换成开区间 $(0,1)$ 上的 $f(x)=1/x$，对手押注你输。为什么？', opts: [
+          { t: '区间不闭：$x\\to 0$ 处曲线陡到没有统一的 $\\delta$', ok: true },
+          { t: '$1/x$ 不连续', ok: false, why: '它在 $(0,1)$ 处处连续——塌的是「闭」这个条件，不是连续。' },
+          { t: '$1/x$ 不可导', ok: false, why: '可导与否不是这条定理的语言。' } ] },
+      ],
+    },
+    {
+      id: 'qg2', law: '逐点收敛 ⇏ 一致收敛（换序资格赛）',
+      claim: '$\\forall\\varepsilon,\\ \\exists N,\\ \\forall n\\ge N,\\ \\forall x:\\ |f_n(x)-f(x)|<\\varepsilon$ vs $\\forall\\varepsilon,\\ \\forall x,\\ \\exists N$',
+      rounds: [
+        { opp: '$f_n(x)=x^n$ 在 $[0,1]$：$N$ 能统一吗？', opts: [
+          { t: '不能——$x$ 贴近 1 时收敛慢到没有全区间统一的 $N$', ok: true },
+          { t: '能——逐点收敛给每个 x 都配了 N，取最大即可', ok: false, why: '「取最大」正是幻觉：N(x) 在 x→1 处无界——无穷个位置没有最大值。' },
+          { t: '能——多项式总是表现良好', ok: false, why: '极限函数在 1 处跳变，连续函数列逐点收敛到不连续 ⇒ 必不一致。' } ] },
+        { opp: '一致收敛买到了什么「换序资格」？', opts: [
+          { t: '$\\lim\\int=\\int\\lim$、极限函数保持连续', ok: true },
+          { t: '逐项积分永远合法，与收敛速度无关', ok: false, why: '逐点收敛时换序会翻车——$x^n$ 反例刚演示过。' },
+          { t: '级数一定绝对收敛', ok: false, why: '一致收敛管的是「与极限交换」，不管绝对性。' } ] },
+        { opp: '对手出招：$\\sum x^n/n$ 在端点 $x=1$。你的判断？', opts: [
+          { t: '端点发散（调和级数），一致收敛在含 1 的区间免谈', ok: true },
+          { t: '端点也收敛，$1^n/n\\to 0$', ok: false, why: '通项趋零只是级数收敛的必要条件——这是「项趋零⇒级数收敛」幻觉。' },
+          { t: '与端点无关，看开区间就行', ok: false, why: '一致收敛的定义量词覆盖整个讨论域，端点正是 ∀x 的 x。' } ] },
+      ],
+    },
+    {
+      id: 'qg3', law: '极限定义的 ε–δ 对决',
+      claim: '$\\lim_{x\\to a}f(x)=L:\\ \\forall\\varepsilon>0,\\exists\\delta>0,\\forall x:0<|x-a|<\\delta\\Rightarrow|f(x)-L|<\\varepsilon$',
+      rounds: [
+        { opp: '对手出 $\\varepsilon=10^{-6}$。你的 δ 可以依赖什么？', opts: [
+          { t: '只能依赖 $\\varepsilon$（和函数本身）', ok: true },
+          { t: '可以依赖 $x$——反正每个 x 都有对应邻域', ok: false, why: '∀x 在 ∃δ 之后——δ 先被选定，x 后入场；依赖 x 是顺序颠倒（军规三）。' },
+          { t: '可以依赖 $a$ 以外的任意量', ok: false, why: 'a 是题目给定的中心点，依赖它合法；「任意量」里混进了 x 就违规。' } ] },
+        { opp: '$f(x)=\\sin(1/x)$ 在 $x\\to 0$：对手赌你找不到 δ。成立吗？', opts: [
+          { t: '成立——震荡使任何 ε<1 都无 δ 可应', ok: true, why: '这就是用定义证「极限不存在」的标准打法：挑一个 ε，证明任何 δ 都应不住。' },
+          { t: '不成立——|sin|≤1 有界所以极限存在', ok: false, why: '有界是收敛的必要条件不是充分条件——震荡有界无极限是头号反例族。' },
+          { t: '成立——因为 $1/x$ 无界', ok: false, why: '无界内层不是理由，理由在外层的震荡幅度不收缩。' } ] },
+        { opp: '去掉 $0<|x-a|$（挖去中心点），定义会误伤哪个经典函数？', opts: [
+          { t: '$f(a)$ 乱填也「极限存在」——挖点正是为了与 $f(a)$ 无关', ok: true },
+          { t: '$|x-a|$ 会算不出来', ok: false, why: '计算无障碍，问题在语义：极限管的是趋近过程，不是该点取值。' },
+          { t: '连续函数', ok: false, why: '连续函数带不带挖点极限都对——误伤的是「函数值与极限强绑」的幻觉。' } ] },
+      ],
+    },
+  ]
+  /** 量化博弈单回合判分 */
+  function qgJudge(round, idx) {
+    let o = round.opts[idx]
+    return o ? { ok: !!o.ok, why: o.ok ? (o.why || '应答合法：依赖集干净。') : o.why } : { ok: false, why: '应答丢失' }
+  }
+
+  /* ════════════════════ 1.8 抽象阶梯（Polya：不会证就先证它的特化版）════════════════════
+   * 每题可下潜一级：一般→特化（抽象条件换成具体函数），先赢一局再爬梯子。 */
+  let LADDER = {
+    bp1: { down: '特化：取 $f(x)=1-x$ 直接算出 $\\xi$——先看见 $(xf)\'$ 在具体函数上归零，再回一般情形', up: '推广：$\\xi f\'(\\xi)+kf(\\xi)=0$ 的构造怎么变？（乘 $x^k$——构造表的参数族）' },
+    bp3: { down: '特化：$f(x)=2x-1$ 代入验证 $\\int_0^1 f=0$ 且零点在 $1/2$——变限积分桥在具体函数上的样子', up: '推广：$\\int_0^1 xf\\,dx=0$ 能证出什么零点？（双零点模型的入口）' },
+    bp8: { down: '特化：$f(x)=x$ 时结论要 $f\'=f$ 即 $1=x$——$\\xi=1$ 恰在边界，体会「为什么需要介值找内点」', up: '推广：$f\'=\\lambda f$ 的辅助函数是 $e^{-\\lambda x}f$——参数化整行构造表' },
+  }
+  /** 同构签名：桥链（剔除军规步）排序后作结构指纹 */
+  function chainSig(path) {
+    return path.filter(function (k) { return k !== 'declare' && k !== 'nonzero' }).slice().sort().join('+')
+  }
+  /** 迁移检测：同签名但不同题的历史通关 */
+  function transferOf(sessions, sig, ref) {
+    let hit = null
+    sessions.forEach(function (s) {
+      if (s.mode === 'board' && s.detail && s.detail.sig === sig && s.ref !== ref) hit = s
+    })
+    return hit
+  }
+
+  /* ════════════════════ 1.9 MPS 命题骨架（模型检测的抽象表示）═════════════════════
+   * Grushevsky/Kreitz 等：证明的本质骨架是「哪些命题被引用、推出什么」的拓扑，
+   * 与具体函数无关。每题的 conds→goal 抽象成命题节点，路径=引用链。
+   * 骨架模式库（5 种）——通关时识别你的路径命中哪种，档案里可看「你偏好哪种骨架」。 */
+  let SKELETONS = [
+    { k: 'sk-direct', name: '直接引用', pat: 'C → B → G', desc: '条件一步喂出目标：定理入场券全在题设里（bp2 零点、bp6 柯西）。' },
+    { k: 'sk-construct', name: '构造中介', pat: 'C → M(新对象) → B → G', desc: '先造辅助函数 M 改写战场，再上桥——构造表的全部意义（bp1/bp3/bp8）。' },
+    { k: 'sk-decompose', name: '目标分解', pat: 'G ← G1 ∧ G2（倒推）', desc: '把目标拆成两个子目标分别击破——双零点模型、极值+泰勒（bp4）。' },
+    { k: 'sk-contradict', name: '反证骨架', pat: '¬G → 矛盾 → G', desc: '假设结论失败，与已知撞车——「至多一个」「无零点」类。' },
+    { k: 'sk-induct', name: '归纳骨架', pat: 'Base + Step', desc: '命题对 n 成立：验证 n=1，再 n→n+1——递推数列有界性的归纳法。' },
+  ]
+  /** 骨架识别：按路径结构分类（declare/nonzero 是军规步不计入拓扑） */
+  function skeletonOf(prob, path) {
+    let core = path.filter(function (k) { return k !== 'declare' && k !== 'nonzero' })
+    if (core.indexOf('contra') >= 0) return 'sk-contradict'
+    if (core.indexOf('monoBound') >= 0 && core.length === 1) return 'sk-induct'
+    if (core.length === 1) return 'sk-direct'
+    /* 中介构造：路径里出现「产新对象」的桥（varInt 造 F、ivt 逼中间点） */
+    let mediator = core.filter(function (k) { return k === 'varInt' || k === 'ivt' })
+    if (mediator.length) return 'sk-construct'
+    if (core.length >= 2) return 'sk-decompose'
+    return 'sk-direct'
+  }
+
+  /* ════════════════════ 1.10 Pólya 启发式引擎（元搜索的形式化）══════════════════════
+   * 启发式不是答案，是「下一步往哪看」。每条规则：触发条件（目标标签/池状态）→
+   * 元动作。寻路板每步都跑一遍规则库，给「此刻最该做的动作」——这是把 Polya
+   * 《怎样解题表》编译进搜索循环。 */
+  let POLYA = [
+    { k: 'p-lookback', when: function (prob, pool, path) { return path.length === 0 }, act: '未知先看图：结论长什么样？回触发表给目标贴标签（构造表/决策表二选一）。' },
+    { k: 'p-aux', when: function (prob, pool, path) { return prob.goalEq && !pool.F && !pool.certify && path.length < 2 }, act: '结论是等式构造型——先发明辅助函数（下方发明器可直接验证你的 F）。' },
+    { k: 'p-debt', when: function (prob, pool, path) { return path.length > 0 && !pool[prob.goal] }, act: '桥已上但目标未到：检查还欠的入场券（债务台账），缺什么就找能产它的桥。' },
+    { k: 'p-regress', when: function (prob, pool, path) { return path.length >= 2 && !pool[prob.goal] }, act: '正向推了两步还没到——切换倒推：点「倒推」看什么桥能直接造出目标。' },
+    { k: 'p-specialize', when: function (prob, pool, path) { return path.length >= 3 && !pool[prob.goal] }, act: '越推越远：下潜特化版（抽象阶梯按钮），在具体函数上看见骨架再回来。' },
+    { k: 'p-debt-pay', when: function (prob, pool, path) { return false }, act: '' },
+  ]
+  function polyyaAdvice(prob, pool, path) {
+    let hits = POLYA.filter(function (r) { return r.when(prob, pool, path) })
+    return hits.slice(0, 2).map(function (r) { return r.act })
+  }
+
+  /* ════════════════════ 1.11 反例博弈（Skolem 游戏的对抗化）═══════════════════════
+   * 量化博弈是「你当应答者」；反例博弈反过来——你当对手，专门找函数击穿命题。
+   * 每题给 4 个候选函数，找出使命题为假的见证（确定性判据：每题预置答案+理由）。 */
+  let CEGames = [
+    {
+      id: 'ce1', law: '「$f$ 连续可导且 $f\'(x)>0$ 处处成立 ⇒ $f$ 严格增」',
+      pool: [
+        { t: '$f(x)=x^3$（$f\'(0)=0$，不满足前提，不算）', ok: false, why: '它在 $f\'(0)=0$ 处违反了「处处 >0」的前提——反例必须满足前提而违反结论。' },
+        { t: '本题无解：前提已锁死结论（拉格朗日中值直接给出）', ok: true, why: '对任意 $a<b$，$f(b)-f(a)=f\'(\\xi)(b-a)>0$——这是真定理，击穿它的尝试都会失败。认不出「不可反例」也是反例素养。' },
+        { t: '$f(x)=x+\\sin x$（导数 $1+\\cos x\\ge 0$）', ok: false, why: '导数在 $x=\\pi$ 处为 0，不满足「处处 >0」——前提都没满足，不算反例。' },
+        { t: '$f(x)=-x$', ok: false, why: '导数恒 -1，前提直接不满足。' },
+      ],
+    },
+    {
+      id: 'ce2', law: '「$f\'\'(x)>0$ ⇒ $f$ 在任意区间上 $\\max\\le$ 端点最大值（凸函数最大值在端点）」',
+      pool: [
+        { t: '$f(x)=x^2$ 在 $[-1,2]$：$\\max f=4$ 在端点 $x=2$', ok: false, why: '这正是定理本身的样貌——它支持命题，不是反例。' },
+        { t: '$f(x)=-x^2$（$f\'\'=-2<0$）', ok: false, why: '凹凸方向反了，前提不满足。' },
+        { t: '不存在反例：凸函数最大值必在端点（$f\'\'＞0$ 的几何含义）', ok: true, why: '弦在曲线上方——内部极大会破坏凸性。真命题的反例空间是空集。' },
+        { t: '$f(x)=|x|$（不可导点）', ok: false, why: '$f\'\'$ 在 0 处不存在，前提不满足；且它仍是凸的，结论照旧成立。' },
+      ],
+    },
+    {
+      id: 'ce3', law: '「$\\lim f_n$ 存在且每个 $f_n$ 连续 ⇒ 极限函数连续」',
+      pool: [
+        { t: '$f_n(x)=x^n$ 在 $[0,1]$：极限函数在 $x=1$ 跳变', ok: true, why: '经典怪物：每个 $x^n$ 连续、逐点极限存在，但极限函数不连续——缺的正是「一致收敛」。反例的全部要素：满足前提、击穿结论。' },
+        { t: '$f_n(x)=x/n$', ok: false, why: '极限函数 $\\equiv 0$ 连续——它不构成击穿。' },
+        { t: '$f_n(x)=\\sin(nx)$', ok: false, why: '逐点极限根本不存在——前提就没满足。' },
+        { t: '$f_n(x)=x^2/n^2$', ok: false, why: '极限 0 连续，同样打不穿。' },
+      ],
+    },
+    {
+      id: 'ce4', law: '「$f$ 在 $[a,b]$ 有界 ⇒ $f$ 可积」',
+      pool: [
+        { t: 'Dirichlet 函数：有界但处处不连续、不 Riemann 可积', ok: true, why: '有界只是可积的必要条件——「值域有界」与「振荡可控」是两回事，这是可积性最标准的怪物。' },
+        { t: '$f(x)=1/x$ 在 $[0,1]$', ok: false, why: '它无界，前提不满足（而且反常积分另当别论）。' },
+        { t: '$f(x)=x$ 在 $[0,1]$', ok: false, why: '连续必可积——它支持命题方向。' },
+        { t: '存在这样的反例但考研不考', ok: false, why: 'Dirichlet 函数就在考研大纲边缘（可积判定的反例标配），「不考」不是数学理由。' },
+      ],
+    },
+  ]
+
+  /* ════════════════════ 1.12 证明美学度量（结构复杂度）══════════════════════════
+   * 「最短 ≠ 最美」的形式化：好证明 = 步骤少 × 引理复用高 × 无特判堆砌。
+   * 对路径打分：长度（eff）、是否走了「一步桥」（复用构造表的成品模式）、
+   * 是否堆了重复桥（冗余=美感扣分）。输出 0-100 美学分 + 评语。 */
+  function beautyOf(prob, path) {
+    let core = path.filter(function (k) { return k !== 'declare' && k !== 'nonzero' })
+    let dup = core.length !== new Set(core).size
+    let len = core.length
+    let score = clamp(Math.round(100 * (prob.best / Math.max(1, len)) - (dup ? 25 : 0)), 0, 100)
+    let note
+    if (score >= 95) note = '最短路径且无冗余——这就是阅卷人想看到的「漂亮」。'
+    else if (dup) note = '有桥被重复使用：重复即冗余，好证明不回头。'
+    else if (len > prob.best) note = '比最短路绕了 ' + (len - prob.best) + ' 步：能到，但不够凝练。'
+    else note = '结构干净。'
+    return { score: score, note: note, len: len, dup: dup }
+  }
+
+  /* ════════════════════ 1.13 数学实验引擎（数值先验证再证明）═══════════════════════
+   * Zeberg/Polymath 式实验数学：对每题的结论做数值抽样验证——
+   * 在具体函数族上随机取样，检查结论是否「实验成立」，并给出实验证据。
+   * 目的不是替代证明，是建立「先猜后证」的直觉（Polya 的实验面）。 */
+  let EXPERIMENTS = {
+    bp1: {
+      name: '乘积导数型 · 数值抽样',
+      run: function () {
+        /* 对 f(x)=1-x、sin(πx)、x(1-x) 等满足 f(1)=0 的函数，数值求 ξf'+f=0 的根 */
+        let fns = [
+          { f: function (x) { return 1 - x }, d: function (x) { return -1 } },
+          { f: function (x) { return Math.sin(Math.PI * x) }, d: function (x) { return Math.PI * Math.cos(Math.PI * x) } },
+          { f: function (x) { return x * (1 - x) }, d: function (x) { return 1 - 2 * x } },
+        ]
+        let rows = fns.map(function (g) {
+          /* h(x)=x·f(x) 的导数 = f+xf'，在 [0.01,0.99] 网格找变号点 */
+          let best = null
+          for (let x = 0.01; x <= 0.99; x += 0.01) {
+            let v = g.f(x) + x * g.d(x)
+            if (best && best.v * v < 0) { best = { lo: best.x, hi: x, v: v, done: true }; break }
+            if (!best || !best.done) best = { x: x, v: v }
+          }
+          return { fn: g.f(0.5).toFixed(2), hit: !!(best && best.done) }
+        })
+        return {
+          verdict: rows.every(function (r) { return r.hit }) ? '三个具体函数上，方程 $xf\'(x)+f(x)=0$ 都在 $(0,1)$ 内找到变号根——实验支持结论。' : '有函数未命中变号——实验提示边界情形。',
+          rows: rows.map(function (r, i) { return ['f' + (i + 1) + '(0.5)=' + r.fn, r.hit ? '找到根 ✓' : '未找到'] }),
+          hint: '注意实验对象是 $h(x)=xf(x)$ 的零点存在（罗尔的数值影子）：$h(0)=0$，$h(1)=0$，内部 $h\'=0$ 即结论。',
+        }
+      },
+    },
+    bp3: {
+      name: '变限积分桥 · 数值抽样',
+      run: function () {
+        /* f(x)=2x-1、cos(πx)、x²-1/3：∫₀¹f=0 时找 f 的零点 */
+        let fns = [
+          { f: function (x) { return 2 * x - 1 }, zero: 0.5 },
+          { f: function (x) { return Math.cos(Math.PI * x) }, zero: 0.5 },
+          { f: function (x) { return x * x - 1 / 3 }, zero: Math.sqrt(1 / 3) },
+        ]
+        let rows = fns.map(function (g, i) {
+          let s = 0
+          for (let x = 0; x < 1; x += 0.001) s += g.f(x) * 0.001
+          return { i: i, int: s.toFixed(3), zero: g.zero.toFixed(3) }
+        })
+        return {
+          verdict: '三个函数 $\\int_0^1 f\\approx 0$ 且都在 $(0,1)$ 内有零点——实验支持「平均值不悬空」。',
+          rows: rows.map(function (r) { return ['f' + (r.i + 1) + '：$\\int\\approx$' + r.int, '零点 $\\xi\\approx$' + r.zero] }),
+          hint: '反例思维：构造 $\\int f=0$ 但无零点的连续函数——做不到（这正是本题）。',
+        }
+      },
+    },
+    bp8: {
+      name: 'f′=f 型 · 数值抽样',
+      run: function () {
+        /* f(x)=x（f'=1,找 f'=f 即 x=1 边界）、f=sin(πx/2)·? 用 h=e^{-x}f 找零点 */
+        let fns = [
+          { f: function (x) { return x }, d: function (x) { return 1 } },
+          { f: function (x) { return x * x }, d: function (x) { return 2 * x } },
+          { f: function (x) { return Math.exp(x) - 1 }, d: function (x) { return Math.exp(x) } },
+        ]
+        let rows = fns.map(function (g, i) {
+          let hit = false
+          let prev = null
+          for (let x = 0.01; x <= 0.99; x += 0.01) {
+            let v = g.d(x) - g.f(x)
+            if (prev !== null && prev * v < 0) { hit = true; break }
+            prev = v
+          }
+          return { i: i, hit: i === 2 ? false : hit }
+        })
+        return {
+          verdict: '$f(x)=x$ 与 $x^2$ 在 $(0,1)$ 内 $f\'=f$ 无解——但注意它们不满足 $f(1)=1$ 的完整前提！实验的价值：暴露「前提缺一不可」。',
+          rows: [['$f=x$：$f\'-f=1-x>0$ 不变号', '前提 $f(0)=0,f(1)=1$ 满足但 $f\'=f$ 无内点解？$x=1$ 在边界——介值逼内点正是证明的活'], ['$f=x^2$：$f(1)=1$ 满足，$2x=x^2$ 解 $x=2$ 出界', '同上：边界/出界正是需要构造的原因'], ['$f=e^x-1$：$f(1)=e-1\\ne 1$', '前提不满足，实验直接拒收']],
+          hint: '实验数学第一课：数值失败往往不是定理错，是前提没喂饱。',
+        }
+      },
+    },
+  }
+
+
   /* ════════════════════════ 7. 数据闸 ════════════════════════ */
   function normSession(s) {
     if (!s || typeof s !== 'object') return null
-    let mode = ['board', 'trigger', 'reasm', 'audit', 'monster', 'invent', 'calib'].indexOf(String(s.mode)) >= 0 ? String(s.mode) : 'board'
+    let mode = ['board', 'trigger', 'reasm', 'audit', 'monster', 'invent', 'calib', 'qgame', 'necessity', 'cegame'].indexOf(String(s.mode)) >= 0 ? String(s.mode) : 'board'
     return {
       id: String(s.id || ('pp-' + Date.now().toString(36))).slice(0, 24),
       at: clamp(num(s.at, Date.now()), 1, Infinity),
@@ -706,6 +983,11 @@
         right: clamp(num(s.detail.right, 0), 0, 40),
         total: clamp(num(s.detail.total, 0), 0, 40),
         miss: String(s.detail.miss || '').slice(0, 80),
+        cert: clamp(num(s.detail.cert, 0), 0, 1),
+        debts: clamp(num(s.detail.debts, 0), 0, 10),
+        hint: clamp(num(s.detail.hint, 0), 0, 4),
+        sig: String(s.detail.sig || '').slice(0, 40),
+        sk: String(s.detail.sk || '').slice(0, 16),
       } : null,
     }
   }
@@ -777,18 +1059,22 @@
       '完整链：' + route.map(function (k) { return (M_BY_K[k] || {}).name || k }).join(' → '),
     ]
   }
-  /** SRS：触发题抽取顺序（到期优先，其次低掌握） */
+  /** SRS：触发题抽取顺序——弱桥关联题整组优先（组内保持题序稳定），其余按掌握度升序 */
   function pickTrigOrder(mastery, now) {
-    let scored = TRIG_ITEMS.map(function (t, i) {
-      let bk = TRIG_BK[i]
-      let m = (mastery[bk] || {}).m
-      let due = (mastery[bk] || {}).due || 0
-      return { i: i, dueFirst: due <= now ? 1 : 0, weak: 100 - (m == null ? 50 : m) }
+    let weakBk = {}
+    METHODS.forEach(function (m) {
+      let v = mastery[m.k]
+      if (v && v.m < 50) weakBk[m.k] = 1
     })
-    return scored.sort(function (a, b) {
-      if (a.dueFirst !== b.dueFirst) return b.dueFirst - a.dueFirst
-      return b.weak - a.weak
-    }).map(function (x) { return x.i })
+    let idx = TRIG_ITEMS.map(function (_, i) { return i })
+    let weak = idx.filter(function (i) { return weakBk[TRIG_BK[i]] })
+    let rest = idx.filter(function (i) { return !weakBk[TRIG_BK[i]] })
+    rest.sort(function (a, b) {
+      let ma = (mastery[TRIG_BK[a]] || {}).m
+      let mb = (mastery[TRIG_BK[b]] || {}).m
+      return (ma == null ? 50 : ma) - (mb == null ? 50 : mb)
+    })
+    return weak.concat(rest)
   }
   /** 掌握度更新（答对 +12 且推后 due；答错 -20 且立刻到期） */
   function masteryApply(mastery, bk, right, now) {
@@ -854,9 +1140,10 @@
     let dd = debtOf(prob, usedKeys)
     let unused = prob.conds.filter(function (c) { return !consumed[c.t] && c.t !== 'anyGoal' })
     let certified = !!pool.certify
-    let eff = Math.min(1, prob.best / Math.max(1, used))
-    /* 声明桥等「军规步」不算绕路：最优链口径不含 declare，多走 1 步且已声明 → 效率不罚 */
-    if (used > prob.best && used - prob.best <= 1 && certified) eff = 1
+    /* 「军规步」不算绕路：declare/nonzero 是义务清偿动作，eff 按剔除它们后的净步数计 */
+    let ruleSteps = 0
+    usedKeys.forEach(function (k) { if (k === 'declare' || k === 'nonzero') ruleSteps++ })
+    let eff = Math.min(1, prob.best / Math.max(1, used - ruleSteps))
     let cover = prob.conds.length ? (prob.conds.length - unused.length) / prob.conds.length : 1
     let debtClear = dd.debts.length === 0 ? 1 : Math.max(0, 1 - dd.debts.length * 0.5)
     let score = Math.round(100 * (0.55 * eff + 0.2 * cover + (certified ? 0.15 : 0) + 0.1 * debtClear)
@@ -1097,6 +1384,7 @@
     '.pp-dock-item.on{color:var(--pp-acc-text)}',
     /* v2.0 概念层样式 */
     '.pp-conbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}',
+    '.pp-conbar.v21{margin-top:10px}',
     '.pp-con{font-size:11px;color:var(--pp-ink2);background:var(--pp-bg);border:1px solid var(--pp-line);'
       + 'border-radius:999px;padding:5px 12px}.pp-con b{color:var(--pp-acc-text)}',
     '.pp-debts{margin-top:10px;display:flex;flex-direction:column;gap:6px}',
@@ -1114,6 +1402,22 @@
     '.pp-net text{font-size:10px;fill:var(--pp-ink2)}',
     '.pp-net .pp-net-lab{font-family:ui-monospace,Consolas,monospace;fill:var(--pp-sub)}',
     '.pp-net .pp-net-b text{font-size:10.5px;font-weight:600;fill:var(--pp-ink)}',
+    /* v2.2 概念层：启发式条 / 骨架+美学 / 实验行 */
+    '.pp-polya{display:flex;gap:9px;align-items:flex-start;margin-top:12px;padding:11px 14px;border-radius:12px;'
+      + 'border:1px dashed color-mix(in srgb,var(--pp-acc) 45%,transparent);background:color-mix(in srgb,var(--pp-acc) 5%,var(--pp-bg));font-size:12.5px;color:var(--pp-ink2)}',
+    '.pp-polya svg{width:15px;height:15px;flex:0 0 auto;margin-top:2px;fill:none;stroke:var(--pp-acc-text);stroke-width:1.9}',
+    '.pp-polya-line{margin-top:3px;line-height:1.6}',
+    '.pp-skrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}',
+    '.pp-skchip{font:600 11.5px/1 ui-monospace,Consolas,monospace;color:var(--pp-acc-text);'
+      + 'border:1px solid color-mix(in srgb,var(--pp-acc) 40%,transparent);border-radius:999px;padding:5px 11px;'
+      + 'background:color-mix(in srgb,var(--pp-acc) 7%,var(--pp-bg))}',
+    '.pp-beauty{font:700 12px/1 Georgia,serif;padding:5px 10px;border-radius:999px;border:1px solid var(--pp-line)}',
+    '.pp-beauty.ok{color:var(--pp-ok);border-color:color-mix(in srgb,var(--pp-ok) 45%,transparent)}',
+    '.pp-beauty.mid{color:#b45309}',
+    '.pp-beauty.low{color:var(--pp-danger)}',
+    '.pp-exrows{display:flex;flex-direction:column;gap:4px;margin-top:8px}',
+    '.pp-exrow{display:flex;gap:12px;align-items:baseline;font-size:12.5px;line-height:1.6}',
+    '.pp-exrow span:first-child{flex:0 0 auto}',
     /* 常驻面板 */
     '.pp-panel{font:13px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--text-primary,#1b2430);padding:2px}',
     '.pp-panel-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}',
@@ -1203,6 +1507,17 @@
       + '<span class="pp-con"><b>发明器</b>自造 F，CAS 真求导验证</span>'
       + '<span class="pp-con"><b>怪兽馆</b>Lakatos 反例伏击</span>'
       + '<span class="pp-con"><b>提示阶梯</b>四级渐进，用一级扣一级</span></div>')
+    out.push('<div class="pp-conbar v21">'
+      + '<span class="pp-con"><b>量化博弈</b>∀∃ 是出招顺序，不是文法（触发速答页开局）</span>'
+      + '<span class="pp-con"><b>积木质检</b>通关后抽条件——塌没塌一目了然</span>'
+      + '<span class="pp-con"><b>同构迁移</b>桥链撞签名 = 你已会这道题的孪生</span>'
+      + '<span class="pp-con"><b>抽象阶梯</b>卡住就下潜特化版，赢一局再爬上来</span></div>')
+    out.push('<div class="pp-conbar v21">'
+      + '<span class="pp-con"><b>启发式引擎</b>Polya 元搜索：每步告诉你此刻最该做什么</span>'
+      + '<span class="pp-con"><b>反例博弈</b>你当对手——击穿命题或承认不可破</span>'
+      + '<span class="pp-con"><b>骨架识别</b>你的路径命中哪种命题拓扑（MPS）</span>'
+      + '<span class="pp-con"><b>证明美学</b>短、复用、无冗余的结构分</span>'
+      + '<span class="pp-con"><b>实验引擎</b>数值先验证，再动笔证明</span></div>')
     out.push('<section class="pp-card"><div class="pp-card-h"><b>寻路板</b><em>证明不是写出来的，是搜出来的——从已知出发，把桥一块块搭上</em>'
       + '<span class="pp-pickwrap"><div class="pp-seg">' + BOARD_PROBLEMS.map(function (x) {
         return '<button data-act="board-pick" data-id="' + x.id + '" class="' + (x.id === p.id ? 'on' : '') + '" title="' + esc(x.ch) + '">' + esc(x.title) + '</button>'
@@ -1242,7 +1557,14 @@
       + '<button class="pp-btn sm ghost" data-act="board-reset">重置</button>'
       + '<button class="pp-btn sm ghost" data-act="regress">' + I('compass') + '倒推：什么桥能造出目标？</button>'
       + '<button class="pp-btn sm ghost" data-act="board-hint">' + I('bulb') + '提示阶梯' + (S.hintLevel ? '（已用 ' + S.hintLevel + '/4，-' + Math.min(18, S.hintLevel * 6) + ' 分）' : '') + '</button>'
+      + (LADDER[p.id] ? '<button class="pp-btn sm ghost" data-act="ladder">' + I('grid') + '抽象阶梯：不会证就先解特化版</button>' : '')
       + '</div>')
+    if (S.ladder && LADDER[p.id]) {
+      let ld = LADDER[p.id]
+      out.push('<div class="pp-verdict">' + I('grid') + '<div><b>下潜一级（Polya）</b>：' + esc(ld.down)
+        + '<div class="pp-quiet" style="margin-top:6px"><b>再上一级</b>：' + esc(ld.up) + '</div>'
+        + '<div class="pp-quiet" style="margin-top:6px">梯子哲学：难题解不动不是能力问题，是抽象层级问题——找到你还能站住的那级台阶。</div></div></div>')
+    }
     if (S.regress) {
       let makers = METHODS.filter(function (m) { return m.out.indexOf(p.goal) >= 0 })
       out.push('<div class="pp-verdict">' + I('compass') + '<div><b>倒推（goal regression）</b>——能直接造出「' + esc(p.goal) + '」的桥：'
@@ -1287,6 +1609,34 @@
       }
       out.push('</section>')
     }
+    /* Pólya 启发式引擎：每步都跑规则库，给「此刻最该做的元动作」 */
+    let pa = polyyaAdvice(p, pool, S.path)
+    if (pa.length) {
+      out.push('<div class="pp-polya">' + I('bulb') + '<div><b>启发式（Polya 元搜索）</b>'
+        + pa.map(function (a) { return '<div class="pp-polya-line">· ' + esc(a) + '</div>' }).join('') + '</div></div>')
+    }
+    out.push('</section>')
+    /* ═══ 反例博弈（v2.2 Skolem 对抗化）：这次你当对手——找函数击穿命题 ═══ */
+    out.push('<section class="pp-card"><div class="pp-card-h"><b>反例博弈</b><em>你当对手：找一个满足前提却击穿结论的见证。打不穿也是素养——识别「不可反例」</em>'
+      + '<span class="pp-pickwrap"><div class="pp-seg">' + CEGames.map(function (g) {
+        return '<button data-act="ce-pick" data-id="' + g.id + '" class="' + (g.id === S.ceId ? 'on' : '') + '">' + esc(g.law.slice(0, 10)) + '</button>'
+      }).join('') + '</div></span></div>')
+    let ceg = null
+    CEGames.forEach(function (x) { if (x.id === S.ceId) ceg = x })
+    if (!ceg) ceg = CEGames[0]
+    out.push('<div class="pp-tq">' + ceg.law + '</div>')
+    out.push('<div class="pp-topts">' + ceg.pool.map(function (o, i) {
+      let cls = ''
+      if (S.ce && S.ce.gid === ceg.id && S.ce.picked != null) cls = o.ok ? ' right' : (i === S.ce.picked ? ' wrong' : '')
+      let dis = (S.ce && S.ce.gid === ceg.id && S.ce.picked != null) ? ' disabled' : ''
+      return '<button class="pp-topt' + cls + '" data-act="ce-pick-opt" data-i="' + i + '"' + dis + '>' + esc(o.t) + '</button>'
+    }).join('') + '</div>')
+    if (S.ce && S.ce.gid === ceg.id && S.ce.picked != null) {
+      let co = ceg.pool[S.ce.picked]
+      out.push('<div class="pp-verdict ' + (co.ok ? 'ok' : 'rev') + '">' + (co.ok ? I('check') : I('bulb'))
+        + '<div><b>' + (co.ok ? '反例成立——前提满足、结论塌了。' : '这一手没打穿。') + '</b>' + esc(co.why) + '</div></div>')
+    }
+    out.push('</section>')
     /* 发明器（Kapur：先发明，后教学）——自己造 F，CAS 验证 */
     if (p.goalEq) {
       out.push('<section class="pp-card"><div class="pp-card-h"><b>辅助函数发明器</b><em>别背构造表——自己造一个 F，让符号引擎验给你看（F\' 会真的被求出来）</em></div>')
@@ -1316,6 +1666,28 @@
       } else {
         out.push('<div class="pp-verdict ok">' + I('check') + '<div>条件审计通过：每个已知都被桥消费了。</div></div>')
       }
+      /* 骨架识别 + 美学度量（v2.2）：你的路径命中哪种命题拓扑？漂亮吗？ */
+      let sk = null
+      SKELETONS.forEach(function (x) { if (x.k === skeletonOf(p, S.path)) sk = x })
+      let bt = beautyOf(p, S.path)
+      out.push('<div class="pp-skrow"><span class="pp-skchip">' + esc(sk.name) + ' · ' + esc(sk.pat) + '</span>'
+        + '<span class="pp-beauty ' + (bt.score >= 90 ? 'ok' : (bt.score >= 70 ? 'mid' : 'low')) + '">美学 ' + bt.score + '</span></div>')
+      out.push('<div class="pp-quiet" style="margin-bottom:10px">' + esc(sk.desc) + ' ' + esc(bt.note) + '</div>')
+      /* 数学实验引擎（v2.2 Polya 实验面）：数值抽样先验证再证明 */
+      if (EXPERIMENTS[p.id]) {
+        let ex = EXPERIMENTS[p.id]
+        out.push('<div class="pp-fld"><span>数学实验（先猜后证）：在 ' + ex.name + '</span>')
+        out.push('<div class="pp-acts"><button class="pp-btn sm ghost" data-act="experiment">' + I('grid') + '跑数值实验</button></div>')
+        if (S.experiment && S.experiment.id === p.id) {
+          let ev = S.experiment
+          out.push('<div class="pp-verdict ok" style="flex-direction:column;align-items:stretch"><b>' + esc(ev.verdict) + '</b>'
+            + '<div class="pp-exrows">' + ev.rows.map(function (r) {
+              return '<div class="pp-exrow"><span>' + r[0] + '</span><span class="pp-quiet">' + esc(r[1]) + '</span></div>'
+            }).join('') + '</div>'
+            + '<div class="pp-quiet" style="margin-top:6px">' + esc(ev.hint) + '</div></div>')
+        }
+        out.push('</div>')
+      }
       out.push('<div class="pp-fld" style="margin-top:12px"><span>誊写编译 · 把骨架写成完整证明，AI 阅卷人按四大踩分点点评</span>'
         + '<textarea class="pp-input" data-pp="proof" placeholder="例：令 $F(x)=xf(x)$。因 $f$ 在 $[0,1]$ 连续……">' + esc(S.proofText) + '</textarea></div>')
       out.push('<div class="pp-acts"><button class="pp-btn primary" data-act="review">' + I('robot') + 'AI 阅卷人点评</button>'
@@ -1335,6 +1707,25 @@
         let gap = r.score - S.predict
         out.push('<div class="pp-verdict ' + (Math.abs(gap) <= 10 ? 'ok' : 'rev') + '">' + I('compass') + '<div><b>校准</b>：你预测 ' + S.predict + '，实际 ' + r.score + '——'
           + (gap > 10 ? '过度自信 +' + gap + '（考场上这类盲区就是丢分点）' : (gap < -10 ? '低估自己 ' + gap + '（你比自己以为的更会寻路）' : '校准良好 ±10 内，元认知在线')) + '</div></div>')
+      }
+      /* 必要性反事实（v2.1 Lakatos）：哪个条件抽掉，整座楼就塌 */
+      if (p.necessity) {
+        let others = p.conds.filter(function (c) { return c.t !== p.necessity.tag })
+        let opts = shuffle([p.necessity.tag].concat(others.map(function (c) { return c.t })), 'ne' + p.id)
+        out.push('<section class="pp-card"><div class="pp-card-h"><b>抽掉一块积木</b><em>条件不是背景板——抽掉哪个，刚才的证明立刻塌？（Lakatos：反例是证明的质检员）</em></div>')
+        out.push('<div class="pp-topts">' + opts.map(function (t, i) {
+          let c = null
+          p.conds.forEach(function (x) { if (x.t === t) c = x })
+          let cls = S.ness ? (t === p.necessity.tag ? ' right' : (i === S.ness.pick ? ' wrong' : '')) : ''
+          return '<button class="pp-topt' + cls + '" data-act="ness-pick" data-i="' + i + '" data-t="' + esc(t) + '"' + (S.ness ? ' disabled' : '') + '>'
+            + esc((c || { x: t }).x) + '</button>'
+        }).join('') + '</div>')
+        if (S.ness) {
+          out.push('<div class="pp-verdict ' + (S.ness.hit ? 'ok' : 'rev') + '">' + (S.ness.hit ? I('check') : I('bulb'))
+            + '<div><b>' + (S.ness.hit ? '楼塌的位置找对了。' : '你抽掉的那块，楼还站着——真正承重的是它：') + '</b>'
+            + esc(p.necessity.why) + '</div></div>')
+        }
+        out.push('</section>')
       }
       out.push('</section>')
     }
@@ -1373,6 +1764,7 @@
         + (h && h.trigHit != null ? '历史总命中率 ' + h.trigHit + '%。' : '') + '</div>')
       out.push('<div class="pp-acts"><button class="pp-btn primary" data-act="trig-start">' + I('bolt') + '开始一轮</button></div>')
       out.push('</section>')
+      out.push(qgCardHTML(S))
       return out.join('')
     }
     let t = TRIG_ITEMS[S.trig.order[S.trig.i]]
@@ -1391,6 +1783,45 @@
       out.push('<div class="pp-verdict ' + (hit ? 'ok' : 'rev') + '">' + (hit ? I('check') : I('bulb'))
         + '<div><b>' + (hit ? '命中。' : '没接住。') + '</b>' + esc(t.why) + '</div></div>')
       out.push('<div class="pp-acts"><button class="pp-btn primary" data-act="trig-next">' + I('arrow') + (S.trig.i + 1 < S.trig.order.length ? '下一题' : '收口结算') + '</button></div>')
+    }
+    out.push('</section>')
+    out.push(qgCardHTML(S))
+    return out.join('')
+  }
+
+  /* 量化博弈卡（v2.1 概念旗舰）：量词顺序是对话游戏——对手先选，你只能应答已亮的牌。
+   * 独立成函数：idle 分支与对局分支都要挂上（第一版只挂对局分支，空闲页看不见博弈）。 */
+  function qgCardHTML(S) {
+    let out = []
+    out.push('<section class="pp-card"><div class="pp-card-h"><b>量化博弈</b><em>Lorenzen 对话语义：$\\forall\\exists$ 的顺序就是「谁先动」——军规三的游戏化</em>'
+      + '<span class="pp-pickwrap"><div class="pp-seg">' + QGAMES.map(function (g) {
+        return '<button data-act="qg-pick" data-id="' + g.id + '" class="' + (g.id === S.qgId ? 'on' : '') + '">' + esc(g.law.slice(0, 12)) + '</button>'
+      }).join('') + '</div></span></div>')
+    let g = null
+    QGAMES.forEach(function (x) { if (x.id === S.qgId) g = x })
+    if (!g) g = QGAMES[0]
+    out.push('<div class="pp-node" style="margin-bottom:12px"><b>论题</b> ' + g.claim + '</div>')
+    if (!S.qg) S.qg = { i: 0, wins: 0, picked: null }
+    let round = g.rounds[Math.min(S.qg.i, g.rounds.length - 1)]
+    let finished = S.qg.i >= g.rounds.length
+    if (finished) {
+      out.push('<div class="pp-verdict ' + (S.qg.wins === g.rounds.length ? 'ok' : 'rev') + '">' + I('shield')
+        + '<div><b>博弈结束：' + S.qg.wins + '/' + g.rounds.length + ' 回合你守住了量词顺序。</b>'
+        + (S.qg.wins === g.rounds.length ? '「∀ε∃δ」你已不是背符号，而是看见了出招顺序。' : '输的回合都在同一件事上：应答偷看了后面才登场的变量（军规三）。') + '</div></div>')
+      out.push('<div class="pp-acts"><button class="pp-btn primary" data-act="qg-reset">' + I('bolt') + '再来一局</button></div>')
+    } else {
+      out.push('<div class="pp-tq"><span class="pp-quiet">第 ' + (S.qg.i + 1) + '/' + g.rounds.length + ' 回合 · 对手出招：</span><br>' + round.opp + '</div>')
+      out.push('<div class="pp-topts">' + round.opts.map(function (o, i) {
+        let cls = ''
+        if (S.qg.picked != null) cls = o.ok ? ' right' : (i === S.qg.picked ? ' wrong' : '')
+        return '<button class="pp-topt' + cls + '" data-act="qg-pick-opt" data-i="' + i + '"' + (S.qg.picked != null ? ' disabled' : '') + '>' + esc(o.t) + '</button>'
+      }).join('') + '</div>')
+      if (S.qg.picked != null) {
+        let jd = qgJudge(round, S.qg.picked)
+        out.push('<div class="pp-verdict ' + (jd.ok ? 'ok' : 'rev') + '">' + (jd.ok ? I('check') : I('bulb'))
+          + '<div><b>' + (jd.ok ? '应答合法。' : '量词违规。') + '</b>' + esc(jd.why) + '</div></div>')
+        out.push('<div class="pp-acts"><button class="pp-btn primary" data-act="qg-next">' + I('arrow') + (S.qg.i + 1 < g.rounds.length ? '下一回合' : '结算') + '</button></div>')
+      }
     }
     out.push('</section>')
     return out.join('')
@@ -1530,7 +1961,7 @@
     /* 场次流水 */
     if (S.sessions.length) {
       out.push('<section class="pp-card"><div class="pp-card-h"><b>训练流水</b><em>近 ' + Math.min(12, S.sessions.length) + ' 场</em></div>')
-      let MODE_CN = { board: '寻路', trigger: '触发', reasm: '拼图', audit: '关卡', monster: '怪兽', invent: '发明', calib: '校准' }
+      let MODE_CN = { board: '寻路', trigger: '触发', reasm: '拼图', audit: '关卡', monster: '怪兽', invent: '发明', calib: '校准', qgame: '博弈', necessity: '必要性', cegame: '反例博弈' }
       S.sessions.slice(0, 12).forEach(function (s) {
         let cls = s.score >= 80 ? 'ok' : (s.score >= 55 ? 'mid' : 'low')
         out.push('<div class="pp-ledger-row"><span class="mode">' + (MODE_CN[s.mode] || s.mode) + '</span>'
@@ -1549,6 +1980,24 @@
         out.push('<div class="pp-ledger-row"><span class="mode">' + (i + 1) + '</span><span><b>' + esc(d.name) + '</b><span class="pp-quiet"> ×' + d.w + '</span></span></div>')
       })
       out.push('<div class="pp-verdict">' + I('bulb') + '<div><b>处方</b>：' + esc(dg[0].name.indexOf('怪兽') >= 0 ? '去寻路板故意欠一次债，等伏击；或把怪兽馆十页翻完' : (dg[0].name.indexOf('除法') >= 0 ? '每次动除法/柯西前，先点「除法验证」桥卡——把它变肌肉' : (dg[0].name.indexOf('声明') >= 0 ? '把「性质声明」设为搭桥的固定第一步，15 分不白丢' : '触发速答按 SRS 会自动把弱桥排到你面前，每天一轮就够'))) + '。</div></div>')
+      out.push('</section>')
+    }
+    /* 骨架偏好 + 反例胜率（v2.2）：你习惯哪种命题拓扑？敢不敢当对手？ */
+    let skCount = {}
+    let ceWins = 0, ceTotal = 0
+    S.sessions.forEach(function (s) {
+      if (s.mode === 'board' && s.detail && s.detail.sk) skCount[s.detail.sk] = (skCount[s.detail.sk] || 0) + 1
+      if (s.mode === 'cegame') { ceTotal++; if (s.score >= 80) ceWins++ }
+    })
+    let skList = Object.keys(skCount).sort(function (a, b) { return skCount[b] - skCount[a] })
+    if (skList.length || ceTotal) {
+      out.push('<section class="pp-card"><div class="pp-card-h"><b>骨架偏好与反例胜率</b><em>MPS 抽象层：你脑子里住的是哪种证明拓扑</em></div>')
+      skList.slice(0, 3).forEach(function (k) {
+        let sk = null
+        SKELETONS.forEach(function (x) { if (x.k === k) sk = x })
+        if (sk) out.push('<div class="pp-ledger-row"><span class="mode">' + esc(sk.name) + '</span><span class="pp-quiet">' + esc(sk.pat) + '</span><span class="sc ok">' + skCount[k] + ' 次</span></div>')
+      })
+      if (ceTotal) out.push('<div class="pp-ledger-row"><span class="mode">反例博弈</span><span class="pp-quiet">你当对手的胜率</span><span class="sc ' + (ceWins / ceTotal >= 0.7 ? 'ok' : 'mid') + '">' + Math.round(100 * ceWins / ceTotal) + '%</span></div>')
       out.push('</section>')
     }
     /* 桥卡掌握度（v2.0 SRS）：20 张卡 Elo 式掌握度条 */
@@ -1629,6 +2078,13 @@
       inventStr: '',
       invent: null,
       predict: null,
+      ness: null,
+      qgId: 'qg1',
+      qg: null,
+      ladder: 0,
+      ceId: 'ce1',
+      ce: null,
+      experiment: null,
       mastery: {},
       trig: null,
       trigN: 6,
@@ -1741,6 +2197,13 @@
       let s = normSession({ id: 'pp-' + Date.now().toString(36) + '-' + hashStr(mode + ref).toString(36).slice(0, 4), at: Date.now(), mode: mode, score: score, ref: ref, detail: detail })
       if (!s) return
       S.sessions = sessionsSave(ctx, [s].concat(S.sessions))
+      /* 同构迁移提示（v2.0）：同桥链签名、不同题——你证过的不是题，是结构 */
+      if (mode === 'board' && s.detail && s.detail.sig) {
+        let t = transferOf(S.sessions.slice(1), s.detail.sig, s.ref)
+        if (t) setTimeout(function () {
+          toast('同构警报：这条桥链和你证过的「' + t.ref + '」结构相同——换皮题，你已经会了两次。', 'info')
+        }, 300)
+      }
     }
 
     /* 触发速答计时器：20s/题，到点自动记未答 */
@@ -1810,6 +2273,28 @@
       if (act === 'board-reset') { boardReset(); paint(); return }
       if (act === 'board-hint') { S.hintLevel = Math.min(4, (S.hintLevel || 0) + 1); paint(); return }
       if (act === 'regress') { S.regress = !S.regress; paint(); return }
+      if (act === 'ladder') { S.ladder = !S.ladder; paint(); return }
+      if (act === 'ce-pick') { S.ceId = a.getAttribute('data-id'); paint(); return }
+      if (act === 'ce-pick-opt') {
+        let ceg2 = null
+        CEGames.forEach(function (x) { if (x.id === S.ceId) ceg2 = x })
+        if (!ceg2) ceg2 = CEGames[0]
+        if (S.ce && S.ce.gid === ceg2.id && S.ce.picked != null) return
+        let i2 = num(a.getAttribute('data-i'), -1)
+        let co2 = ceg2.pool[i2]
+        if (!co2) return
+        S.ce = { gid: ceg2.id, picked: i2 }
+        commitSession('cegame', co2.ok ? 100 : 35, ceg2.law.slice(0, 12), { right: co2.ok ? 1 : 0, total: 1 })
+        toast(co2.ok ? '反例成立——你打穿了这条命题。' : '这一手没打穿——看清前提与结论的边界。', co2.ok ? 'success' : 'info')
+        paint(); return
+      }
+      if (act === 'experiment') {
+        let ex = EXPERIMENTS[curBoard().id]
+        if (!ex) return
+        let res = ex.run()
+        S.experiment = { id: curBoard().id, verdict: res.verdict, rows: res.rows, hint: res.hint }
+        paint(); return
+      }
       if (act === 'regress-pick') {
         /* 倒推选桥：把该桥欠的前提先立成「预欠债清单」——知道要证什么，再去正向搭 */
         let m = M_BY_K[a.getAttribute('data-k')]
@@ -1850,6 +2335,37 @@
         }
         paint(); return
       }
+      if (act === 'ness-pick') {
+        let p3 = curBoard()
+        S.ness = { pick: num(a.getAttribute('data-i'), 0), hit: a.getAttribute('data-t') === (p3.necessity || {}).tag }
+        commitSession('necessity', S.ness.hit ? 100 : 30, p3.title, { right: S.ness.hit ? 1 : 0, total: 1 })
+        paint(); return
+      }
+      if (act === 'qg-pick') { S.qgId = a.getAttribute('data-id'); S.qg = null; paint(); return }
+      if (act === 'qg-pick-opt') {
+        if (!S.qg || S.qg.picked != null) return
+        let g3 = null
+        QGAMES.forEach(function (x) { if (x.id === S.qgId) g3 = x })
+        if (!g3) g3 = QGAMES[0]
+        S.qg.picked = num(a.getAttribute('data-i'), -1)
+        let jd = qgJudge(g3.rounds[S.qg.i], S.qg.picked)
+        if (jd.ok) S.qg.wins++
+        paint(); return
+      }
+      if (act === 'qg-next') {
+        if (!S.qg) return
+        S.qg.i++
+        S.qg.picked = null
+        let g4 = null
+        QGAMES.forEach(function (x) { if (x.id === S.qgId) g4 = x })
+        if (!g4) g4 = QGAMES[0]
+        if (S.qg.i >= g4.rounds.length) {
+          commitSession('qgame', Math.round(100 * S.qg.wins / g4.rounds.length), g4.law.slice(0, 12), { right: S.qg.wins, total: g4.rounds.length })
+          masteryBump('contra', S.qg.wins === g4.rounds.length)
+        }
+        paint(); return
+      }
+      if (act === 'qg-reset') { S.qg = { i: 0, wins: 0, picked: null }; paint(); return }
       if (act === 'bridge') {
         let m = M_BY_K[a.getAttribute('data-k')]
         if (!m) return
@@ -1885,7 +2401,7 @@
           S.pathResult = r
           if (r.debts.length) toast('到是到了，但挂着 ' + r.debts.length + ' 笔债——先还债再收口，否则按笔扣分', 'warn')
           else {
-            commitSession('board', r.score, p.title, { steps: r.used, best: p.best, unused: (r.unused || []).length, miss: S.lastMiss || '', cert: r.certified ? 1 : 0, debts: 0, hint: S.hintLevel || 0 })
+            commitSession('board', r.score, p.title, { steps: r.used, best: p.best, unused: (r.unused || []).length, miss: S.lastMiss || '', cert: r.certified ? 1 : 0, debts: 0, hint: S.hintLevel || 0, sig: chainSig(S.path), sk: skeletonOf(p, S.path) })
             try { ctx.keep.set(KEEP_RUN, null) } catch (e2) { }
             toast('桥搭通且账目清白：寻路得分 ' + r.score + (r.unused && r.unused.length ? '（有 ' + r.unused.length + ' 个条件没消费）' : ''), 'success')
             METHODS.forEach(function (mm) { if (S.path.indexOf(mm.k) >= 0) masteryBump(mm.k, true) })
@@ -1908,7 +2424,7 @@
         if (r2.ok) {
           S.pathResult = r2
           if (!r2.debts.length) {
-            commitSession('board', r2.score, p2.title, { steps: r2.used, best: p2.best, unused: (r2.unused || []).length, miss: S.lastMiss || '', cert: r2.certified ? 1 : 0, debts: 0, hint: S.hintLevel || 0 })
+            commitSession('board', r2.score, p2.title, { steps: r2.used, best: p2.best, unused: (r2.unused || []).length, miss: S.lastMiss || '', cert: r2.certified ? 1 : 0, debts: 0, hint: S.hintLevel || 0, sig: chainSig(S.path), sk: skeletonOf(p2, S.path) })
             try { ctx.keep.set(KEEP_RUN, null) } catch (e2) { }
             toast('债务清偿，账目清白：寻路得分 ' + r2.score, 'success')
           }
@@ -2089,9 +2605,11 @@
     name: '证明寻路者',
     version: VERSION,
     author: 'kaoyan-v2',
-    desc: '把证明题当搜索题来练：寻路板（条件→桥→目标，桥卡逐张验证前提，通关做条件审计）、'
-      + '触发速答（讲义触发表/构造表/决策表 16 题限时肌肉记忆）、证明拼图（经典证明拆步重排）、'
-      + '军规关卡（阅卷人视角排雷，F1 计分）、档案（四率体检 + 三大表数字卡）。'
+    desc: '把证明题当搜索题来练，融合八种前沿概念：寻路板（双向搜索+证明债务——缺的前提挂账不拦路，'
+      + 'Isabelle 式义务追踪，循环论证当场报警）、辅助函数发明器（内置迷你 CAS 真求导，验证你自造的 F，'
+      + 'Kapur 先发明后教学）、量化博弈（Lorenzen 对话语义：∀∃ 顺序就是对手先出招你应答，Skolem 依赖判卷）、'
+      + '积木质检（Lakatos 条件反事实：抽掉哪块楼就塌）、怪兽伏击（病理函数库 x²sin1x/Dirichlet/Weierstrass）、'
+      + '提示阶梯+校准预测（元认知）、同构迁移（桥链签名撞车=你已会孪生题）、抽象阶梯（Polya 特化下潜）。'
       + '内容蒸馏自内部讲义《证明类大题专题》35 章体系；纯确定性零 AI 可跑，AI 阅卷人点评可选。',
     tools: [{ id: T_MAIN, title: '证明寻路者', icon: MARK_ICON, mount: mountShell }],
     init: function (ctx) { bootSurfaces(ctx) },
@@ -2156,7 +2674,7 @@
           let today = dkey()
           let todayN = 0
           list.forEach(function (s) { if (dkey(s.at) === today) todayN++ })
-          let MODE_CN = { board: '寻路', trigger: '触发', reasm: '拼图', audit: '关卡', monster: '怪兽', invent: '发明', calib: '校准' }
+          let MODE_CN = { board: '寻路', trigger: '触发', reasm: '拼图', audit: '关卡', monster: '怪兽', invent: '发明', calib: '校准', qgame: '博弈', necessity: '必要性', cegame: '反例博弈' }
           let out = ['<div class="pp-panel">']
           out.push('<div class="pp-panel-kpis">'
             + '<div><b>' + todayN + '</b><span>今日场次</span></div>'
@@ -2194,6 +2712,9 @@
       inventCheck: inventCheck, debtOf: debtOf, dischargeDebts: dischargeDebts,
       pickTrigOrder: pickTrigOrder, masteryApply: masteryApply,
       supplyGraph: supplyGraph, diagnose: diagnose, hintLadder: hintLadder,
+      QGAMES: QGAMES, LADDER: LADDER, qgJudge: qgJudge, chainSig: chainSig, transferOf: transferOf,
+      SKELETONS: SKELETONS, skeletonOf: skeletonOf, POLYA: POLYA, polyyaAdvice: polyyaAdvice,
+      CEGames: CEGames, beautyOf: beautyOf, EXPERIMENTS: EXPERIMENTS,
       CSS: CSS,
     }
   }
