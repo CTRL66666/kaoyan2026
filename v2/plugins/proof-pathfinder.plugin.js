@@ -33,7 +33,7 @@
 
   /* ════════════════════════ 0. 常量与元信息 ════════════════════════ */
 
-  let VERSION = '2.8.0'
+  let VERSION = '3.0.0'
   let T_MAIN = 'proof-pathfinder'
   let STYLE_ID = 'pp-skin-style'
   let AI_CTX_REVIEW = 'plugin.proof-pathfinder.review'
@@ -148,6 +148,20 @@
     { k: 'csW', name: '加权 C—S', req: ['cont', 'intg', 'posG'], out: ['ineq'], tip: '对 $\\varphi(\\lambda)=\\int(f-\\lambda g)^2\\ge 0$ 用判别式——$g$ 就是权重旋钮（$g\\equiv 1$ 退化普通版，$g>0$ 加权版）。母题⑥「一个母式三种皮肤」的积分皮肤正主（例 16.1）。' },
     { k: 'inertia', name: '惯性指数合同不变', req: ['matCond', 'congr'], out: ['inIdx'], tip: 'Sylvester 定律：合同=同一二次型换坐标系，正负惯性指数是坐标系之外的「身份证」——证「不同形」只需算一次行列式符号序列（例 19.5）。' },
     { k: 'corrBnd', name: '相关系数界', req: ['probSet', 'expLin'], out: ['ineq'], tip: '$0\\le D(X\\pm Y)=DX+DY\\pm 2\\mathrm{Cov}$ 两支展开，标准化后夹出 $|\\rho|\\le 1$——C—S 的期望皮肤（母题⑥点名：判别式技巧换裤子）。等号=直线相关。' },
+    /* —— v3.0 桥：第 23 章综合大题 + 第 24 章自测卷 + 散题补挖 —— */
+    { k: 'discMid', name: '离散化中值', req: ['diff', 'tailLim'], out: ['derivSeq'], tip: '在每个 $[n,n+1]$ 上拉格朗日生成中值点列：$f\'(\\xi_n)=f(n+1)-f(n)$——两端都趋 $A$ 相减趋零（大题一(1)：数列结论靠小区间中值「打印」点列）。' },
+    { k: 'lipBoot', name: '导数界点火', req: ['diff', 'derBd'], out: ['unifCont'], tip: '$|f\'|\\le M$ 在任意区间上拉格朗日 → Lipschitz：$|f(x)-f(y)|\\le M|x-y|$，取 $\\delta=\\varepsilon/M$ 一致连续白送——比紧性拼接更直接的路线（大题一(2)），两法都会按条件选路。' },
+    { k: 'rayleigh', name: '瑞利极小极大', req: ['matCond', 'eigEq'], out: ['eigMin'], tip: '展开 $R(x)-\\lambda_1=\\frac{\\sum c_i^2(\\lambda_i-\\lambda_1)}{\\sum c_i^2}\\ge0$——特征向量基下的「重心不在最低点之下」。第一特征值=单位球上 $x\'Ax$ 的最小值（大题三）。' },
+    { k: 'covPSD', name: '协方差半正定', req: ['probSet', 'expLin'], out: ['posDef'], tip: '对任意 $t$：$t\'\\Sigma t=D(t_1X_1+\\cdots+t_nX_n)\\ge0$——方差把整族二次型一次非负化（大题五：概率给线代供弹药，母题⑧跨章演出）。' },
+    { k: 'normalEq', name: '正规方程正定', req: ['matCond', 'colFull', 'xNe0'], out: ['posDef'], tip: '$x\'(X\'X)x=(Xx)\'(Xx)=\\Vert Xx\\Vert^{2}>0$——列满秩保证 $Xx\\ne 0$。平方和放大器（母题⑧）的统计学正主：最小二乘解 $X\'X\\hat\\beta=X\'y$ 唯一性的全部机密。' },
+    { k: 'greenFubini', name: '格林+换序先积', req: ['cont', 'intg'], out: ['ineq'], tip: '分部积分建格林表示式后 Fubini 换序：先对内层精确积分算出核、再放缩——「先积分后放缩」（清单 13）的压轴级演出：一阶条件控 $L^1$、二阶控 $L^2$（大题二）。' },
+    { k: 'existUnique', name: '双柱定根', req: ['root', 'monoF'], out: ['exactlyOne'], tip: '存在性（零点定理）与唯一性（严格单调）两条腿缺一不可——只写其一最多半分（A1 评分点原话）。清单 09 的标准照：先介值钉住，再单调收编。' },
+    { k: 'iterConv', name: '归纳定界迭代', req: ['recur', 'indBound'], out: ['conv'], tip: '上界的归纳验证必须真正用到定值方程（$\\varphi=1+\\frac1\\varphi$ 型）——凭空写 $x_n<\\varphi$ 拿不到满分（A2 评分点）。定界+单调两板斧齐全，母题④收官。' },
+    { k: 'simSpec', name: '相似保谱', req: ['matCond', 'similar0'], out: ['eigEq'], tip: '$B=P^{-1}AP$：$B-\\lambda P^{-1}x=P^{-1}(A-\\lambda)x$——特征向量被 $P$ 搬运、特征值原地不动。行列式语言同款：$|B-\\lambda I|=|A-\\lambda I|$（例 12.3）。' },
+    { k: 'leibniz', name: '莱布尼茨双柱', req: ['monoZero', 'altSign'], out: ['serConv'], tip: '交错级数收敛两柱：模单调 + 趋零。缺前者可造发散振荡（条件收敛的史前史），缺后者直接通项不归零——$\\sum\\frac{(-1)^n}{n}$ 是双柱全立的教学标本（例 9.2）。' },
+    { k: 'abelLim', name: 'Abel 极限定理', req: ['serConv'], out: ['limVal'], tip: '幂级数在收敛半径端点的「连续延拓」：$\\lim_{x\\to1^-}\\sum a_nx^n=\\sum a_n$。证明用 Cauchy 准则劈段——收敛性供尾部，Abel 变换管头部（例 15.7）。' },
+    { k: 'jensen', name: 'Jensen 积分版', req: ['diff2', 'cont', 'posG'], out: ['ineq'], tip: '凸 = 处处在切线上方：取切点 $x_0=\\frac{\\int gy}{\\int g}$，代入 $f(y)\\ge f(x_0)+f\'(x_0)(y-x_0)$ 再以 $g$ 加权积分——线性项自消，母题⑪第三刀的积分形态（例 16.5）。' },
+    { k: 'sampVar', name: '样本均值方差', req: ['expLin', 'indp', 'probSet'], out: ['varEq'], tip: '$D\\bar X=\\frac{1}{n^2}\\sum DX_i=\\frac{\\sigma^2}{n}$——独立性让交叉项归零（无独立性时方差可发散到任何值）；$\\frac1n$ 尺度的噪声衰减是全部统计推断的第一块基石（例 33.3）。' },
   ]
   let M_BY_K = {}
   METHODS.forEach(function (m) { M_BY_K[m.k] = m })
@@ -234,6 +248,11 @@
     posG: '权重/比较函数非负没交代——乘进去不等号方向才不翻',
     congr: '「合同关系」没写成 $C\'AC=B$——换坐标系的证明全从这条展开',
     minVal: '最小值点存在性没交代——闭区间连续才有费马出场的舞台',
+    derBd: '「导数有界」没用足——它不是装饰，是 Lipschitz 的常数来源',
+    colFull: '「列满秩」没翻译成 $Xx\\ne 0$——平方和放大的地基',
+    indBound: '上界只用归纳假设硬推——没接入定值方程就是凭空宣称',
+    similar0: '「相似」没写成 $B=P^{-1}AP$——特征值搬运全靠这条',
+    altSign: '「交错符号」没声明——莱布尼茨两柱的第一根',
   }
   /* 债务 → 怪兽伏击题（Lakatos：哪个病理函数咬断这个前提） */
   let MONSTERS = [
@@ -250,13 +269,16 @@
     { fn: '$\\operatorname{sgn}(x)$', breaks: ['between'], why: '第一类间断——凡是「它是某个导函数」的说法，Darboux 定理一枪毙命（母题⑫）' },
     { fn: '有理点取 $x^2$、无理点取 $0$ 的函数', breaks: ['diff'], why: '仅在原点可导（导数为 $0$），其余点连连续都没有——「可导」不是邻域遗传律' },
     { fn: '$f_n(x)=n e^{-n x}$ 在 $[0,1]$', breaks: ['unifConv', 'swapLim'], why: '逐点收敛到 $0$ 而积分恒 $1-e^{-n}\\to 1$——换序不打票，光滑函数一样咬人' },
+    { fn: '$\\dfrac{xy}{\\sqrt{x^{2}+y^{2}}}$（原点补 $0$）', breaks: ['diff'], why: '处处连续、偏导处处存在，原点仍不可微——偏导是十字方向的信息，可微要的是全平面' },
   ]
   /* 触发题 → 关联桥卡（SRS 掌握度挂靠；索引对 TRIG_ITEMS） */
   let TRIG_BK = ['rolle', 'rolle', 'rolle', 'cauchy', 'rolle', 'cauchy', 'taylor', 'mono', 'extma', 'constvar', 'taylor', 'varInt', 'zero', 'monoBound', 'comp', 'swapLim', 'mono', 'extma', 'replay', 'cmp', 'mtest', 'contra', 'symOrth', 'gree',
     /* 考前清单 12 题（01,02,19,04,05,06,09,10,13,14,18,20） */
     'declare', 'rolle', 'posDef', 'declare', 'cauchy', 'taylor', 'mono', 'compact', 'squeeze', 'gree', 'rankOp', 'variance',
     /* v2.9 新章触发 8 题 */
-    'wronks', 'superp', 'implF', 'lagrMul', 'induct', 'fixShift', 'perSplit', 'maxDist']
+    'wronks', 'superp', 'implF', 'lagrMul', 'induct', 'fixShift', 'perSplit', 'maxDist',
+    /* v3.0 综合/自测卷触发 6 题 */
+    'discMid', 'lipBoot', 'existUnique', 'iterConv', 'sampVar', 'leibniz']
 
   /* ════════════════════ 1.6 迷你 CAS：辅助函数发明器的验证内核 ════════════════════
    * 项 = c · x^a · e^{kx}^n · ln^m · f^{(d)} · g^{(e)}（指数为整数，键表存储）。
@@ -1323,6 +1345,205 @@
       anchor: '第 21 章：C—S 的期望皮肤——母题⑥三张面孔之二',
       necessity: { tag: 'probSet', why: '方差为零时 $\\rho$ 无定义（分母塌）；二阶矩不存在时连 $\\mathrm{Cov}$ 都写不出——放大器需要能量源。' },
     },
+    /* ═══ v3.0：第 23 章综合大题 + 第 24 章自测卷 + 散题补挖 ═══ */
+    {
+      id: 'bp62', mother: 9, ch: '第23章 综合演练', title: '离散化中值点列',
+      stem: '设 $f$ 在 $[0,+\\infty)$ 可导且 $\\lim\\limits_{x\\to+\\infty}f(x)=A$。证明：存在 $\\xi_n\\in(n,n+1)$ 使 $f\'(\\xi_n)\\to 0$。',
+      conds: [
+        { t: 'diff', x: '$f$ 在每段 $[n,n+1]$ 连续、$(n,n+1)$ 可导' },
+        { t: 'tailLim', x: '$f(x)\\to A$：整数列两端同趋 $A$' },
+      ],
+      goal: 'derivSeq', best: 1,
+      routes: [['discMid'], ['declare', 'discMid']],
+      tip: '「数列结论靠小区间中值打印点列」——每段拉格朗日给 $f\'(\\xi_n)=f(n+1)-f(n)$，右端两子列都趋 $A$，相减趋零。离散化中值是压轴第一问的入口套路（大题一(1)）。',
+      anchor: '第 23 章大题一：数列极限 × 中值定理 × 一致连续的合成演习（上）',
+      necessity: { tag: 'tailLim', why: '$f$ 无极限（如 $f(x)=\\sin x^2$）时差商列可任意振荡——$A$ 的存在是相减归零的账本。' },
+    },
+    {
+      id: 'bp63', mother: 9, ch: '第23章 综合演练', title: '导数有界致一致连续',
+      stem: '设 $f\'$ 在 $[0,+\\infty)$ 上有界：$|f\'|\\le M$。证明：$f$ 在 $[0,+\\infty)$ 一致连续。',
+      conds: [
+        { t: 'diff', x: '全区间可导' },
+        { t: 'derBd', x: '$|f\'|\\le M$：导数有界' },
+      ],
+      goal: 'unifCont', best: 1,
+      routes: [['lipBoot'], ['declare', 'lipBoot']],
+      tip: '任意区间上拉格朗日：$|f(x)-f(y)|\\le M|x-y|$——Lipschitz 一步到位，$\\delta=\\varepsilon/M$ 与点无关。与「头部紧性+尾段极限」拼接法（第 13 章）并存的第二条路线：按题设有什么用什么。',
+      anchor: '第 23 章大题一(2)：导数有界 ⇒ Lipschitz ⇒ 一致连续，一条线三步',
+      necessity: { tag: 'derBd', why: '$\\sqrt{x}$ 于 $[0,\\infty)$ 反证：一致连续却导数无界——界 $M$ 正是 $\\delta$ 公式的分母，抽掉整个估计失重。' },
+    },
+    {
+      id: 'bp64', mother: 7, ch: '第23章 综合演练', title: '瑞利商极小极大',
+      stem: '设 $A$ 实对称、特征值 $\\lambda_1\\le\\cdots\\le\\lambda_n$。证明：$\\min\\limits_{x\\ne 0}\\dfrac{x\'Ax}{x\'x}=\\lambda_1$。',
+      conds: [
+        { t: 'matCond', x: '$A$ 实对称（正交对角化可用）' },
+        { t: 'xNe0', x: '$x\\ne 0$：商的分母活着' },
+      ],
+      goal: 'eigMin', best: 2,
+      routes: [['eigDef', 'rayleigh'], ['declare', 'eigDef', 'rayleigh']],
+      tip: '两步接力：谱定理把 $x$ 搬到特征基坐标（$x\'Ax=\\sum\\lambda_ic_i^2$），再展开重心差 $R(x)-\\lambda_1=\\frac{\\sum c_i^2(\\lambda_i-\\lambda_1)}{\\sum c_i^2}\\ge0$——「加权平均不小于最小权重项」的矩阵化（大题三）。',
+      anchor: '第 23 章大题三：变分刻画特征值——线代与分析的合流点',
+      necessity: { tag: 'matCond', why: '不对称时 $x\'Ax$ 只看到对称部分 $\\frac{A+A\'}2$——瑞利商与特征值脱钩，极小原理整个失效。' },
+    },
+    {
+      id: 'bp65', mother: 8, ch: '第23章 综合演练', title: '协方差矩阵半正定',
+      stem: '设 $(X_1,\\dots,X_n)$ 二阶矩存在，$\\Sigma=(\\mathrm{Cov}(X_i,X_j))$。证明：$\\Sigma$ 半正定。',
+      conds: [
+        { t: 'probSet', x: '各 $X_i$ 二阶矩存在（$\\Sigma$ 的元素都有限）' },
+        { t: 'expLin', x: '期望线性性可用（方差展开的基础运算）' },
+      ],
+      goal: 'posDef', best: 1,
+      routes: [['covPSD'], ['declare', 'covPSD']],
+      tip: '一行证明压住一页纸：$t\'\\Sigma t=D(\\sum t_iX_i)\\ge0$——方差是天然非负量（清单 20），二次型只是它的换装。概率向线代供弹药的教科书案例（大题五；等号条件=线性相关）。',
+      anchor: '第 23 章大题五：协方差矩阵半正定——母题⑧跨章进⑦的语言',
+      necessity: { tag: 'probSet', why: '柯西型分布二阶矩不存在：$\\Sigma$ 根本无定义——半正定的前提先是「有值可谈」。' },
+    },
+    {
+      id: 'bp66', mother: 8, ch: '第23章 综合演练', title: '最小二乘正定地基',
+      stem: '设 $X$ 是 $n\\times p$ 列满秩阵（$n\\ge p$）。证明：$X\'X$ 正定，从而正规方程 $X\'X\\hat\\beta=X\'y$ 唯一可解。',
+      conds: [
+        { t: 'matCond', x: '$X\'X$ 对称（合同结构自带）' },
+        { t: 'colFull', x: '列满秩：$Xx=0$ 只有零解' },
+        { t: 'xNe0', x: '$x\\ne 0$ 时 $Xx\\ne 0$——放大器的扳机' },
+      ],
+      goal: 'posDef', best: 1,
+      routes: [['normalEq'], ['declare', 'normalEq']],
+      tip: '平方和放大器（母题⑧）的统计学正主：$x\'(X\'X)x=\\Vert Xx\\Vert^2>0$。列满秩⟺$Xx\\ne0$（$x\\ne0$）⟺ Gram 阵正定——三重身份一条等式锁死，最小二乘的唯一性由此免费。',
+      anchor: '第 23 章大题八：多元回归 × 线代 × 最优化——$X\'X$ 是全部统计推断的地基',
+      necessity: { tag: 'colFull', why: '列亏秩时存在 $x\\ne0$ 使 $Xx=0$：二次型取到零，正定退半正定，正规方程解无穷——共线性诊断的全部意义。' },
+    },
+    {
+      id: 'bp67', mother: 10, ch: '第23章 综合演练', title: '格林核先积后放',
+      stem: '设 $f$ 连续非负于 $[0,1]$。证明：$\\int_0^1\\left(\\int_0^x f(t)\\,dt\\right)dx=\\int_0^1(1-t)f(t)\\,dt$，并由此放缩。',
+      conds: [
+        { t: 'cont', x: '$f$ 连续（可积与换序前提）' },
+        { t: 'intg', x: '二重积分区域有界（Fubini 合法）' },
+      ],
+      goal: 'ineq', best: 1,
+      routes: [['greenFubini'], ['declare', 'greenFubini']],
+      tip: '三角形区域上换序：先 $x$ 后 $t$ 变先 $t$ 后 $x$——内层精确积出核 $(1-t)$，剩下的放缩有整体结构托底。「先积分后放缩」（清单 13）的压轴级演出：反过来只能拿到粗界（大题二）。',
+      anchor: '第 23 章大题二：积分 × 格林函数 × 换序——换序次序决定常数精度',
+      necessity: { tag: 'intg', why: '无界区域（$\\int_0^\\infty$）上换序要额外的控制收敛条件——有界三角域是本题换序免费的凭据。' },
+    },
+    {
+      id: 'bp68', mother: 5, ch: '第24章 自测A卷', title: '恰一实根双柱',
+      stem: '证明方程 $x^{3}-3x+1=0$ 在 $(0,1)$ 内有且仅有一个实根。',
+      conds: [
+        { t: 'cont', x: '多项式处处连续' },
+        { t: 'signDiff', x: '$f(0)=1>0$、$f(1)=-1<0$ 端点异号' },
+        { t: 'monoF', x: '$f\'(x)=3x^{2}-3<0$ 于 $(0,1)$：严格递减' },
+      ],
+      goal: 'exactlyOne', best: 2,
+      routes: [['zero', 'existUnique'], ['declare', 'zero', 'existUnique']],
+      tip: 'A1 评分点原话：存在性（零点定理）与唯一性（单调）两条腿缺一不可——只写其一最多半分。清单 09 的标准照：先介值钉住，再单调收编。',
+      anchor: '第 24 章 A1：「有且仅有」双柱结构——阅卷采分点表的第一行',
+      necessity: { tag: 'monoF', why: '去掉单调腿：$x^3-3x+1$ 在 $(-2,2)$ 内三根皆实——「恰一」的 uniqueness 全部押在递减上。' },
+    },
+    {
+      id: 'bp69', mother: 4, ch: '第24章 自测A卷', title: '黄金比迭代收敛',
+      stem: '设 $x_1=1$，$x_{n+1}=1+\\dfrac{1}{x_n}$。证明 $\\{x_n\\}$ 收敛并求极限。',
+      conds: [
+        { t: 'recur', x: '递推式给定（连分数结构）' },
+        { t: 'indBound', x: '归纳上界定界：$1\\le x_n<\\varphi$——界 $\\varphi$ 来自解 $\\varphi=1+\\frac1\\varphi$' },
+      ],
+      goal: 'conv', best: 1,
+      routes: [['iterConv'], ['declare', 'iterConv']],
+      tip: 'A2 评分点：上界的归纳必须真正用到定值方程 $\\varphi=1+\\frac1\\varphi$，凭空写 $x_n<\\varphi$ 拿不到满分。定界 + 单调（$x_{n+1}-x_n$ 符号跟着 $x_n-\\varphi$ 走）→ 收敛 → 取极限回代定 $L=\\varphi$（母题④全套）。',
+      anchor: '第 24 章 A2：连分数迭代——定值方程既是猜极限的球探又是验证的教练',
+      necessity: { tag: 'indBound', why: '不先定界就取极限 = 用未收敛数列写 $\\lim$（军规一逻辑雷）——$\\varphi$ 界是极限记号的合法化凭证。' },
+    },
+    {
+      id: 'bp70', mother: 7, ch: '第12章 相似对角化', title: '相似保谱搬运',
+      stem: '设 $B=P^{-1}AP$（相似）。证明：$A$ 的特征值都是 $B$ 的特征值。',
+      conds: [
+        { t: 'matCond', x: '$P$ 可逆：搬运工有回程票' },
+        { t: 'similar0', x: '$B=P^{-1}AP$ 写成等式待用' },
+      ],
+      goal: 'eigEq', best: 1,
+      routes: [['simSpec'], ['declare', 'simSpec']],
+      tip: '两条等价路：行列式语言 $|B-\\lambda I|=|P^{-1}||A-\\lambda I||P|$ 特征多项式相同；或向量搬运 $A x=\\lambda x\\Rightarrow B(P^{-1}x)=\\lambda(P^{-1}x)$——特征值原地不动、特征向量被 $P$ 搬家（例 12.3）。',
+      anchor: '例 12.3：相似不变量——「先翻译再动手」在特征值语言里的那次',
+      necessity: { tag: 'similar0', why: '$P$ 不可逆时搬运工会把非零向量搬成零——特征向量定义当场被杀，相似退化成普通乘法。' },
+    },
+    {
+      id: 'bp71', mother: 10, ch: '第9章 级数敛散', title: '莱布尼茨双柱',
+      stem: '设 $a_n\\downarrow 0$。证明：交错级数 $\\sum\\limits_{n=1}^{\\infty}(-1)^{n}a_n$ 收敛。',
+      conds: [
+        { t: 'altSign', x: '符号交错：$(-1)^n$ 两两抵消的结构性资源' },
+        { t: 'monoZero', x: '$a_n$ 单调降且趋零（双柱本体）' },
+      ],
+      goal: 'serConv', best: 1,
+      routes: [['leibniz'], ['declare', 'leibniz']],
+      tip: '偶数项部分和递增、奇数项=偶数项减一个正元——两列夹向同一极限。缺单调可造发散振荡、缺趋零通项直接不过关（例 9.2 的两柱教学）。',
+      anchor: '例 9.2：莱布尼茨判别法——条件收敛世界的入门签证',
+      necessity: { tag: 'monoZero', why: '$a_n$ 不趋零时通项不归零，收敛免谈；不单调时偶子列可一路创新高——两根柱子少一根塔就歪。' },
+    },
+    {
+      id: 'bp72', mother: 10, ch: '第15章 幂级数', title: 'Abel 端点延拓',
+      stem: '设 $\\sum a_n$ 收敛。证明：$\\lim\\limits_{x\\to1^-}\\sum a_nx^{n}=\\sum a_n$。',
+      conds: [
+        { t: 'serConv', x: '数项级数收敛（端点账本已结清）' },
+      ],
+      goal: 'limVal', best: 1,
+      routes: [['abelLim'], ['declare', 'abelLim']],
+      tip: '劈段：尾部用 $\\sum a_n$ 收敛的 Cauchy 准则 + Abel 变换控住（$x^n$ 单调有界）；头部有限项逐项令 $x\\to1^-$。Abel 极限定理=幂级数在收敛端点的「连续延拓」——$\\sum\\frac{(-1)^n}{n+1}=\\ln2$ 的合法化证书（例 15.7）。',
+      anchor: '例 15.7：Abel 第二定理——「借级数求和」的最后一块门票',
+      necessity: { tag: 'serConv', why: '$\\sum a_n$ 发散（如 $a_n=1$）时 $\\sum x^n=\\frac{x}{1-x}\\to\\infty$：端点无和，延拓无从谈起。' },
+    },
+    {
+      id: 'bp73', mother: 11, ch: '第16章 凸函数', title: 'Jensen 积分版',
+      stem: '设 $f\'\'\\ge 0$、$g\\ge 0$ 连续于 $[a,b]$ 且 $\\int g>0$。证明：$f\\!\\left(\\dfrac{\\int gy}{\\int g}\\right)\\le\\dfrac{\\int f(y)\\,g}{\\int g}$。',
+      conds: [
+        { t: 'cont', x: '函数连续（积分与介值合法）' },
+        { t: 'diff2', x: '$f\'\'\\ge 0$：凸性入场券' },
+        { t: 'posG', x: '$g\\ge0$、$\\int g>0$：权重保号可归一' },
+      ],
+      goal: 'ineq', best: 1,
+      routes: [['jensen'], ['declare', 'jensen']],
+      tip: '凸=处处在切线上方。取切点为「加权重心」$x_0=\\frac{\\int gy}{\\int g}$，代入切线不等式再以 $g$ 加权积分——右端线性项恰好自消（重心定义使然）。母题⑪三刀的积分形态（例 16.5）。',
+      anchor: '例 16.5：Jensen 不等式——切线刀在积分里的复刻',
+      necessity: { tag: 'posG', why: '权重变号时「加权积分保序」失效，切线不等式被乘负数翻转——Jensen 的整个方向感系于 $g\\ge0$。' },
+    },
+    {
+      id: 'bp74', mother: 8, ch: '第33章 大数定律', title: '样本均值噪声衰减',
+      stem: '设 $X_1,\\dots,X_n$ 独立同分布、$EX_i=\\mu$、$DX_i=\\sigma^2$。证明：$D\\bar X=\\dfrac{\\sigma^{2}}{n}$。',
+      conds: [
+        { t: 'probSet', x: '二阶矩存在（$\\sigma^2$ 有限）' },
+        { t: 'expLin', x: '期望线性性（拆 $\\bar X-\\mu$ 的手术刀）' },
+        { t: 'indp', x: '独立性：交叉项期望归零的门票' },
+      ],
+      goal: 'varEq', best: 1,
+      routes: [['sampVar'], ['declare', 'sampVar']],
+      tip: '$D\\bar X=\\frac1{n^2}\\sum D X_i+\\frac1{n^2}\\sum_{i\\ne j}\\mathrm{Cov}$——独立让交叉项集体退场，只剩 $n$ 个 $\\sigma^2/n^2$。$\\frac1{\\sqrt n}$ 是噪声衰减的宇宙常数：大数定律、置信区间、中心极限定理共用的第一块基石（例 33.3）。',
+      anchor: '例 33.3：样本均值方差——一切统计推断的误差预算表',
+      necessity: { tag: 'indp', why: '完全相关（$X_i\\equiv X_1$）时 $D\\bar X=\\sigma^2$ 与 $n$ 无关——独立性是「平均降噪」的唯一供应商。' },
+    },
+    {
+      id: 'bp75', mother: 4, ch: '第34章 Stolz 应用', title: 'Cesàro 平均收敛',
+      stem: '设 $x_n\\to a$。证明：算术平均 $\\dfrac{x_1+\\cdots+x_n}{n}\\to a$。',
+      conds: [
+        { t: 'ratioLim', x: '差商收敛：$\\big(\\sum_{k\\le n}x_k\\big)-\\big(\\sum_{k\\le n-1}x_k\\big)=x_n\\to a$' },
+        { t: 'denInf', x: '分母 $n$ 严格增趋 $+\\infty$（Stolz 唯一入场券）' },
+      ],
+      goal: 'limVal', best: 1,
+      routes: [['stolz'], ['declare', 'stolz']],
+      tip: '把 Cesàro 写成 $\\frac{S_n}{n}$ 型再请 Stolz——差商恰好是 $x_n$ 本身，一步到岸。逆命题假（平均收敛推不出原列收敛，$(-1)^n$ 候着）：Stolz 单向通行的又一生动教材。',
+      anchor: '第 34 章：Cesàro 均值——Stolz 定理「离散洛必达」身份的最短演示',
+      necessity: { tag: 'denInf', why: '$n\\to\\infty$ 且严格增才够资格当分母——换成有界分母时「平均」失去稀释力，定理整条失效。' },
+    },
+    {
+      id: 'bp76', mother: 6, ch: '第28章 对称再现', title: 'sin 对称再现',
+      stem: '设 $f$ 连续。证明：$\\int_0^{\\pi}x\\,f(\\sin x)\\,dx=\\dfrac{\\pi}{2}\\int_0^{\\pi}f(\\sin x)\\,dx$。',
+      conds: [
+        { t: 'cont', x: '$f$ 连续（复合后仍可积）' },
+        { t: 'symDom', x: '$[0,\\pi]$ 关于 $x\\to\\pi-t$ 对称、$\\sin(\\pi-t)=\\sin t$ 零件不变' },
+      ],
+      goal: 'intVal', best: 1,
+      routes: [['replay'], ['declare', 'replay']],
+      tip: '区间再现换元 $x=\\pi-t$：换元式与原式相加，$x$ 与 $\\pi-x$ 合出常数 $\\pi$——「零件不变、自己加自己」（例 8.2 同族，三角皮肤）。',
+      anchor: '第 28 章：$\\sin$ 对称再现——区间再现法在周期零件上的复刻',
+      necessity: { tag: 'symDom', why: '零件 $\\sin(\\pi-t)\\ne\\sin t$ 时（如 $\\cos x$）换元得负号、相加不闭合——对称域+不变零件必须成对。' },
+    },
   ]
 
   /* ═══ 母题谱系（讲义 25.11 母题—章节对照表：一题生万题） ═══
@@ -1416,6 +1637,13 @@
     { q: '分式线性递推 $a_{n+1}=\\dfrac{2a_n+1}{a_n+2}$ 的标准开局？', opts: ['解不动点 $L=\\dfrac{2L+1}{L+2}$，平移 $b_n=a_n-L$ 化等比', '直接猜通项验证', '取对数线性化', '硬证单调有界', '夹逼放缩', '先求上极限'], a: 0, why: '构造法精神（22.2）：变换到「已经会做」的形状——平移后递推变常数比，母题④的构造臂。' },
     { q: '周期积分平移不变性的证明里，末段 $\\int_T^{a+T}f$ 怎么处理？', opts: ['换元 $u=x-T$ 用周期性化回 $\\int_0^a$，与首段相消', '分部积分', '用中值定理', '拆成级数和', '直接算原函数', '放缩成 $T\\max|f|$'], a: 0, why: '定理 28.3 全部机关 = 一次拆段 + 一次换元——与区间再现同族「自己加自己」（母题⑥皮肤）。' },
     { q: '$M=\\max(X_1,\\dots,X_n)$（独立同分布）求分布，第一动作？', opts: ['事件翻译：$\\{M\\le z\\}=\\bigcap\\{X_i\\le z\\}$', '直接卷积密度', '对 $z$ 求导', '用切比雪夫界', '先算 $E[M]$', '全概率展开'], a: 0, why: '例 30.2：分布函数法先做事件翻译——交事件 + 独立性 = 概率乘积 $F(z)^n$，密度随后求导即得。' },
+    /* —— v3.0 综合演练/自测卷触发 —— */
+    { q: '结论是「存在点列 $\\xi_n\\to\\infty$ 使 $f\'(\\xi_n)\\to0$」，生成点列的套路？', opts: ['每个 $[n,n+1]$ 上拉格朗日，中值点列自动打印', '反证取子列', '用介值定理逐点选', '泰勒展开比较', '构造辅助函数罗尔', '致密性直接抽'], a: 0, why: '大题一(1) 入口套路：数列极限结论 = 小区间中值定理的副产品，$f\'(\\xi_n)=f(n+1)-f(n)$ 右端相减趋零。' },
+    { q: '「$f\'$ 有界 ⇒ 一致连续」与「尾部极限 + 头部紧性」两条路怎么选？', opts: ['有导数界就走 Lipschitz（$\\delta=\\varepsilon/M$），没导数信息用拼接', '永远选拼接', '永远选 Lipschitz', '两条等价随便挑', '都需先证可微', '改用 Cauchy 列'], a: 0, why: '大题一(2) 注记原话：两法都要会，按题设条件选路——导数有界时 Lipschitz 一条线三步走完，更直接。' },
+    { q: '证「有且仅有一根」，阅卷给分结构是？', opts: ['存在性（零点定理）+ 唯一性（单调），两条腿各占一半', '只要写出 $f(a)f(b)<0$', '只要证单调', '画出函数图', '给出近似根即可', '用介值定理包打'], a: 0, why: 'A1 评分点原话：只写其一最多拿一半分——「恰一」= 清单 09 的双柱结构。' },
+    { q: '递推数列归纳定界，上界必须从哪里来？', opts: ['定值方程 $\\varphi=1+\\frac1\\varphi$ 解出来，归纳时真正用上它', '看前几项猜一个', '取 $2\\max x_1$', '用 $n$ 表示', '不需要上界', '由单调性反推'], a: 0, why: 'A2 评分点：凭空写 $x_n<\\varphi$ 拿不到满分——上界的归纳步必须消耗定值方程本身。' },
+    { q: '$D\\bar X=\\sigma^2/n$ 的交叉项归零靠什么？', opts: ['独立性：$\\mathrm{Cov}(X_i,X_j)=0$（$i\\ne j$）', '同分布', '正态假设', '大数定律', '切比雪夫不等式', '期望线性性即可'], a: 0, why: '例 33.3：同分布只给每项 $\\sigma^2$，交叉项退场专属独立性——完全相关时 $D\\bar X=\\sigma^2$ 与 $n$ 无关。' },
+    { q: '莱布尼茨判别法的两根柱子是？', opts: ['模单调不增 + 通项趋零', '仅通项趋零', '仅模有界', '绝对收敛', '部分和有界', '通项最终同号'], a: 0, why: '例 9.2 双柱结构：缺一可造发散振荡、缺二通项不过关——交错级数的入门签证。' },
   ]
 
   /* ════════════════════════ 4. 知识库：证明拼图（经典证明拆步，正确顺序=数组序） ════════════════════════ */
@@ -1693,6 +1921,22 @@
         { x: '证毕。', bad: null },
       ],
     },
+    {
+      id: 'au11', title: '偏导存在硬上全微分',
+      lines: [
+        { x: '设 $f(x,y)=\\dfrac{xy}{\\sqrt{x^{2}+y^{2}}}$（原点取 $0$），已验证 $f$ 处处连续、原点两偏导均为 $0$。', bad: null },
+        { x: '于是 $df\\big|_{(0,0)}=0\\,dx+0\\,dy$，可微。', bad: 'premise', note: '偏导存在只是「十字方向」的可微——可微要求增量 $o(\\rho)$ 沿一切路径一致成立。沿 $y=x$：$\\frac{f(h,h)-0-0}{\\sqrt2|h|}=\\frac{1}{2\\sqrt2}$ 不趋零，不可微。清单 16 的第一条箭头不可逆，正是这条雷。' },
+        { x: '故全增量 $\\Delta f=f_x\\Delta x+f_y\\Delta y+o(\\rho)$。', bad: 'logic', note: '在错误的「可微」上继续写全微分公式——一步塌、步步塌：阅卷按链扣分，后文全在废墟上。' },
+      ],
+    },
+    {
+      id: 'au12', title: '归纳起点平移事故',
+      lines: [
+        { x: '设 $a_1=1$，$a_{n+1}=a_n^{2}-2$ 型的倒数变式（此处命题：$a_n\\ge 2$）。', bad: null },
+        { x: '$n=1$ 时 $a_1=1\\ge 2$ 显然成立。', bad: 'logic', note: '起点就是假的（$1\\ge2$？）。讲义点名归纳法头号死因：命题从 $n\\ge2$ 才成立，起点必须单独验 $n=2$——「显然」救不了不显然。' },
+        { x: '设 $n=k$ 成立，则 $a_{k+1}=\\cdots\\ge 2$，故对一切 $n$ 成立。', bad: 'premise', note: '假设写「$n=k$」而递推用到 $a_{k-1}\\ge2$：第一归纳法弹药不足，应换第二归纳法（假设携带 $P(2)\\dots P(k)$ 全体）——假设强度也是入场券。' },
+      ],
+    },
   ]
 
   /* ════════════════════════ 6. 知识库：三大表数字卡（档案视图） ════════════════════════ */
@@ -1944,6 +2188,24 @@
         { t: '$a_n=b_n=n$', ok: false, why: '两边同为 $1$——它支持命题方向，不构成反例。' },
         { t: '逆命题也真：对 $\\dfrac{a_n}{b_n}$ 两边取极限即可', ok: false, why: '「两边取极限」正是循环论证：差商极限存在是待证结论，不能预先当工具用（军规一的逻辑版）。' },
         { t: 'Stolz 是充要条件，所以不存在反例', ok: false, why: '定理陈述里 $b_n\\uparrow+\\infty$ 只服务正向；把它读成「⟺」是记忆事故——上面 $(-1)^n$ 就是证伪样本。' },
+      ],
+    },
+    {
+      id: 'ce9', law: '「$A^2=A$（幂等）⇒ $A$ 必对称」',
+      pool: [
+        { t: '$A=\\begin{pmatrix}1&1\\\\0&0\\end{pmatrix}$：$A^2=A$ 却 $A\'\\ne A$', ok: true, why: '幂等只管「投影沿哪个方向」——斜投影照样满足 $A^2=A$。$A\'=A$ 额外要求投影方向垂直于值域，那是正交投影的专利：两个条件各管一件事，别让它们互相冒充。' },
+        { t: '$A=I$', ok: false, why: '对称的幂等阵——支持命题方向，不是反例。' },
+        { t: '$A^2=A$ 的特征值只能是 $0$ 或 $1$，所以必对称', ok: false, why: '前半句真、后半句偷换：特征值谱只约束对角化，不约束 $A\'=A$——斜投影的谱同样是 $\\{0,1\\}$。' },
+        { t: '幂等阵必不可逆', ok: false, why: '$I$ 可逆且幂等——自身就是这条的反例；且它也不是命题在说的事。' },
+      ],
+    },
+    {
+      id: 'ce10', law: '「$f$ 连续且两偏导都存在 ⇒ $f$ 可微」',
+      pool: [
+        { t: '$f=\\dfrac{xy}{\\sqrt{x^{2}+y^{2}}}$（原点补 $0$）：连续、偏导全存在，原点沿 $y=x$ 增量比不趋零', ok: true, why: '偏导是十字方向的信息，可微要全平面一致——沿 $y=x$ 的增量比恒为 $\\frac{1}{2\\sqrt2}$，$o(\\rho)$ 当场破产。清单 16「偏导连续」四个字少一个都不行。' },
+        { t: '$f(x,y)=|xy|$：处处连续、偏导存在', ok: false, why: '这个函数其实可微（$|xy|\\le\\frac{\\rho^{2}}{2}=o(\\rho)$）——拿可微的函数当反例，是「没验结论就举旗」的常见缴械。' },
+        { t: '偏导存在已经蕴含连续，前提冗余', ok: false, why: '两个偏导存在连连续都推不出（$\\frac{xy}{x^{2}+y^{2}}$ 型）——这条是把「可微⇒连续」倒放，逻辑方向事故。' },
+        { t: '不存在反例：偏导+连续就是可微的定义强度', ok: false, why: '定义是「增量=线性主部+小 $o(\\rho)$」——偏导存在只给了主部的两个系数，余项对路径的一致性根本没进账单。' },
       ],
     },
   ]
@@ -2335,6 +2597,7 @@
     { fn: '$\\operatorname{sgn}(x)$（符号函数）', tags: ['between', 'cont'], teaches: '带第一类间断的函数永远当不上导函数——Darboux 定理：导函数无跳跃间断、自带介值性。对 $f\'$ 想用介值，先声明这条（母题⑫的镇馆之宝）。', level: 3 },
     { fn: '有理点 $x^2$ · 无理点 $0$', tags: ['diff', 'cont'], teaches: '在 $0$ 处可导（差商被 $x^2$ 夹逼）而在任何别处不连续——「可导」是逐点事实，不会沿邻域传染；$f\'$ 存在 ≠ $f\'$ 有去处。', level: 3 },
     { fn: '$f_n(x)=n e^{-n x}$ 在 $[0,1]$', tags: ['unifConv', 'swapLim'], teaches: '每项光滑、逐点收敛到 $0$，积分却守着 $1-e^{-n}\\to 1$ 不放——换序悲剧不挑反例的「难看程度」，只挑你有没有门票。', level: 3 },
+    { fn: '$\\dfrac{xy}{\\sqrt{x^{2}+y^{2}}}$（原点补 $0$）', tags: ['diff'], teaches: '连续的「偏导存在」也换不来可微：沿 $y=x$ 增量比恒为 $\\frac{1}{2\\sqrt2}$——全微分要一切路径一致，偏导只查了十字。清单 16 两条箭头不可逆的活证据。', level: 3 },
   ]
   function galleryFilter(query) {
     let q = String(query || '').trim().toLowerCase()
@@ -3119,13 +3382,13 @@
     out.push('<div class="pp-conbar v21">'
       + '<span class="pp-con"><b>叙事合成</b>内核证明→连贯散文——证明是讲出来的</span>'
       + '<span class="pp-con"><b>相似雷达</b>结构指纹比对：孪生题/同骨架/同结论</span>'
-      + '<span class="pp-con"><b>怪兽画廊</b>十五怪物博物馆：反例素养集中补课</span></div>')
+      + '<span class="pp-con"><b>怪兽画廊</b>十六怪物博物馆：反例素养集中补课</span></div>')
     out.push('<section class="pp-card"><div class="pp-card-h"><b>寻路板</b><em>证明不是写出来的，是搜出来的——从已知出发，把桥一块块搭上</em>'
       + '<span class="pp-pickwrap"><div class="pp-seg">' + BOARD_PROBLEMS.map(function (x) {
         return '<button data-act="board-pick" data-id="' + x.id + '" class="' + (x.id === p.id ? 'on' : '') + '" title="' + esc(x.ch) + '">' + esc(x.title) + '</button>'
       }).join('') + '</div></span></div>')
     /* 题干 */
-    out.push('<div class="pp-node" style="margin-bottom:12px">' + esc(p.ch) + ' · <b>' + esc(p.title) + '</b>' + motherChip(p) + '<div style="margin-top:6px;font-size:13.5px">' + p.stem + '</div></div>')
+    out.push('<div class="pp-node" style="margin-bottom:12px">' + esc(p.ch) + ' · <b>' + esc(p.title) + '</b>' + motherChip(p) + '<div style="margin-top:6px;font-size:13.5px">' + esc(p.stem) + '</div></div>')
     /* 三栏：条件 | 桥 | 目标 */
     let pool = {}
     p.conds.forEach(function (c) { pool[c.t] = 1 })
@@ -3201,7 +3464,7 @@
         let m = MONSTERS[oi]
         let cls = ''
         if (mo.picked != null) cls = oi === mo.answer ? ' right' : (slot === mo.picked ? ' wrong' : '')
-        return '<button class="pp-topt' + cls + '" data-act="monster-pick" data-slot="' + slot + '" data-oi="' + oi + '"' + (mo.picked != null ? ' disabled' : '') + '>' + m.fn + '</button>'
+        return '<button class="pp-topt' + cls + '" data-act="monster-pick" data-slot="' + slot + '" data-oi="' + oi + '"' + (mo.picked != null ? ' disabled' : '') + '>' + esc(m.fn) + '</button>'
       }).join('') + '</div>')
       if (mo.picked != null) {
         let hit = mo.opts[mo.picked] === mo.answer
@@ -3226,7 +3489,7 @@
     let ceg = null
     CEGames.forEach(function (x) { if (x.id === S.ceId) ceg = x })
     if (!ceg) ceg = CEGames[0]
-    out.push('<div class="pp-tq">' + ceg.law + '</div>')
+    out.push('<div class="pp-tq">' + esc(ceg.law) + '</div>')
     out.push('<div class="pp-topts">' + ceg.pool.map(function (o, i) {
       let cls = ''
       if (S.ce && S.ce.gid === ceg.id && S.ce.picked != null) cls = o.ok ? ' right' : (i === S.ce.picked ? ' wrong' : '')
@@ -3390,7 +3653,7 @@
       + '<span class="pp-quiet">第 ' + (S.trig.i + 1) + ' / ' + S.trig.order.length + ' 题</span>'
       + '<span class="pp-streak">' + (S.trig.streak > 1 ? '连对 ' + S.trig.streak + ' 中' : '') + '</span>'
       + '<span style="margin-left:auto" class="pp-timer' + (S.trigLeft <= 5 && S.timerOn ? ' low' : '') + '">' + (S.timerOn ? S.trigLeft + 's' : '∞') + '</span></div>')
-    out.push('<div class="pp-tq">' + t.q + '</div>')
+    out.push('<div class="pp-tq">' + esc(t.q) + '</div>')
     out.push('<div class="pp-topts">' + t.opts.map(function (o, i) {
       let cls = ''
       if (S.trig.picked != null) cls = i === t.a ? ' right' : (i === S.trig.picked ? ' wrong' : '')
@@ -3456,7 +3719,7 @@
     if (!set) set = REASM_SETS[0]
     if (!S.reasmShuffle || S.reasmShuffleSet !== set.id) { S.reasmShuffleSet = set.id; S.reasmShuffle = shuffle(set.steps.map(function (_, i) { return i }), set.id) }
     let taken = S.reasmOrder.slice()
-    out.push('<div class="pp-quiet" style="margin-bottom:10px">' + set.title + '</div>')
+    out.push('<div class="pp-quiet" style="margin-bottom:10px">' + esc(set.title) + '</div>')
     out.push('<div>')
     for (let i = 0; i < set.steps.length; i++) {
       let stepIdx = taken[i]
@@ -3498,7 +3761,7 @@
       let cls = ''
       if (S.auditMark.includes(i)) cls += ' marked'
       if (S.auditResult) cls += l.bad ? ' reveal-bad' : ' reveal-ok'
-      out.push('<div class="pp-proofline' + cls + '" data-act="audit-mark" data-i="' + i + '"><span class="pp-lineno">' + (i + 1) + '</span>' + l.x + '</div>')
+      out.push('<div class="pp-proofline' + cls + '" data-act="audit-mark" data-i="' + i + '"><span class="pp-lineno">' + (i + 1) + '</span>' + esc(l.x) + '</div>')
     })
     if (!S.auditResult) {
       out.push('<div class="pp-acts"><button class="pp-btn primary" data-act="audit-submit">' + I('shield') + '提交排雷</button>'
@@ -3569,7 +3832,7 @@
       + '<span class="pp-pickwrap"><div class="pp-seg">' + BOARD_PROBLEMS.map(function (x) {
         return '<button data-act="ed-pick" data-id="' + x.id + '" class="' + (x.id === p.id ? 'on' : '') + '">' + esc(x.title) + '</button>'
       }).join('') + '</div></span></div>')
-    out.push('<div class="pp-node" style="margin-bottom:12px">' + esc(p.ch) + ' · <b>' + esc(p.title) + '</b>' + motherChip(p) + '<div style="margin-top:6px;font-size:13.5px">' + p.stem + '</div></div>')
+    out.push('<div class="pp-node" style="margin-bottom:12px">' + esc(p.ch) + ' · <b>' + esc(p.title) + '</b>' + motherChip(p) + '<div style="margin-top:6px;font-size:13.5px">' + esc(p.stem) + '</div></div>')
     /* Fitch 行区 */
     out.push('<div class="pp-fitch">')
     p.conds.forEach(function (c, i) {
@@ -3715,7 +3978,7 @@
     }
     list.forEach(function (g) {
       out.push('<div class="pp-monster">'
-        + '<div class="pp-mhead"><b>' + g.fn + '</b><span class="pp-mlv">杀伤力 ' + '★'.repeat(g.level) + '☆'.repeat(4 - g.level) + '</span></div>'
+        + '<div class="pp-mhead"><b>' + esc(g.fn) + '</b><span class="pp-mlv">杀伤力 ' + '★'.repeat(g.level) + '☆'.repeat(4 - g.level) + '</span></div>'
         + '<div class="pp-mtags">' + g.tags.map(function (t) { return '<span class="pp-mtag">' + esc(t) + '</span>' }).join('') + '</div>'
         + '<div class="pp-mteaches">' + esc(g.teaches) + '</div></div>')
     })
@@ -3723,7 +3986,7 @@
   }
   function galleryHTML(ctx, S) {
     let out = []
-    out.push('<section class="pp-card"><div class="pp-card-h"><b>怪兽画廊</b><em>Lakatos 的博物馆：十五个病理函数——每个都咬断过一条「显然」的前提</em></div>')
+    out.push('<section class="pp-card"><div class="pp-card-h"><b>怪兽画廊</b><em>Lakatos 的博物馆：十六个病理函数——每个都咬断过一条「显然」的前提</em></div>')
     /* 工具条与列表分离：搜索只换 .pp-glist，输入框节点原地不动（焦点不丢） */
     out.push('<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">'
       + '<input class="pp-input" data-pp="gq" placeholder="搜函数名/标签/教训（如 Dirichlet、一致、震荡）" value="' + esc(S.gq) + '" style="max-width:320px"></div>')
@@ -3854,7 +4117,7 @@
     CHECKLIST.forEach(function (c, i) {
       out.push('<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px dashed color-mix(in srgb,var(--pp-line) 45%,transparent)">'
         + '<b style="color:var(--pp-gold);min-width:22px;text-align:right">' + (i < 9 ? '0' : '') + (i + 1) + '</b>'
-        + '<span style="font-size:12.5px">' + c + '</span></div>')
+        + '<span style="font-size:12.5px">' + esc(c) + '</span></div>')
     })
     out.push('</div><div class="pp-quiet" style="margin-top:8px">冲刺 D-1 晚只看本页 + 三大表 + 易错 20 例，早睡——讲义原话：二十条读三遍，胜过题海一晚上。</div></section>')
     /* 三大表数字卡 */
@@ -3863,7 +4126,7 @@
       out.push('<div class="pp-tablecard"><table style="width:100%;border-collapse:collapse">'
         + '<tr><th colspan="3">' + esc(tb.name) + '<span style="float:right;font-weight:400">' + esc(tb.src) + '</span></th></tr>')
       tb.rows.forEach(function (r) {
-        out.push('<tr><td style="width:38%">' + r[0] + '</td><td style="width:30%"><b>' + r[1] + '</b></td><td class="pp-quiet">' + r[2] + '</td></tr>')
+        out.push('<tr><td style="width:38%">' + esc(r[0]) + '</td><td style="width:30%"><b>' + esc(r[1]) + '</b></td><td class="pp-quiet">' + esc(r[2]) + '</td></tr>')
       })
       out.push('</table></div>')
     })
