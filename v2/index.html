@@ -388,7 +388,7 @@
         if (num) num.textContent = Math.round(pct) + '%';
         requestAnimationFrame(tick);
       }
-      function ready() {
+      function ready(readyReal) {
         if (done) return;
         done = true;
         G.booted = true;
@@ -398,6 +398,28 @@
         if (bar) bar.style.width = '100%';
         var num = document.getElementById('boot-num');
         if (num) num.textContent = '100%';
+        /* ══════════════════════════════════════════════════════════════════
+         * 【2026-11-21 接入鸦荔开屏动画】把**离场权**交给动画，这里只按一个信号。
+         *
+         * 为什么不是两套离场逻辑并行：旧逻辑是"淡出 + 移除"，新动画是
+         * "形变 → 飞行 → 落位到教练悬浮窗"。两者同时跑会互相打断
+         * （淡出到一半被飞行抢走、或飞行动画还在跑容器已经没了）。
+         *
+         * 为什么复用 __BOOT_READY 而不是另造一个信号：它已经是**首屏可交互**的
+         * 唯一准确判据（router.isReady + 双 rAF 保证首帧已合成，另有 2.5s 兜底），
+         * 再写一套判定必然和它分叉。
+         *
+         * 兜底：__SPLASH 不存在（旧缓存 / 脚本被拦 / 动画自身出错）→ 走原来的淡出，
+         * 用户看到的只是"没有动画的启动屏"，不会白屏。
+         * ══════════════════════════════════════════════════════════════════ */
+        var sp = window.__SPLASH;
+        if (sp && typeof sp.ready === 'function') {
+          /* 把"这是不是真的加载完成"透传下去：
+           * __BOOT_READY(true) = 路由已就绪（真完成）→ 允许加速退场；
+           * __BOOT_READY(false/undefined) = 2.5s 超时兜底 → 只解锁退出，**不加速**。 */
+          try { sp.ready(readyReal !== false); } catch (e) { /* 动画层异常绝不能拦住启动 */ }
+          return;   // 离场交给动画自己完成（它会 exitNow + landOrb + 移除自身）
+        }
         setTimeout(function () {
           var s = document.getElementById('boot-splash');
           if (s) { s.style.opacity = '0'; s.style.transition = 'opacity .35s'; }
@@ -480,22 +502,582 @@
     .boot-num { font-size: 12px; color: #7a828c; font-variant-numeric: tabular-nums; }
     .boot-tip { font-size: 12.5px; color: #7a828c; margin-top: 10px; min-height: 18px; transition: opacity .3s; }
   </style>
-  <script type="module" crossorigin src="./assets/index-DDKaRZyu.js"></script>
+  <!-- ══════════════════════════════════════════════════════════════════════
+       鸦荔开屏动画样式（2026-11-21 接入）—— **内联而非外链**，两个原因：
+        ① 启动屏是"第一眼"，外链 CSS 会让它有一瞬裸 HTML（FOUC）；
+        ② 放在这里（旧 .boot-* 规则**之后**）才能覆盖同名的 .boot-bar/.boot-num 等，
+           且不破坏护栏与 ?boot=diag 诊断面板用到的样式。
+       源文件保留在 public/splash/splash.css 便于对照与回退。
+       ══════════════════════════════════════════════════════════════════════ -->
+  <style>
+* { box-sizing: border-box; }
+    button { font: inherit; }
+
+    /* ---------- 启动屏：角色造型与产品 AI 悬浮窗「鸦荔」同源 ---------- */
+    #boot-splash {
+      --boot-blue: #4b91fa; --boot-ink: #24262e; --boot-eye: #ff9db0;
+      --boot-pink: #ff7a95; --boot-beak: #f6c453; --boot-leaf: #3fae6e;
+      position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+      overflow: hidden; color: #202733;
+      background:
+        radial-gradient(circle at 50% 40%, rgba(75,145,250,.12), transparent 34%),
+        radial-gradient(circle at 12% 88%, rgba(255,122,149,.07), transparent 28%), #f6f8fb;
+      transform-origin: 50% 0; will-change: transform;
+    }
+    #boot-splash::after {
+      content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 22px;
+      background: inherit; border-radius: 0 0 50% 50% / 0 0 100% 100%; pointer-events: none;
+    }
+    .boot-grid {
+      position: absolute; inset: 0; opacity: .22; pointer-events: none;
+      background-image: radial-gradient(rgba(75,145,250,.32) .8px, transparent .8px);
+      background-size: 28px 28px;
+      -webkit-mask-image: radial-gradient(circle at 50% 44%, #000, transparent 62%);
+      mask-image: radial-gradient(circle at 50% 44%, #000, transparent 62%);
+    }
+    .boot-world { width: 86vw; max-width: 420px; text-align: center; transform: translateY(-2vh); }
+    .boot-scene { position: relative; width: 280px; max-width: 82vw; height: 250px; margin: 0 auto; }
+    .boot-orbit {
+      position: absolute; left: 50%; top: 43%; width: 222px; height: 222px;
+      border: 1px solid rgba(75,145,250,.2); border-radius: 50%;
+      transform: translate(-50%,-50%); animation: boot-orbit-in .8s ease-out both;
+    }
+    .boot-orbit::before, .boot-orbit::after {
+      content: ''; position: absolute; border-radius: 50%; background: var(--boot-blue);
+    }
+    .boot-orbit::before { width: 6px; height: 6px; left: 21px; top: 36px; box-shadow: 0 0 0 5px rgba(75,145,250,.09); }
+    .boot-orbit::after { width: 4px; height: 4px; right: 24px; bottom: 37px; opacity: .55; }
+    .boot-spark {
+      position: absolute; width: 8px; height: 8px; border-radius: 2px; opacity: 0;
+      background: var(--boot-blue); transform: rotate(45deg) scale(.3);
+      animation: boot-sparkle 2.4s ease-in-out infinite;
+    }
+    .boot-spark.s1 { left: 22px; top: 85px; animation-delay: .9s; }
+    .boot-spark.s2 { right: 25px; top: 69px; width: 6px; height: 6px; background: var(--boot-pink); animation-delay: 1.25s; }
+    .boot-spark.s3 { right: 40px; bottom: 46px; width: 5px; height: 5px; background: var(--boot-beak); animation-delay: 1.6s; }
+    .boot-book {
+      position: absolute; z-index: 1; left: 50%; bottom: 21px; width: 158px; height: 49px;
+      transform: translateX(-50%) perspective(180px) rotateX(52deg); transform-origin: 50% 100%;
+      animation: boot-book-open .7s cubic-bezier(.22,.61,.36,1) .08s both;
+      filter: drop-shadow(0 10px 8px rgba(33,55,83,.12));
+    }
+    .boot-book .pg {
+      position: absolute; bottom: 0; width: 50%; height: 100%; background: #fffef9;
+      border: 1px solid #d8e0e8; overflow: hidden;
+    }
+    .boot-book .pg.l { left: 0; border-radius: 12px 3px 3px 8px; transform: rotate(-3deg); }
+    .boot-book .pg.r { right: 0; border-radius: 3px 12px 8px 3px; transform: rotate(3deg); }
+    .boot-book .pg::before, .boot-book .pg::after {
+      content: ''; position: absolute; left: 18%; right: 18%; top: 31%; height: 2px;
+      border-radius: 2px; background: #dce7f3; box-shadow: 0 10px 0 #e7edf4;
+    }
+    .boot-book .pg.r::before, .boot-book .pg.r::after { background: #f4dce2; box-shadow: 0 10px 0 #f7e7eb; }
+    .boot-book .rib {
+      position: absolute; z-index: 2; left: 50%; top: -4px; width: 6px; height: 23px;
+      border-radius: 4px; background: var(--boot-pink); transform: translateX(-50%) rotate(5deg);
+    }
+    .boot-yali {
+      position: absolute; z-index: 2; left: 50%; top: 43%; width: 144px; height: 144px;
+      font-size: 36px; transform: translate(-50%,-50%); pointer-events: none;
+    }
+    .boot-stage { position: absolute; inset: 0; }
+    .boot-character {
+      display: block; width: 100%; height: 100%; overflow: visible;
+      filter: drop-shadow(0 10px 12px rgba(27,33,44,.12));
+    }
+    .morph-disc { opacity: 0; transform-box: fill-box; transform-origin: center; }
+    .morph-book {
+      opacity: 0; transform-box: fill-box; transform-origin: 50% 100%;
+      animation: boot-svg-book-open .7s cubic-bezier(.22,.61,.36,1) .08s both;
+    }
+    /* 书页线条也是书写动画；缩放原点分别位于左右内侧，避免两页同向生长。 */
+    .morph-book-line-left, .morph-book-line-right {
+      transform-box: fill-box; transform-origin: 0 50%;
+      animation: boot-page-write .38s ease-out .5s both;
+    }
+    .morph-book-line-right { transform-origin: 100% 50%; animation-delay: .64s; }
+    /* 墨迹路径位于书脊与身体之间；dashoffset 从 110 到 0 模拟向上书写。 */
+    .birth-thread {
+      fill: none; stroke: var(--boot-blue); stroke-width: 5; stroke-linecap: round;
+      stroke-dasharray: 110; stroke-dashoffset: 110; opacity: 0;
+      animation: boot-birth-thread .95s cubic-bezier(.4,0,.2,1) .28s both;
+    }
+    /* 笔尖只负责可见性；真正沿轮廓移动的是 SVG animateMotion，时长与身体描绘一致。 */
+    .birth-pen { opacity: 0; animation: boot-pen-visibility 1.05s linear .46s both; }
+    /* 孵化位移动效作用于整只角色，叶片和荔枝必须放在其内部才能同步跟随。 */
+    .morph-character {
+      transform-box: fill-box; transform-origin: 50% 62%;
+      animation: boot-hatch 1.12s cubic-bezier(.22,.8,.26,1) .42s both;
+    }
+    /* 身体先蓝色描边再填黑；1500 是覆盖整条闭合轮廓的 dash 长度。 */
+    .morph-body {
+      stroke-dasharray: 1500; stroke-dashoffset: 1500;
+      animation: boot-body-ink 1.05s cubic-bezier(.4,0,.2,1) .46s both;
+    }
+    /* 所有首帧动作必须在 2950 的 finish 前收尾，避免 is-complete 中途截断。 */
+    .morph-bob {
+      transform-box: fill-box; transform-origin: 50% 100%;
+      animation: boot-head-bob .45s cubic-bezier(.4,0,.2,1) 2.42s both, boot-breathe 3.6s ease-in-out 2.95s infinite;
+    }
+    /* 五官容器只做整体显现与最后的小眼神，具体描绘由眼睛和嘴巴各自完成。 */
+    .morph-face {
+      transform-box: fill-box; transform-origin: center;
+      animation: boot-feature-in .3s ease-out 1.28s both, boot-glance .45s ease-in-out 2.35s both;
+    }
+    .morph-eye {
+      transform-box: fill-box; transform-origin: center;
+      animation: boot-eye-ink .52s cubic-bezier(.4,0,.2,1) 1.42s both, boot-blink 3.8s ease-in-out 3s infinite;
+    }
+    .morph-eye-far { animation-delay: 1.52s, 3.08s; }
+    .morph-beak { animation: boot-beak-ink .4s cubic-bezier(.4,0,.2,1) 1.85s both; }
+    .morph-tuft {
+      --r: 0deg; transform-box: fill-box; transform-origin: 50% 100%;
+      animation: boot-tuft-sway 3.2s ease-in-out 2.95s infinite;
+    }
+    .morph-tuft path { animation: boot-tuft-ink .52s cubic-bezier(.4,0,.2,1) .88s both; }
+    .morph-tuft ellipse { animation: boot-feature-in .25s ease-out 1.36s both; }
+    .morph-tuft.l { --r: -16deg; }
+    .morph-tuft.r { --r: 16deg; }
+    .morph-tuft.r path { animation-delay: .99s; }
+    .morph-tuft.r ellipse { animation-delay: 1.46s; }
+    .morph-fruit {
+      transform-box: fill-box; transform-origin: center;
+      animation: boot-fruit-drop .72s cubic-bezier(.22,.8,.26,1) 1.82s both, boot-fruit-bob .4s ease-in-out 2.54s;
+    }
+    .morph-fruit-spots { animation: boot-feature-in .3s ease-out 2.28s both; }
+    .morph-blush { transform-box: fill-box; transform-origin: center; animation: boot-blush-pop .6s ease-in-out 2.06s both; }
+    .morph-head-leaf {
+      transform-box: fill-box; transform-origin: 100% 100%;
+      animation: boot-leaf-ink .6s cubic-bezier(.4,0,.2,1) 1.18s both, boot-leaf-sway 2.8s ease-in-out 2.95s infinite;
+    }
+    .morph-stem { opacity: 0; animation: boot-feature-in .22s ease-out 2.12s both; }
+    .boot-heart {
+      position: absolute; z-index: 3; right: 31px; top: 74px; width: 10px; height: 10px;
+      border-radius: 2px; background: var(--boot-pink); opacity: 0;
+      transform: rotate(45deg) scale(.3); animation: boot-heart-pop .8s ease-out 2.15s both;
+    }
+    .boot-heart::before, .boot-heart::after {
+      content: ''; position: absolute; width: 10px; height: 10px; border-radius: 50%; background: var(--boot-pink);
+    }
+    .boot-heart::before { left: -5px; top: 0; } .boot-heart::after { left: 0; top: -5px; }
+    .boot-finale {
+      position: absolute; z-index: 4; left: 50%; top: 43%; width: 96px; height: 96px;
+      transform: translate(-50%,-50%); pointer-events: none;
+    }
+    .boot-finale svg { display: block; width: 100%; height: 100%; overflow: visible; }
+    .boot-icon-disc, .boot-icon-book, .boot-icon-side {
+      transform-box: fill-box; transform-origin: center; opacity: 0;
+    }
+    .boot-icon-side { transform-origin: 50% 62%; }
+    .boot-copy { margin-top: 2px; animation: boot-copy-in .6s ease-out .65s both; }
+    .boot-title { font-size: 20px; line-height: 1.4; font-weight: 700; letter-spacing: .08em; }
+    .boot-title span { margin-right: 5px; color: var(--boot-blue); font-weight: 500; letter-spacing: .02em; }
+    .boot-slogan {
+      margin: 9px 0 0; color: #667386; font-family: 'Songti SC', 'Noto Serif CJK SC', serif;
+      font-size: 14px; line-height: 1.7; letter-spacing: .12em;
+    }
+    .boot-status {
+      position: absolute; left: 50%; bottom: max(26px, env(safe-area-inset-bottom));
+      width: 72vw; max-width: 264px; transform: translateX(-50%); text-align: center;
+      animation: boot-status-in .5s ease-out .9s both;
+    }
+    .boot-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .boot-tip { min-height: 18px; color: #657185; font-size: 12px; line-height: 1.5; text-align: left; }
+    .boot-num { color: #3977cf; font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+    .boot-track { height: 3px; overflow: hidden; border-radius: 3px; background: rgba(75,145,250,.13); }
+    .boot-bar {
+      width: 100%; height: 100%; border-radius: 3px; background: var(--boot-blue);
+      transform: scaleX(.06); transform-origin: 0 50%; transition: transform .25s ease-out;
+    }
+    .boot-load-detail {
+      display: flex; align-items: center; gap: 7px; margin-top: 11px; padding-top: 10px;
+      border-top: 1px solid rgba(75,145,250,.09); color: #7b8797; text-align: left;
+      font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace; font-size: 10px; line-height: 16px;
+    }
+    .boot-load-pulse {
+      flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--boot-blue);
+      box-shadow: 0 0 0 3px rgba(75,145,250,.09); animation: boot-loading-pulse 1.5s ease-in-out infinite;
+    }
+    .boot-load-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; letter-spacing: .025em; }
+    .boot-load-index { margin-left: auto; color: #9aa7b7; font-size: 9px; font-variant-numeric: tabular-nums; }
+    /* 仅 Demo 使用：正式接入可删除整组速度按钮及其事件，由真实加载状态自动选择节奏。 */
+    #boot-splash.is-ready .boot-load-pulse { background: #43a047; box-shadow: 0 0 0 3px rgba(67,160,71,.1); animation: none; }
+    #boot-splash.is-ready .boot-load-label { color: #55815e; }
+    #boot-splash.is-waiting .boot-status { animation: boot-status-dock .82s cubic-bezier(.22,.8,.26,1) both; }
+    #boot-splash.is-waiting .boot-track { height: 4px; transition: height .7s ease; }
+    #boot-splash.is-waiting .boot-load-detail { margin-top: 13px; }
+    #boot-splash.is-flying .boot-status { animation: boot-dock-away .42s ease-in both; }
+    /*
+      is-complete 故意写成通用选择器：角色被移动到飞行层后仍需保持相同冻结状态。
+      它同时用于极速收束，确保尚未播放到的五官不会突然以半透明状态进入形变。
+    */
+    .is-complete { pointer-events: none; }
+    .is-complete .morph-character,
+    .is-complete .morph-bob,
+    .is-complete .morph-face,
+    .is-complete .morph-eye,
+    .is-complete .morph-tuft,
+    .is-complete .morph-tuft path,
+    .is-complete .morph-tuft ellipse,
+    .is-complete .morph-head-leaf,
+    .is-complete .morph-fruit,
+    .is-complete .morph-fruit-spots,
+    .is-complete .morph-stem,
+    .is-complete .morph-beak,
+    .is-complete .morph-book,
+    .is-complete .morph-book-line-left,
+    .is-complete .morph-book-line-right,
+    .is-complete .morph-blush { animation: none; }
+    .is-complete .morph-body { animation: none; fill-opacity: 1; stroke: #FFFFFF; stroke-dashoffset: 0; }
+    .is-complete .birth-pen, .is-complete .birth-thread { display: none; }
+    .is-complete .boot-orbit { animation: boot-orbit-away .72s ease-out both; }
+    .is-complete .boot-copy { animation: boot-copy-away .36s ease-in both; }
+    /* 以下三条是早期飞出屏幕方案的保留样式；当前角色已交给 landOrb()，正式整理时可删除。 */
+    #boot-splash.is-flying .morph-character { animation: boot-side-flight .96s cubic-bezier(.22,.61,.36,1) both; }
+    #boot-splash.is-flying .morph-disc { animation: boot-disc-away .66s ease-in both; }
+    #boot-splash.is-flying .morph-book { animation: boot-icon-book-away .4s ease-in both; }
+    #boot-splash.is-leaving { animation: boot-curtain-up .8s cubic-bezier(.76,0,.24,1) both; pointer-events: none; }
+    #boot-splash.is-fast-exit.is-leaving { animation-duration: .48s; }
+    #boot-splash.is-fast-exit.is-flying .morph-character { animation-duration: .55s; }
+    #boot-splash.is-fast-exit.is-flying .boot-status { animation-duration: .24s; }
+
+    @keyframes boot-birth-thread {
+      0% { opacity: 0; stroke-dashoffset: 110; }
+      16% { opacity: 1; }
+      66% { opacity: 1; stroke-dashoffset: 0; }
+      100% { opacity: 0; stroke-dashoffset: 0; }
+    }
+    @keyframes boot-hatch {
+      0% { opacity: 0; transform: translateY(74px) scale(.45); }
+      20% { opacity: 1; }
+      62% { opacity: 1; transform: translateY(-6px) scale(1.03); }
+      82% { transform: translateY(2px) scale(.99); }
+      100% { opacity: 1; transform: none; }
+    }
+    @keyframes boot-body-ink {
+      0% { fill-opacity: 0; stroke: #79AEFC; stroke-dashoffset: 1500; }
+      62% { fill-opacity: 0; stroke: #4B91FA; stroke-dashoffset: 0; }
+      100% { fill-opacity: 1; stroke: #FFFFFF; stroke-dashoffset: 0; }
+    }
+    @keyframes boot-pen-visibility {
+      0% { opacity: 0; } 7%, 88% { opacity: 1; } 100% { opacity: 0; }
+    }
+    @keyframes boot-page-write {
+      0% { opacity: 0; transform: scaleX(0); }
+      100% { opacity: 1; transform: scaleX(1); }
+    }
+    @keyframes boot-tuft-ink {
+      0% { fill-opacity: 0; stroke-dasharray: 320; stroke-dashoffset: 320; }
+      62% { fill-opacity: 0; stroke-dashoffset: 0; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; }
+    }
+    @keyframes boot-eye-ink {
+      0% { fill-opacity: 0; stroke: #FF9DB0; stroke-width: 7; stroke-opacity: 1; stroke-dasharray: 360; stroke-dashoffset: 360; }
+      58% { fill-opacity: 0; stroke-dashoffset: 0; stroke-opacity: 1; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; stroke-opacity: 0; }
+    }
+    @keyframes boot-beak-ink {
+      0% { fill-opacity: 0; stroke: #F6C453; stroke-width: 7; stroke-linejoin: round; stroke-opacity: 1; stroke-dasharray: 260; stroke-dashoffset: 260; }
+      58% { fill-opacity: 0; stroke-dashoffset: 0; stroke-opacity: 1; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; stroke-opacity: 0; }
+    }
+    @keyframes boot-leaf-ink {
+      0% { fill-opacity: 0; stroke: #3FAE6E; stroke-width: 6; stroke-linejoin: round; stroke-opacity: 1; stroke-dasharray: 300; stroke-dashoffset: 300; }
+      58% { fill-opacity: 0; stroke-dashoffset: 0; stroke-opacity: 1; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; stroke-opacity: 0; }
+    }
+    @keyframes boot-feature-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes boot-fruit-drop {
+      0% { opacity: 0; transform: translateY(-86px) rotate(-35deg) scale(.6); } 48% { opacity: 1; }
+      72% { transform: translateY(3px) rotate(5deg) scale(1.16,.84); }
+      86% { transform: translateY(-5px) rotate(-3deg) scale(.96,1.04); } 100% { opacity: 1; transform: none; }
+    }
+    @keyframes boot-svg-book-open {
+      0% { opacity: 0; transform: scaleX(.18) scaleY(.82); }
+      62% { opacity: 1; transform: scaleX(1.06) scaleY(1); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes boot-orbit-in { from { opacity: 0; transform: translate(-50%,-50%) scale(.72); } to { opacity: 1; transform: translate(-50%,-50%) scale(1); } }
+    @keyframes boot-copy-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @keyframes boot-status-in { from { opacity: 0; transform: translate(-50%,8px); } to { opacity: 1; transform: translate(-50%,0); } }
+    @keyframes boot-status-dock {
+      0% { opacity: 1; width: 72vw; max-width: 264px; transform: translate(-50%,0); }
+      100% { opacity: 1; width: 86vw; max-width: 320px; transform: translate(-50%,var(--dock-y)); }
+    }
+    @keyframes boot-dock-away {
+      0% { opacity: 1; transform: translate(-50%,var(--dock-y)); }
+      100% { opacity: 0; transform: translate(-50%,var(--dock-y)) translateY(8px); }
+    }
+    @keyframes boot-loading-pulse { 0%,100% { opacity: .45; transform: scale(.82); } 50% { opacity: 1; transform: scale(1.12); } }
+    @keyframes boot-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.025,.98); } }
+    @keyframes boot-blink { 0%,45%,49%,100% { transform: scaleY(1); } 47% { transform: scaleY(.1); } }
+    @keyframes boot-head-bob {
+      0%,100% { transform: none; } 24% { transform: translateY(1px) rotate(-1deg); }
+      48%,62% { transform: translateY(-3px) rotate(5deg); } 82% { transform: translateY(0) rotate(1deg); }
+    }
+    @keyframes boot-glance { 0%,100% { transform: none; } 32%,62% { transform: translate(3px,-3px); } }
+    @keyframes boot-fruit-bob {
+      0%,100% { transform: none; } 35% { transform: translateY(-10px) rotate(8deg); }
+      58% { transform: translateY(-8px) rotate(5deg); } 78% { transform: translateY(2px) scale(1.04,.96); }
+    }
+    @keyframes boot-blush-pop { 0% { opacity: 0; transform: scale(.82); } 24%,100% { opacity: .55; transform: scale(1); } 42%,68% { opacity: .78; transform: scale(1.08); } }
+    @keyframes boot-heart-pop {
+      0% { opacity: 0; transform: translateY(5px) rotate(45deg) scale(.4); }
+      42%,62% { opacity: .78; transform: translateY(0) rotate(45deg) scale(.9); }
+      100% { opacity: 0; transform: translateY(-10px) rotate(45deg) scale(.82); }
+    }
+    @keyframes boot-leaf-sway { 0%,100% { transform: rotate(-20deg); } 50% { transform: rotate(-29deg) translateY(-2px); } }
+    @keyframes boot-tuft-sway { 0%,100% { transform: rotate(var(--r)); } 50% { transform: rotate(calc(var(--r) - 5deg)) translateY(-2px); } }
+    @keyframes boot-sparkle { 0%,100% { opacity: 0; transform: rotate(45deg) scale(.3); } 42%,62% { opacity: .8; transform: rotate(135deg) scale(1); } }
+    @keyframes boot-front-to-side {
+      0% { opacity: 1; transform: perspective(260px) rotateY(0) translateX(0) scale(1); }
+      32% { opacity: .98; transform: perspective(260px) rotateY(-38deg) translateX(2px) scale(.98); }
+      70% { opacity: .35; transform: perspective(260px) rotateY(-78deg) translateX(10px) scale(.9); }
+      100% { opacity: 0; transform: perspective(260px) rotateY(-92deg) translateX(18px) scale(.82); }
+    }
+    @keyframes boot-disc-in {
+      0% { opacity: 0; transform: scale(.2); }
+      28% { opacity: .82; transform: scale(.56); }
+      68% { opacity: 1; transform: scale(1.05); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes boot-side-in {
+      0% { opacity: 0; transform: perspective(420px) rotateY(86deg) translateX(-18px) scale(.82); }
+      35% { opacity: .45; transform: perspective(420px) rotateY(58deg) translateX(-9px) scale(.92); }
+      72% { opacity: 1; transform: perspective(420px) rotateY(-6deg) translateX(1px) scale(1.03); }
+      100% { opacity: 1; transform: perspective(420px) rotateY(0) translateX(0) scale(1); }
+    }
+    @keyframes boot-icon-book-in {
+      0% { opacity: 0; transform: translateY(12px) scale(.86); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes boot-side-flight {
+      0% { opacity: 1; transform: translate(0,0) rotate(0) scale(1); }
+      12% { opacity: 1; transform: translate(0,18px) rotate(4deg) scale(.96); }
+      25% { opacity: 1; transform: translate(20px,-20px) rotate(-7deg) scale(1.02); }
+      58% { opacity: 1; transform: translate(270px,-220px) rotate(-10deg) scale(.94); }
+      100% { opacity: 0; transform: translate(1200px,-900px) rotate(-14deg) scale(.72); }
+    }
+    @keyframes boot-disc-away {
+      0% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(.72); }
+    }
+    @keyframes boot-icon-book-away {
+      0% { opacity: 1; transform: translateY(0) scale(1); }
+      100% { opacity: 0; transform: translateY(16px) scale(.82); }
+    }
+    @keyframes boot-book-away { to { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.82); } }
+    @keyframes boot-orbit-away { to { opacity: 0; transform: translate(-50%,-50%) scale(1.35); } }
+    @keyframes boot-copy-away { to { opacity: 0; transform: translateY(-8px); } }
+    @keyframes boot-curtain-up { 0% { transform: none; } 82% { opacity: 1; } 100% { opacity: 0; transform: translateY(-104%) rotate(-1.2deg); } }
+
+    /* ---------- Demo 结束后的极简落地页，仅用于预览与重播 ---------- */
+    .ai-orb-target {
+      position: fixed; z-index: 12; top: 92px; right: 24px; width: 64px; height: 64px;
+      padding: 0; border: 0; border-radius: 50%; background: transparent; opacity: 0;
+      cursor: pointer; transition: transform .18s cubic-bezier(.22,.8,.26,1);
+    }
+    .ai-orb-target.is-arrived { opacity: 1; }
+    .ai-orb-target.is-arrived:hover { transform: scale(1.06); }
+    .ai-orb-target:active { transform: scale(.94); }
+    .ai-orb-target:focus-visible { outline: 3px solid rgba(75,145,250,.3); outline-offset: 5px; }
+    .ai-orb-target .boot-yali { position: absolute; inset: 0; width: 100%; height: 100%; transform: none; }
+    .ai-orb-hint {
+      position: fixed; z-index: 11; top: 164px; right: 17px; color: #748298; font-size: 10px;
+      letter-spacing: .04em; opacity: 0; transform: translateY(-4px); transition: opacity .25s .12s, transform .25s .12s;
+      pointer-events: none;
+    }
+    .ai-orb-target.is-arrived + .ai-orb-hint { opacity: 1; transform: none; }
+    .boot-flight-layer { position: fixed; inset: 0; z-index: 60; overflow: visible; pointer-events: none; }
+    .boot-flight-layer .boot-yali { margin: 0; }
+    .boot-flight-layer .morph-character { animation: boot-orb-rock .76s ease-in-out both; }
+    .boot-flight-layer.is-fast .morph-character { animation-duration: .48s; }
+    @keyframes boot-orb-rock {
+      0%,100% { transform: none; } 18% { transform: translateY(4px) rotate(4deg); }
+      55% { transform: translateY(-5px) rotate(-7deg); } 82% { transform: rotate(2deg); }
+    }
+
+    @media (max-height: 620px) {
+      .boot-world { transform: translateY(-4vh); } .boot-scene { height: 214px; }
+      .boot-yali { width: 124px; height: 124px; font-size: 31px; } .boot-orbit { width: 194px; height: 194px; }
+      .boot-book { bottom: 12px; } .boot-title { font-size: 18px; } .boot-slogan { margin-top: 5px; }
+    }
+    @media (prefers-color-scheme: dark) {
+      #boot-splash { color: #edf2f8; background: radial-gradient(circle at 50% 40%, rgba(75,145,250,.16), transparent 35%), #151b24; }
+      .boot-grid { opacity: .16; } .boot-slogan, .demo-center p { color: #d7e0eb; }
+      .boot-tip, .demo-foot { color: #b2bdca; } .boot-num { color: #8ebcff; }
+      .boot-track { background: rgba(143,188,255,.16); } .demo-brand { color: #b2bdca; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #boot-splash, #boot-splash *, #boot-splash *::before, #boot-splash *::after {
+        animation: none !important; transition-duration: .01ms !important; will-change: auto !important;
+      }
+    }
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     2026-11-21 覆盖层（必须排在上面的动画样式之后）
+     ══════════════════════════════════════════════════════════════════════ */
+
+  /* ① 层级：侧栏是 z-index:64（题核页 .thx-root .rail），比 demo 给的 20 高，
+        于是左边导航从启动屏底下漏了出来（用户截图）。
+        启动屏是"盖在最前面"的东西，不该跟应用元素讨价还价 —— 直接顶到接近上限。 */
+  /* ══════════════════════════════════════════════════════════════════════
+     ③ 等待态不能是死画面（2026-11-21 用户要求「加载的时候这个动画不能有卡顿」）
+     ══════════════════════════════════════════════════════════════════════ */
+  /* 根因：`finish()` 给启动屏加了 `.is-complete`，而它的规则是「停止所有首帧 CSS 动画」
+     （demo 的设计，目的是固定住可形变状态）。于是进入"等加载"以后，
+     呼吸、闪光、轨道旋转全停 —— 加载慢的用户盯着一个**完全静止**的画面，
+     主观上就是"卡死了"。这不是掉帧，是**没有动效**。
+     下面这组动效只碰独立装饰元素（轨道/光斑/眼睛），
+     **不碰任何参与形变的 path**，所以不会干扰 `.is-complete` 要固定住的状态。
+     用 !important 是因为 `.is-complete` 那条规则也是 !important。 */
+  #boot-splash.is-complete .boot-orbit {
+    animation: boot-wait-orbit 16s linear infinite !important;
+  }
+  @keyframes boot-wait-orbit {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to   { transform: translate(-50%, -50%) rotate(360deg); }
+  }
+  #boot-splash.is-complete .boot-spark {
+    animation: boot-sparkle 2.8s ease-in-out infinite !important;
+  }
+  #boot-splash.is-complete .morph-eye {
+    transform-box: fill-box; transform-origin: center;
+    animation: boot-wait-eye 3.6s ease-in-out infinite !important;
+  }
+  @keyframes boot-wait-eye {
+    0%, 92%, 100% { transform: scaleY(1); }
+    95%           { transform: scaleY(.12); }   /* 眨一下：整段里最轻的"活着"信号 */
+  }
+  /* 尊重系统设置：开了「减少动画」就老老实实静止，别跟用户的偏好对着干 */
+  @media (prefers-reduced-motion: reduce) {
+    #boot-splash.is-complete .boot-orbit,
+    #boot-splash.is-complete .boot-spark,
+    #boot-splash.is-complete .morph-eye { animation: none !important; }
+  }
+
+  #boot-splash { z-index: 2147483000 !important; }
+  /* 飞行层必须比启动屏还高，否则角色在离场那一下会被启动屏自身盖住 */
+  .boot-flight-layer { z-index: 2147483001 !important; }
+
+  /* ② 流畅度：形变每帧改 13 个 SVG path 的 d 属性，浏览器要为每个 path 重算几何
+        并可能影响整棵 SVG 的布局。`contain: layout paint` 把重排/重绘**限制在这两个盒子内**，
+        不让它波及整个启动屏（视觉零变化，纯粹给渲染器划边界）。 */
+  .boot-yali, .boot-stage { contain: layout paint; }
+  /* 装饰层（轨道环/光斑/爱心）在形变期间没必要继续合成，降一档开销 */
+  .boot-orbit, .boot-spark, .boot-heart { will-change: auto; }
+  </style>
+  <script type="module" crossorigin src="./assets/index-DZpOLsQH.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-BjOm120o.js">
   <link rel="modulepreload" crossorigin href="./assets/questionFigures-DLmrVvl0.js">
-  <link rel="modulepreload" crossorigin href="./assets/vendor-D0Nwz3sC.js">
-  <link rel="modulepreload" crossorigin href="./assets/tex-BtWj0xuV.js">
-  <link rel="modulepreload" crossorigin href="./assets/markdown-CGKQYOlj.js">
-  <link rel="modulepreload" crossorigin href="./assets/subjectKey-Z46yywvJ.js">
-  <link rel="modulepreload" crossorigin href="./assets/ai-1ujERNcN.js">
+  <link rel="modulepreload" crossorigin href="./assets/vendor-NWMZSeO4.js">
+  <link rel="modulepreload" crossorigin href="./assets/utils-D16g5jjZ.js">
+  <link rel="modulepreload" crossorigin href="./assets/markdown-DYCKT-BN.js">
+  <link rel="modulepreload" crossorigin href="./assets/tex-CQfighJm.js">
+  <link rel="modulepreload" crossorigin href="./assets/subjectKey-Dztr3947.js">
+  <link rel="modulepreload" crossorigin href="./assets/ai-B-sSBXmd.js">
+  <link rel="modulepreload" crossorigin href="./assets/playbook-C0hSgiGA.js">
+  <link rel="modulepreload" crossorigin href="./assets/artifacts-nquRSZr8.js">
   <link rel="modulepreload" crossorigin href="./assets/quizIntent-P943mtJO.js">
-  <link rel="modulepreload" crossorigin href="./assets/playbook-BQXcI9P9.js">
-  <link rel="modulepreload" crossorigin href="./assets/pagectx-K04ojsJn.js">
-  <link rel="modulepreload" crossorigin href="./assets/share-BkmGaxfV.js">
+  <link rel="modulepreload" crossorigin href="./assets/mistakesEngine-B5Bc7HB9.js">
+  <link rel="modulepreload" crossorigin href="./assets/backup-DXGbKhD9.js">
+  <link rel="modulepreload" crossorigin href="./assets/share-D1J7qjEC.js">
+  <link rel="modulepreload" crossorigin href="./assets/engProfile-BGWXdiR9.js">
+  <link rel="modulepreload" crossorigin href="./assets/pagectx-DUs9pHSU.js">
+  <link rel="modulepreload" crossorigin href="./assets/globals-IwKnOwXr.js">
+  <link rel="modulepreload" crossorigin href="./assets/index-BSidHAln.js">
+  <link rel="modulepreload" crossorigin href="./assets/imgDrag-Dat5vzkM.js">
+  <link rel="modulepreload" crossorigin href="./assets/navDensity-DFo_abzE.js">
   <link rel="stylesheet" crossorigin href="./assets/vendor-DLVrwanO.css">
-  <link rel="stylesheet" crossorigin href="./assets/index-Bi-LhlbY.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-CfbmgMdK.css">
+  <link rel="stylesheet" crossorigin href="./assets/index-A9zmRydB.css">
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
+  <!-- YALI_SPLASH_TPL：开屏动画模板。由 splash.js 的 play() 插入到 body 首位，
+       并先移除旧的 #boot-splash（旧版只有 logo + 进度条，没有角色形变）。 -->
+  <template id="splash-template">
+    <div id="boot-splash" aria-label="buchii 鸦荔考研正在启动">
+      <div class="boot-grid" aria-hidden="true"></div>
+      <div class="boot-world">
+        <div class="boot-scene" aria-hidden="true">
+          <div class="boot-orbit"></div>
+          <span class="boot-spark s1"></span><span class="boot-spark s2"></span><span class="boot-spark s3"></span>
+          <span class="boot-heart"></span>
+          <div class="boot-yali">
+            <div class="boot-stage">
+              <!--
+                全部造型共用 512×512 坐标系。正脸路径直接写在这里，侧脸目标路径在 animateMorph()。
+                改路径时保持两端命令与数值数量一致；JS 会保存 data-front-d 供归位恢复。
+              -->
+              <svg class="boot-character" viewBox="0 0 512 512" aria-hidden="true">
+                <circle class="morph-disc" cx="256" cy="256" r="256" fill="#4B91FA"/>
+                <g class="morph-book">
+                  <path class="morph-book-pages" d="M-25 597 L256 582 L537 597 L537 646 L256 631 L-25 646 Z" fill="#FFFEF9"/>
+                  <path class="morph-book-left" d="M-25 646 L256 631 L256 681 L-25 672 Z" fill="#FFFEF9"/>
+                  <path class="morph-book-right" d="M256 631 L537 646 L537 672 L256 681 Z" fill="#FFFEF9"/>
+                  <path class="morph-book-spine" d="M246 578 L266 578 L270 626 L250 626 Z" fill="#FF7A95"/>
+                  <path class="morph-book-line-left" d="M40 610 L180 606 L180 610 L40 614 Z" fill="#DCE7F3"/>
+                  <path class="morph-book-line-right" d="M332 606 L482 610 L482 614 L332 610 Z" fill="#F4DCE2"/>
+                </g>
+                <path class="birth-thread" d="M256 582 C246 556 266 528 256 490"/>
+                <g class="morph-character">
+                  <g class="morph-bob">
+                    <!-- 身体正脸源路径；对应侧脸目标在 JS shapes 数组中，二者不可只改一端。 -->
+                    <path class="morph-body" d="M256 43 C366 43 441 85 469 185 C487 292 469 384 398 441 C327 498 185 498 114 441 C43 384 25 292 43 185 C71 85 146 43 256 43 Z" fill="#24262E" stroke="#FFFFFF" stroke-width="10" stroke-linejoin="round"/>
+                    <!-- animateMotion 的 path 与身体源路径完全相同；修改身体时必须同步修改这里。 -->
+                    <g class="birth-pen">
+                      <circle r="12" fill="#4B91FA" opacity=".12"/>
+                      <circle r="5" fill="#4B91FA" stroke="#FFFFFF" stroke-width="3"/>
+                      <animateMotion dur="1.05s" begin="0.46s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines=".4 0 .2 1" path="M256 43 C366 43 441 85 469 185 C487 292 469 384 398 441 C327 498 185 498 114 441 C43 384 25 292 43 185 C71 85 146 43 256 43 Z"/>
+                    </g>
+                    <path class="morph-head-leaf" d="M66.8 4.9 C66.8 45 115 77 156.9 77 C156.9 36.9 128.9 4.9 66.8 4.9 Z" fill="#3FAE6E"/>
+                    <g class="morph-tuft l">
+                      <path d="M183.9 104 C161.4 80 161.4 14 183.9 -13 C206.4 14 206.4 80 183.9 104 Z" fill="#24262E" stroke="#FFFFFF" stroke-width="7"/>
+                      <ellipse cx="183.9" cy="-9.7" rx="10.8" ry="17.6" fill="#FF9DB0"/>
+                    </g>
+                    <g class="morph-tuft r">
+                      <path d="M328.1 104 C305.6 80 305.6 14 328.1 -13 C350.6 14 350.6 80 328.1 104 Z" fill="#24262E" stroke="#FFFFFF" stroke-width="7"/>
+                      <ellipse cx="328.1" cy="-9.7" rx="10.8" ry="17.6" fill="#FF9DB0"/>
+                    </g>
+                    <g class="morph-face">
+                      <path class="morph-eye morph-eye-near" d="M174.85 189.5 C194.76 189.5 210.9 211.65 210.9 239.05 C210.9 266.45 194.76 288.6 174.85 288.6 C154.94 288.6 138.8 266.45 138.8 239.05 C138.8 211.65 154.94 189.5 174.85 189.5 Z" fill="#FF9DB0"/>
+                      <path class="morph-eye morph-eye-far" d="M337.15 189.5 C357.06 189.5 373.2 211.65 373.2 239.05 C373.2 266.45 357.06 288.6 337.15 288.6 C317.24 288.6 301.1 266.45 301.1 239.05 C301.1 211.65 317.24 189.5 337.15 189.5 Z" fill="#FF9DB0"/>
+                      <path class="morph-beak" d="M217 311 L295 311 L256 375 Z" fill="#F6C453"/>
+                    </g>
+                    <path class="morph-blush morph-belly" d="M87.05 284.2 C105.68 284.2 120.8 293.25 120.8 304.5 C120.8 315.75 105.68 324.8 87.05 324.8 C68.42 324.8 53.3 315.75 53.3 304.5 C53.3 293.25 68.42 284.2 87.05 284.2 Z" fill="#FF9DB0" opacity=".55"/>
+                    <path class="morph-blush morph-blush-far" d="M426.2 284.2 C444.83 284.2 459.95 293.25 459.95 304.5 C459.95 315.75 444.83 324.8 426.2 324.8 C407.57 324.8 392.45 315.75 392.45 304.5 C392.45 293.25 407.57 284.2 426.2 284.2 Z" fill="#FF9DB0" opacity=".55"/>
+                    <g class="morph-fruit-position" transform="translate(442.9 56.7) scale(1.52)">
+                      <g class="morph-fruit">
+                        <path class="morph-stem" d="M-3 -20 L-3 -36 Q-3 -40 0 -40 Q3 -40 3 -36 L3 -20 Z" fill="#6B4423"/>
+                        <path class="morph-leaf-right" d="M0 -30 C12 -44 30 -46 40 -38 C30 -26 12 -24 0 -30 Z" fill="#3FAE6E" transform="translate(0 -30) scale(.325) translate(0 30) rotate(-22)"/>
+                        <circle class="morph-fruit-skin" cx="0" cy="0" r="40" fill="#FF7A95" stroke="#D65B78" stroke-width="4.67"/>
+                        <g class="morph-fruit-spots" fill="#FFB0BF"><circle cx="-20" cy="-16.8" r="8.8"/><circle cx="7.2" cy="-21.6" r="8.8"/><circle cx="24.8" cy=".8" r="8.8"/><circle cx="-7.2" cy="12" r="8.8"/><circle cx="15.2" cy="21.6" r="8.8"/><circle cx="-20" cy="24.8" r="8.8"/><circle cx="0" cy="22" r=".001"/><circle cx="20" cy="14" r=".001"/></g>
+                      </g>
+                    </g>
+                  </g>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div class="boot-copy">
+          <div class="boot-title"><span>buchii</span>鸦荔考研</div>
+          <p class="boot-slogan">把每一天，变成上岸的伏笔。</p>
+        </div>
+      </div>
+      <div class="boot-status">
+        <div class="boot-meta"><div class="boot-tip" id="boot-tip" aria-live="polite">正在唤醒鸦荔…</div><div class="boot-num" id="boot-num" aria-hidden="true">0%</div></div>
+        <div class="boot-track" aria-hidden="true"><div class="boot-bar" id="boot-bar"></div></div>
+        <div class="boot-load-detail">
+          <i class="boot-load-pulse" aria-hidden="true"></i>
+          <span class="boot-load-label" id="boot-load-label" aria-live="polite">正在准备你的学习空间</span>
+          <span class="boot-load-index" id="boot-load-index" aria-hidden="true">00 / 04</span>
+        </div>
+      </div>
+    </div>
+  </template>
+
   <div id="boot-splash">
     <div class="boot-card">
       <img class="boot-logo" src="icon.svg" alt="buchii 鸦荔考研" width="64" height="64" style="border-radius:50%">
@@ -526,5 +1108,8 @@
       else tryShow();
     })();
   </script>
+  <!-- 开屏动画逻辑：按 demo 的节奏在 DOM 就绪后立刻 play()。
+       与 /src/main.ts 并行 —— 动画负责"好看"，main.ts 负责"加载"，两者通过 window.__SPLASH 通信。 -->
+  <script src="./splash/splash.js"></script>
 </body>
 </html>

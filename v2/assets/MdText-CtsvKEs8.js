@@ -1,0 +1,1 @@
+import{r as s}from"./subjectKey-Dztr3947.js";import{k as e,l as r,n as o,o as t}from"./vendor-NWMZSeO4.js";import{_ as a}from"./index-BSidHAln.js";const n=["innerHTML"],c=a(e({__name:"MdText",props:{source:{}},setup(e){const a=e,c=o(()=>s(a.source||""));return(s,e)=>(t(),r("div",{class:"md-text",innerHTML:c.value},null,8,n))}}),[["__scopeId","data-v-3cf22d79"]]);export{c as M};

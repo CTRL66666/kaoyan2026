@@ -1,0 +1,407 @@
+/* 鸦荔开屏动画 —— 从 yali-splash-demo-v2.html 抽取（2026-11-21）
+ * 原样保留：形变动画的视觉规则一条未改，避免"搬运过程中走形"。
+ * 接入说明见 yali-splash-demo-v2.html 头部注释（时间轴、状态类、验收清单）。
+ */
+* { box-sizing: border-box; }
+    button { font: inherit; }
+
+    /* ---------- 启动屏：角色造型与产品 AI 悬浮窗「鸦荔」同源 ---------- */
+    #boot-splash {
+      --boot-blue: #4b91fa; --boot-ink: #24262e; --boot-eye: #ff9db0;
+      --boot-pink: #ff7a95; --boot-beak: #f6c453; --boot-leaf: #3fae6e;
+      position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+      overflow: hidden; color: #202733;
+      background:
+        radial-gradient(circle at 50% 40%, rgba(75,145,250,.12), transparent 34%),
+        radial-gradient(circle at 12% 88%, rgba(255,122,149,.07), transparent 28%), #f6f8fb;
+      transform-origin: 50% 0; will-change: transform;
+    }
+    #boot-splash::after {
+      content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 22px;
+      background: inherit; border-radius: 0 0 50% 50% / 0 0 100% 100%; pointer-events: none;
+    }
+    .boot-grid {
+      position: absolute; inset: 0; opacity: .22; pointer-events: none;
+      background-image: radial-gradient(rgba(75,145,250,.32) .8px, transparent .8px);
+      background-size: 28px 28px;
+      -webkit-mask-image: radial-gradient(circle at 50% 44%, #000, transparent 62%);
+      mask-image: radial-gradient(circle at 50% 44%, #000, transparent 62%);
+    }
+    .boot-world { width: 86vw; max-width: 420px; text-align: center; transform: translateY(-2vh); }
+    .boot-scene { position: relative; width: 280px; max-width: 82vw; height: 250px; margin: 0 auto; }
+    .boot-orbit {
+      position: absolute; left: 50%; top: 43%; width: 222px; height: 222px;
+      border: 1px solid rgba(75,145,250,.2); border-radius: 50%;
+      transform: translate(-50%,-50%); animation: boot-orbit-in .8s ease-out both;
+    }
+    .boot-orbit::before, .boot-orbit::after {
+      content: ''; position: absolute; border-radius: 50%; background: var(--boot-blue);
+    }
+    .boot-orbit::before { width: 6px; height: 6px; left: 21px; top: 36px; box-shadow: 0 0 0 5px rgba(75,145,250,.09); }
+    .boot-orbit::after { width: 4px; height: 4px; right: 24px; bottom: 37px; opacity: .55; }
+    .boot-spark {
+      position: absolute; width: 8px; height: 8px; border-radius: 2px; opacity: 0;
+      background: var(--boot-blue); transform: rotate(45deg) scale(.3);
+      animation: boot-sparkle 2.4s ease-in-out infinite;
+    }
+    .boot-spark.s1 { left: 22px; top: 85px; animation-delay: .9s; }
+    .boot-spark.s2 { right: 25px; top: 69px; width: 6px; height: 6px; background: var(--boot-pink); animation-delay: 1.25s; }
+    .boot-spark.s3 { right: 40px; bottom: 46px; width: 5px; height: 5px; background: var(--boot-beak); animation-delay: 1.6s; }
+    .boot-book {
+      position: absolute; z-index: 1; left: 50%; bottom: 21px; width: 158px; height: 49px;
+      transform: translateX(-50%) perspective(180px) rotateX(52deg); transform-origin: 50% 100%;
+      animation: boot-book-open .7s cubic-bezier(.22,.61,.36,1) .08s both;
+      filter: drop-shadow(0 10px 8px rgba(33,55,83,.12));
+    }
+    .boot-book .pg {
+      position: absolute; bottom: 0; width: 50%; height: 100%; background: #fffef9;
+      border: 1px solid #d8e0e8; overflow: hidden;
+    }
+    .boot-book .pg.l { left: 0; border-radius: 12px 3px 3px 8px; transform: rotate(-3deg); }
+    .boot-book .pg.r { right: 0; border-radius: 3px 12px 8px 3px; transform: rotate(3deg); }
+    .boot-book .pg::before, .boot-book .pg::after {
+      content: ''; position: absolute; left: 18%; right: 18%; top: 31%; height: 2px;
+      border-radius: 2px; background: #dce7f3; box-shadow: 0 10px 0 #e7edf4;
+    }
+    .boot-book .pg.r::before, .boot-book .pg.r::after { background: #f4dce2; box-shadow: 0 10px 0 #f7e7eb; }
+    .boot-book .rib {
+      position: absolute; z-index: 2; left: 50%; top: -4px; width: 6px; height: 23px;
+      border-radius: 4px; background: var(--boot-pink); transform: translateX(-50%) rotate(5deg);
+    }
+    .boot-yali {
+      position: absolute; z-index: 2; left: 50%; top: 43%; width: 144px; height: 144px;
+      font-size: 36px; transform: translate(-50%,-50%); pointer-events: none;
+    }
+    .boot-stage { position: absolute; inset: 0; }
+    .boot-character {
+      display: block; width: 100%; height: 100%; overflow: visible;
+      filter: drop-shadow(0 10px 12px rgba(27,33,44,.12));
+    }
+    .morph-disc { opacity: 0; transform-box: fill-box; transform-origin: center; }
+    .morph-book {
+      opacity: 0; transform-box: fill-box; transform-origin: 50% 100%;
+      animation: boot-svg-book-open .7s cubic-bezier(.22,.61,.36,1) .08s both;
+    }
+    /* 书页线条也是书写动画；缩放原点分别位于左右内侧，避免两页同向生长。 */
+    .morph-book-line-left, .morph-book-line-right {
+      transform-box: fill-box; transform-origin: 0 50%;
+      animation: boot-page-write .38s ease-out .5s both;
+    }
+    .morph-book-line-right { transform-origin: 100% 50%; animation-delay: .64s; }
+    /* 墨迹路径位于书脊与身体之间；dashoffset 从 110 到 0 模拟向上书写。 */
+    .birth-thread {
+      fill: none; stroke: var(--boot-blue); stroke-width: 5; stroke-linecap: round;
+      stroke-dasharray: 110; stroke-dashoffset: 110; opacity: 0;
+      animation: boot-birth-thread .95s cubic-bezier(.4,0,.2,1) .28s both;
+    }
+    /* 笔尖只负责可见性；真正沿轮廓移动的是 SVG animateMotion，时长与身体描绘一致。 */
+    .birth-pen { opacity: 0; animation: boot-pen-visibility 1.05s linear .46s both; }
+    /* 孵化位移动效作用于整只角色，叶片和荔枝必须放在其内部才能同步跟随。 */
+    .morph-character {
+      transform-box: fill-box; transform-origin: 50% 62%;
+      animation: boot-hatch 1.12s cubic-bezier(.22,.8,.26,1) .42s both;
+    }
+    /* 身体先蓝色描边再填黑；1500 是覆盖整条闭合轮廓的 dash 长度。 */
+    .morph-body {
+      stroke-dasharray: 1500; stroke-dashoffset: 1500;
+      animation: boot-body-ink 1.05s cubic-bezier(.4,0,.2,1) .46s both;
+    }
+    /* 所有首帧动作必须在 2950 的 finish 前收尾，避免 is-complete 中途截断。 */
+    .morph-bob {
+      transform-box: fill-box; transform-origin: 50% 100%;
+      animation: boot-head-bob .45s cubic-bezier(.4,0,.2,1) 2.42s both, boot-breathe 3.6s ease-in-out 2.95s infinite;
+    }
+    /* 五官容器只做整体显现与最后的小眼神，具体描绘由眼睛和嘴巴各自完成。 */
+    .morph-face {
+      transform-box: fill-box; transform-origin: center;
+      animation: boot-feature-in .3s ease-out 1.28s both, boot-glance .45s ease-in-out 2.35s both;
+    }
+    .morph-eye {
+      transform-box: fill-box; transform-origin: center;
+      animation: boot-eye-ink .52s cubic-bezier(.4,0,.2,1) 1.42s both, boot-blink 3.8s ease-in-out 3s infinite;
+    }
+    .morph-eye-far { animation-delay: 1.52s, 3.08s; }
+    .morph-beak { animation: boot-beak-ink .4s cubic-bezier(.4,0,.2,1) 1.85s both; }
+    .morph-tuft {
+      --r: 0deg; transform-box: fill-box; transform-origin: 50% 100%;
+      animation: boot-tuft-sway 3.2s ease-in-out 2.95s infinite;
+    }
+    .morph-tuft path { animation: boot-tuft-ink .52s cubic-bezier(.4,0,.2,1) .88s both; }
+    .morph-tuft ellipse { animation: boot-feature-in .25s ease-out 1.36s both; }
+    .morph-tuft.l { --r: -16deg; }
+    .morph-tuft.r { --r: 16deg; }
+    .morph-tuft.r path { animation-delay: .99s; }
+    .morph-tuft.r ellipse { animation-delay: 1.46s; }
+    .morph-fruit {
+      transform-box: fill-box; transform-origin: center;
+      animation: boot-fruit-drop .72s cubic-bezier(.22,.8,.26,1) 1.82s both, boot-fruit-bob .4s ease-in-out 2.54s;
+    }
+    .morph-fruit-spots { animation: boot-feature-in .3s ease-out 2.28s both; }
+    .morph-blush { transform-box: fill-box; transform-origin: center; animation: boot-blush-pop .6s ease-in-out 2.06s both; }
+    .morph-head-leaf {
+      transform-box: fill-box; transform-origin: 100% 100%;
+      animation: boot-leaf-ink .6s cubic-bezier(.4,0,.2,1) 1.18s both, boot-leaf-sway 2.8s ease-in-out 2.95s infinite;
+    }
+    .morph-stem { opacity: 0; animation: boot-feature-in .22s ease-out 2.12s both; }
+    .boot-heart {
+      position: absolute; z-index: 3; right: 31px; top: 74px; width: 10px; height: 10px;
+      border-radius: 2px; background: var(--boot-pink); opacity: 0;
+      transform: rotate(45deg) scale(.3); animation: boot-heart-pop .8s ease-out 2.15s both;
+    }
+    .boot-heart::before, .boot-heart::after {
+      content: ''; position: absolute; width: 10px; height: 10px; border-radius: 50%; background: var(--boot-pink);
+    }
+    .boot-heart::before { left: -5px; top: 0; } .boot-heart::after { left: 0; top: -5px; }
+    .boot-finale {
+      position: absolute; z-index: 4; left: 50%; top: 43%; width: 96px; height: 96px;
+      transform: translate(-50%,-50%); pointer-events: none;
+    }
+    .boot-finale svg { display: block; width: 100%; height: 100%; overflow: visible; }
+    .boot-icon-disc, .boot-icon-book, .boot-icon-side {
+      transform-box: fill-box; transform-origin: center; opacity: 0;
+    }
+    .boot-icon-side { transform-origin: 50% 62%; }
+    .boot-copy { margin-top: 2px; animation: boot-copy-in .6s ease-out .65s both; }
+    .boot-title { font-size: 20px; line-height: 1.4; font-weight: 700; letter-spacing: .08em; }
+    .boot-title span { margin-right: 5px; color: var(--boot-blue); font-weight: 500; letter-spacing: .02em; }
+    .boot-slogan {
+      margin: 9px 0 0; color: #667386; font-family: 'Songti SC', 'Noto Serif CJK SC', serif;
+      font-size: 14px; line-height: 1.7; letter-spacing: .12em;
+    }
+    .boot-status {
+      position: absolute; left: 50%; bottom: max(26px, env(safe-area-inset-bottom));
+      width: 72vw; max-width: 264px; transform: translateX(-50%); text-align: center;
+      animation: boot-status-in .5s ease-out .9s both;
+    }
+    .boot-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .boot-tip { min-height: 18px; color: #657185; font-size: 12px; line-height: 1.5; text-align: left; }
+    .boot-num { color: #3977cf; font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+    .boot-track { height: 3px; overflow: hidden; border-radius: 3px; background: rgba(75,145,250,.13); }
+    .boot-bar {
+      width: 100%; height: 100%; border-radius: 3px; background: var(--boot-blue);
+      transform: scaleX(.06); transform-origin: 0 50%; transition: transform .25s ease-out;
+    }
+    .boot-load-detail {
+      display: flex; align-items: center; gap: 7px; margin-top: 11px; padding-top: 10px;
+      border-top: 1px solid rgba(75,145,250,.09); color: #7b8797; text-align: left;
+      font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace; font-size: 10px; line-height: 16px;
+    }
+    .boot-load-pulse {
+      flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--boot-blue);
+      box-shadow: 0 0 0 3px rgba(75,145,250,.09); animation: boot-loading-pulse 1.5s ease-in-out infinite;
+    }
+    .boot-load-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; letter-spacing: .025em; }
+    .boot-load-index { margin-left: auto; color: #9aa7b7; font-size: 9px; font-variant-numeric: tabular-nums; }
+    /* 仅 Demo 使用：正式接入可删除整组速度按钮及其事件，由真实加载状态自动选择节奏。 */
+    #boot-splash.is-ready .boot-load-pulse { background: #43a047; box-shadow: 0 0 0 3px rgba(67,160,71,.1); animation: none; }
+    #boot-splash.is-ready .boot-load-label { color: #55815e; }
+    #boot-splash.is-waiting .boot-status { animation: boot-status-dock .82s cubic-bezier(.22,.8,.26,1) both; }
+    #boot-splash.is-waiting .boot-track { height: 4px; transition: height .7s ease; }
+    #boot-splash.is-waiting .boot-load-detail { margin-top: 13px; }
+    #boot-splash.is-flying .boot-status { animation: boot-dock-away .42s ease-in both; }
+    /*
+      is-complete 故意写成通用选择器：角色被移动到飞行层后仍需保持相同冻结状态。
+      它同时用于极速收束，确保尚未播放到的五官不会突然以半透明状态进入形变。
+    */
+    .is-complete { pointer-events: none; }
+    .is-complete .morph-character,
+    .is-complete .morph-bob,
+    .is-complete .morph-face,
+    .is-complete .morph-eye,
+    .is-complete .morph-tuft,
+    .is-complete .morph-tuft path,
+    .is-complete .morph-tuft ellipse,
+    .is-complete .morph-head-leaf,
+    .is-complete .morph-fruit,
+    .is-complete .morph-fruit-spots,
+    .is-complete .morph-stem,
+    .is-complete .morph-beak,
+    .is-complete .morph-book,
+    .is-complete .morph-book-line-left,
+    .is-complete .morph-book-line-right,
+    .is-complete .morph-blush { animation: none; }
+    .is-complete .morph-body { animation: none; fill-opacity: 1; stroke: #FFFFFF; stroke-dashoffset: 0; }
+    .is-complete .birth-pen, .is-complete .birth-thread { display: none; }
+    .is-complete .boot-orbit { animation: boot-orbit-away .72s ease-out both; }
+    .is-complete .boot-copy { animation: boot-copy-away .36s ease-in both; }
+    /* 以下三条是早期飞出屏幕方案的保留样式；当前角色已交给 landOrb()，正式整理时可删除。 */
+    #boot-splash.is-flying .morph-character { animation: boot-side-flight .96s cubic-bezier(.22,.61,.36,1) both; }
+    #boot-splash.is-flying .morph-disc { animation: boot-disc-away .66s ease-in both; }
+    #boot-splash.is-flying .morph-book { animation: boot-icon-book-away .4s ease-in both; }
+    #boot-splash.is-leaving { animation: boot-curtain-up .8s cubic-bezier(.76,0,.24,1) both; pointer-events: none; }
+    #boot-splash.is-fast-exit.is-leaving { animation-duration: .48s; }
+    #boot-splash.is-fast-exit.is-flying .morph-character { animation-duration: .55s; }
+    #boot-splash.is-fast-exit.is-flying .boot-status { animation-duration: .24s; }
+
+    @keyframes boot-birth-thread {
+      0% { opacity: 0; stroke-dashoffset: 110; }
+      16% { opacity: 1; }
+      66% { opacity: 1; stroke-dashoffset: 0; }
+      100% { opacity: 0; stroke-dashoffset: 0; }
+    }
+    @keyframes boot-hatch {
+      0% { opacity: 0; transform: translateY(74px) scale(.45); }
+      20% { opacity: 1; }
+      62% { opacity: 1; transform: translateY(-6px) scale(1.03); }
+      82% { transform: translateY(2px) scale(.99); }
+      100% { opacity: 1; transform: none; }
+    }
+    @keyframes boot-body-ink {
+      0% { fill-opacity: 0; stroke: #79AEFC; stroke-dashoffset: 1500; }
+      62% { fill-opacity: 0; stroke: #4B91FA; stroke-dashoffset: 0; }
+      100% { fill-opacity: 1; stroke: #FFFFFF; stroke-dashoffset: 0; }
+    }
+    @keyframes boot-pen-visibility {
+      0% { opacity: 0; } 7%, 88% { opacity: 1; } 100% { opacity: 0; }
+    }
+    @keyframes boot-page-write {
+      0% { opacity: 0; transform: scaleX(0); }
+      100% { opacity: 1; transform: scaleX(1); }
+    }
+    @keyframes boot-tuft-ink {
+      0% { fill-opacity: 0; stroke-dasharray: 320; stroke-dashoffset: 320; }
+      62% { fill-opacity: 0; stroke-dashoffset: 0; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; }
+    }
+    @keyframes boot-eye-ink {
+      0% { fill-opacity: 0; stroke: #FF9DB0; stroke-width: 7; stroke-opacity: 1; stroke-dasharray: 360; stroke-dashoffset: 360; }
+      58% { fill-opacity: 0; stroke-dashoffset: 0; stroke-opacity: 1; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; stroke-opacity: 0; }
+    }
+    @keyframes boot-beak-ink {
+      0% { fill-opacity: 0; stroke: #F6C453; stroke-width: 7; stroke-linejoin: round; stroke-opacity: 1; stroke-dasharray: 260; stroke-dashoffset: 260; }
+      58% { fill-opacity: 0; stroke-dashoffset: 0; stroke-opacity: 1; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; stroke-opacity: 0; }
+    }
+    @keyframes boot-leaf-ink {
+      0% { fill-opacity: 0; stroke: #3FAE6E; stroke-width: 6; stroke-linejoin: round; stroke-opacity: 1; stroke-dasharray: 300; stroke-dashoffset: 300; }
+      58% { fill-opacity: 0; stroke-dashoffset: 0; stroke-opacity: 1; }
+      100% { fill-opacity: 1; stroke-dashoffset: 0; stroke-opacity: 0; }
+    }
+    @keyframes boot-feature-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes boot-fruit-drop {
+      0% { opacity: 0; transform: translateY(-86px) rotate(-35deg) scale(.6); } 48% { opacity: 1; }
+      72% { transform: translateY(3px) rotate(5deg) scale(1.16,.84); }
+      86% { transform: translateY(-5px) rotate(-3deg) scale(.96,1.04); } 100% { opacity: 1; transform: none; }
+    }
+    @keyframes boot-svg-book-open {
+      0% { opacity: 0; transform: scaleX(.18) scaleY(.82); }
+      62% { opacity: 1; transform: scaleX(1.06) scaleY(1); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes boot-orbit-in { from { opacity: 0; transform: translate(-50%,-50%) scale(.72); } to { opacity: 1; transform: translate(-50%,-50%) scale(1); } }
+    @keyframes boot-copy-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @keyframes boot-status-in { from { opacity: 0; transform: translate(-50%,8px); } to { opacity: 1; transform: translate(-50%,0); } }
+    @keyframes boot-status-dock {
+      0% { opacity: 1; width: 72vw; max-width: 264px; transform: translate(-50%,0); }
+      100% { opacity: 1; width: 86vw; max-width: 320px; transform: translate(-50%,var(--dock-y)); }
+    }
+    @keyframes boot-dock-away {
+      0% { opacity: 1; transform: translate(-50%,var(--dock-y)); }
+      100% { opacity: 0; transform: translate(-50%,var(--dock-y)) translateY(8px); }
+    }
+    @keyframes boot-loading-pulse { 0%,100% { opacity: .45; transform: scale(.82); } 50% { opacity: 1; transform: scale(1.12); } }
+    @keyframes boot-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.025,.98); } }
+    @keyframes boot-blink { 0%,45%,49%,100% { transform: scaleY(1); } 47% { transform: scaleY(.1); } }
+    @keyframes boot-head-bob {
+      0%,100% { transform: none; } 24% { transform: translateY(1px) rotate(-1deg); }
+      48%,62% { transform: translateY(-3px) rotate(5deg); } 82% { transform: translateY(0) rotate(1deg); }
+    }
+    @keyframes boot-glance { 0%,100% { transform: none; } 32%,62% { transform: translate(3px,-3px); } }
+    @keyframes boot-fruit-bob {
+      0%,100% { transform: none; } 35% { transform: translateY(-10px) rotate(8deg); }
+      58% { transform: translateY(-8px) rotate(5deg); } 78% { transform: translateY(2px) scale(1.04,.96); }
+    }
+    @keyframes boot-blush-pop { 0% { opacity: 0; transform: scale(.82); } 24%,100% { opacity: .55; transform: scale(1); } 42%,68% { opacity: .78; transform: scale(1.08); } }
+    @keyframes boot-heart-pop {
+      0% { opacity: 0; transform: translateY(5px) rotate(45deg) scale(.4); }
+      42%,62% { opacity: .78; transform: translateY(0) rotate(45deg) scale(.9); }
+      100% { opacity: 0; transform: translateY(-10px) rotate(45deg) scale(.82); }
+    }
+    @keyframes boot-leaf-sway { 0%,100% { transform: rotate(-20deg); } 50% { transform: rotate(-29deg) translateY(-2px); } }
+    @keyframes boot-tuft-sway { 0%,100% { transform: rotate(var(--r)); } 50% { transform: rotate(calc(var(--r) - 5deg)) translateY(-2px); } }
+    @keyframes boot-sparkle { 0%,100% { opacity: 0; transform: rotate(45deg) scale(.3); } 42%,62% { opacity: .8; transform: rotate(135deg) scale(1); } }
+    @keyframes boot-front-to-side {
+      0% { opacity: 1; transform: perspective(260px) rotateY(0) translateX(0) scale(1); }
+      32% { opacity: .98; transform: perspective(260px) rotateY(-38deg) translateX(2px) scale(.98); }
+      70% { opacity: .35; transform: perspective(260px) rotateY(-78deg) translateX(10px) scale(.9); }
+      100% { opacity: 0; transform: perspective(260px) rotateY(-92deg) translateX(18px) scale(.82); }
+    }
+    @keyframes boot-disc-in {
+      0% { opacity: 0; transform: scale(.2); }
+      28% { opacity: .82; transform: scale(.56); }
+      68% { opacity: 1; transform: scale(1.05); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes boot-side-in {
+      0% { opacity: 0; transform: perspective(420px) rotateY(86deg) translateX(-18px) scale(.82); }
+      35% { opacity: .45; transform: perspective(420px) rotateY(58deg) translateX(-9px) scale(.92); }
+      72% { opacity: 1; transform: perspective(420px) rotateY(-6deg) translateX(1px) scale(1.03); }
+      100% { opacity: 1; transform: perspective(420px) rotateY(0) translateX(0) scale(1); }
+    }
+    @keyframes boot-icon-book-in {
+      0% { opacity: 0; transform: translateY(12px) scale(.86); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes boot-side-flight {
+      0% { opacity: 1; transform: translate(0,0) rotate(0) scale(1); }
+      12% { opacity: 1; transform: translate(0,18px) rotate(4deg) scale(.96); }
+      25% { opacity: 1; transform: translate(20px,-20px) rotate(-7deg) scale(1.02); }
+      58% { opacity: 1; transform: translate(270px,-220px) rotate(-10deg) scale(.94); }
+      100% { opacity: 0; transform: translate(1200px,-900px) rotate(-14deg) scale(.72); }
+    }
+    @keyframes boot-disc-away {
+      0% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(.72); }
+    }
+    @keyframes boot-icon-book-away {
+      0% { opacity: 1; transform: translateY(0) scale(1); }
+      100% { opacity: 0; transform: translateY(16px) scale(.82); }
+    }
+    @keyframes boot-book-away { to { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.82); } }
+    @keyframes boot-orbit-away { to { opacity: 0; transform: translate(-50%,-50%) scale(1.35); } }
+    @keyframes boot-copy-away { to { opacity: 0; transform: translateY(-8px); } }
+    @keyframes boot-curtain-up { 0% { transform: none; } 82% { opacity: 1; } 100% { opacity: 0; transform: translateY(-104%) rotate(-1.2deg); } }
+
+    /* ---------- Demo 结束后的极简落地页，仅用于预览与重播 ---------- */
+    .ai-orb-target {
+      position: fixed; z-index: 12; top: 92px; right: 24px; width: 64px; height: 64px;
+      padding: 0; border: 0; border-radius: 50%; background: transparent; opacity: 0;
+      cursor: pointer; transition: transform .18s cubic-bezier(.22,.8,.26,1);
+    }
+    .ai-orb-target.is-arrived { opacity: 1; }
+    .ai-orb-target.is-arrived:hover { transform: scale(1.06); }
+    .ai-orb-target:active { transform: scale(.94); }
+    .ai-orb-target:focus-visible { outline: 3px solid rgba(75,145,250,.3); outline-offset: 5px; }
+    .ai-orb-target .boot-yali { position: absolute; inset: 0; width: 100%; height: 100%; transform: none; }
+    .ai-orb-hint {
+      position: fixed; z-index: 11; top: 164px; right: 17px; color: #748298; font-size: 10px;
+      letter-spacing: .04em; opacity: 0; transform: translateY(-4px); transition: opacity .25s .12s, transform .25s .12s;
+      pointer-events: none;
+    }
+    .ai-orb-target.is-arrived + .ai-orb-hint { opacity: 1; transform: none; }
+    .boot-flight-layer { position: fixed; inset: 0; z-index: 60; overflow: visible; pointer-events: none; }
+    .boot-flight-layer .boot-yali { margin: 0; }
+    .boot-flight-layer .morph-character { animation: boot-orb-rock .76s ease-in-out both; }
+    .boot-flight-layer.is-fast .morph-character { animation-duration: .48s; }
+    @keyframes boot-orb-rock {
+      0%,100% { transform: none; } 18% { transform: translateY(4px) rotate(4deg); }
+      55% { transform: translateY(-5px) rotate(-7deg); } 82% { transform: rotate(2deg); }
+    }
+
+    @media (max-height: 620px) {
+      .boot-world { transform: translateY(-4vh); } .boot-scene { height: 214px; }
+      .boot-yali { width: 124px; height: 124px; font-size: 31px; } .boot-orbit { width: 194px; height: 194px; }
+      .boot-book { bottom: 12px; } .boot-title { font-size: 18px; } .boot-slogan { margin-top: 5px; }
+    }
+    @media (prefers-color-scheme: dark) {
+      #boot-splash { color: #edf2f8; background: radial-gradient(circle at 50% 40%, rgba(75,145,250,.16), transparent 35%), #151b24; }
+      .boot-grid { opacity: .16; } .boot-slogan, .demo-center p { color: #d7e0eb; }
+      .boot-tip, .demo-foot { color: #b2bdca; } .boot-num { color: #8ebcff; }
+      .boot-track { background: rgba(143,188,255,.16); } .demo-brand { color: #b2bdca; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #boot-splash, #boot-splash *, #boot-splash *::before, #boot-splash *::after {
+        animation: none !important; transition-duration: .01ms !important; will-change: auto !important;
+      }
+    }
