@@ -1,0 +1,1 @@
+function o(o,s="think"){const t=Math.max(0,Math.floor((Number(o)||0)/1e3));return"compose"===s?t<2?"正在组装记忆与规则…":"正在组装记忆与规则 · "+t+"s":"send"===s?t<3?"已发送，等待云端响应…":"已发送，等待云端响应 · "+t+"s":t<15?"思考中":"仍在等待响应 · "+t+"s"}export{o as w};
