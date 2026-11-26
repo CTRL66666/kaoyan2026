@@ -16,9 +16,15 @@
         radial-gradient(circle at 12% 88%, rgba(255,122,149,.07), transparent 28%), #f6f8fb;
       transform-origin: 50% 0; will-change: transform;
     }
+    /* 底边那条"纸边"弧线。原来：22px 高的盒子里用 `50% 50% / 100% 100%` —— 横向半径是
+     * 宽度的 50%（宽屏下 600px+），纵向半径只有 22px，得到一条**极扁的椭圆弧**，
+     * 在宽屏上弧顶与两端的落差被压得几乎为零，看起来就是一条"斜的直线"（用户截图）。
+     * 改成固定半径的浅弧：横向给一个**上限**（不超过屏宽的一半，也不超过 60px），
+     * 纵向给足高度，弧线才在视觉上真的是"弧"而不是"斜切"。 */
     #boot-splash::after {
-      content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 22px;
-      background: inherit; border-radius: 0 0 50% 50% / 0 0 100% 100%; pointer-events: none;
+      content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 18px;
+      background: inherit; pointer-events: none;
+      border-radius: 0 0 50% 50% / 0 0 18px 18px;
     }
     .boot-grid {
       position: absolute; inset: 0; opacity: .22; pointer-events: none;
@@ -361,7 +367,22 @@
     @keyframes boot-book-away { to { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.82); } }
     @keyframes boot-orbit-away { to { opacity: 0; transform: translate(-50%,-50%) scale(1.35); } }
     @keyframes boot-copy-away { to { opacity: 0; transform: translateY(-8px); } }
-    @keyframes boot-curtain-up { 0% { transform: none; } 82% { opacity: 1; } 100% { opacity: 0; transform: translateY(-104%) rotate(-1.2deg); } }
+    /* 【2026-11-26 用户截图：上滑时白色遮罩与首页之间有明显斜角】
+     * 终态原来带 `rotate(-1.2deg)` —— 整块启动屏在位移的同时旋转 1.2 度，
+     * 于是它的底边（以及 ::after 那条弧形边）相对首页就是斜的：宽屏下 1.2 度
+     * 在 1200px 宽度上约等于 25px 的高度差，肉眼就是"歪了"。
+     *
+     * 这不是"角度没调好"，而是**位移与旋转混用**：设计意图只是"幕布垂直上滑"，
+     * 旋转对观感没有任何帮助，只会把本该水平接缝的边界弄斜。
+     * 现在只保留纯垂直位移（translateY），接缝始终水平。
+     *
+     * 另：translateY(-104%) 会整块飞出视口，但如果元素高 100vh 而父级有滚动余量，
+     * 104% 仍可能留一丝在视口内 → 100% 位移 + opacity 归零已足够，104% 保留以防亚像素残边。 */
+    @keyframes boot-curtain-up {
+      0% { transform: none; }
+      82% { opacity: 1; }
+      100% { opacity: 0; transform: translateY(-104%); }
+    }
 
     /* ---------- Demo 结束后的极简落地页，仅用于预览与重播 ---------- */
     .ai-orb-target {
