@@ -524,9 +524,14 @@
         radial-gradient(circle at 12% 88%, rgba(255,122,149,.07), transparent 28%), #f6f8fb;
       transform-origin: 50% 0; will-change: transform;
     }
+    /* 底边"纸边"弧线。原来 22px 高的盒子里用 `50% 50% / 100% 100%`：
+     * 横向半径是宽度的 50%（宽屏 600px+），纵向半径只有 22px →
+     * 得到一条**极扁的椭圆弧**，宽屏上弧顶与两端落差几乎为零，看着就是"斜的直线"。
+     * 改成固定纵向半径的浅弧，弧线才真的看得出是弧。 */
     #boot-splash::after {
-      content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 22px;
-      background: inherit; border-radius: 0 0 50% 50% / 0 0 100% 100%; pointer-events: none;
+      content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 18px;
+      background: inherit; pointer-events: none;
+      border-radius: 0 0 50% 50% / 0 0 18px 18px;
     }
     .boot-grid {
       position: absolute; inset: 0; opacity: .22; pointer-events: none;
@@ -869,7 +874,19 @@
     @keyframes boot-book-away { to { opacity: 0; transform: translateX(-50%) translateY(14px) scale(.82); } }
     @keyframes boot-orbit-away { to { opacity: 0; transform: translate(-50%,-50%) scale(1.35); } }
     @keyframes boot-copy-away { to { opacity: 0; transform: translateY(-8px); } }
-    @keyframes boot-curtain-up { 0% { transform: none; } 82% { opacity: 1; } 100% { opacity: 0; transform: translateY(-104%) rotate(-1.2deg); } }
+    /* 【2026-11-26 用户截图：上滑时白色遮罩与首页之间有明显斜角】
+     * 终态原来带 `rotate(-1.2deg)` —— 整块启动屏在位移的同时旋转 1.2 度，
+     * 于是它的底边相对首页就是斜的：宽屏 1200px 上 1.2 度约等于 25px 高度差，肉眼就是"歪了"。
+     * 设计意图只是"幕布垂直上滑"，旋转对观感没有帮助，只会把本该水平的接缝弄斜。
+     * 现在只保留纯垂直位移，接缝始终水平。
+     *
+     * ⚠ 本文件里是**生效的那份**（public/splash/splash.css 只是对照副本，见上方 510 行注释）。
+     * 两处必须同步改，否则改了副本没改这份 = 看起来改了但线上没变（2026-11-26 真踩）。 */
+    @keyframes boot-curtain-up {
+      0% { transform: none; }
+      82% { opacity: 1; }
+      100% { opacity: 0; transform: translateY(-104%); }
+    }
 
     /* ---------- Demo 结束后的极简落地页，仅用于预览与重播 ---------- */
     .ai-orb-target {
@@ -968,7 +985,7 @@
   /* 装饰层（轨道环/光斑/爱心）在形变期间没必要继续合成，降一档开销 */
   .boot-orbit, .boot-spark, .boot-heart { will-change: auto; }
   </style>
-  <script type="module" crossorigin src="./assets/index-B6uxBhGo.js"></script>
+  <script type="module" crossorigin src="./assets/index-CoxZCifU.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/index-BjOm120o.js">
   <link rel="modulepreload" crossorigin href="./assets/questionFigures-DLmrVvl0.js">
   <link rel="modulepreload" crossorigin href="./assets/vendor-6diyPo3A.js">
@@ -982,17 +999,17 @@
   <link rel="modulepreload" crossorigin href="./assets/ai-Ub76xC8-.js">
   <link rel="modulepreload" crossorigin href="./assets/playbook-iR1vEhuC.js">
   <link rel="modulepreload" crossorigin href="./assets/artifacts-Ctw_pdaO.js">
-  <link rel="modulepreload" crossorigin href="./assets/mistakesEngine-BDWKlASF.js">
-  <link rel="modulepreload" crossorigin href="./assets/backup-CbtGKj5a.js">
+  <link rel="modulepreload" crossorigin href="./assets/mistakesEngine-DwZ75KmA.js">
+  <link rel="modulepreload" crossorigin href="./assets/backup-vf1nEVPY.js">
   <link rel="modulepreload" crossorigin href="./assets/share-hzd1ihvn.js">
   <link rel="modulepreload" crossorigin href="./assets/engProfile-DjYRtUtL.js">
   <link rel="modulepreload" crossorigin href="./assets/pagectx-_RiExVbr.js">
-  <link rel="modulepreload" crossorigin href="./assets/globals-Bwo46fJ0.js">
-  <link rel="modulepreload" crossorigin href="./assets/index-B0w43dxT.js">
-  <link rel="modulepreload" crossorigin href="./assets/imgDrag-DRP6qEwE.js">
+  <link rel="modulepreload" crossorigin href="./assets/globals-8R7RSCEC.js">
+  <link rel="modulepreload" crossorigin href="./assets/index-Bh608-aQ.js">
+  <link rel="modulepreload" crossorigin href="./assets/imgDrag-0wrRVPSd.js">
   <link rel="modulepreload" crossorigin href="./assets/navDensity-CwHWrqBz.js">
   <link rel="modulepreload" crossorigin href="./assets/modal-DtlYMgjc.js">
-  <link rel="modulepreload" crossorigin href="./assets/dispatch-CmDb4t7q.js">
+  <link rel="modulepreload" crossorigin href="./assets/dispatch-D59gbMxM.js">
   <link rel="stylesheet" crossorigin href="./assets/vendor-DLVrwanO.css">
   <link rel="stylesheet" crossorigin href="./assets/index-CfbmgMdK.css">
   <link rel="stylesheet" crossorigin href="./assets/index-Cxo1eeai.css">
